@@ -19,18 +19,18 @@ from app.schemas.schemas import (
 router = APIRouter(prefix="/api/models", tags=["models"])
 
 
-async def _validate_redirect(
+async def _validate_proxy(
     db: AsyncSession,
     model_type: str,
     redirect_to: str | None,
     provider_id: int,
     exclude_model_id: str | None = None,
 ):
-    if model_type == "redirect":
+    if model_type == "proxy":
         if not redirect_to:
             raise HTTPException(
                 status_code=400,
-                detail="redirect_to is required for redirect models",
+                detail="redirect_to is required for proxy models",
             )
         target_result = await db.execute(
             select(ModelConfig)
@@ -46,12 +46,12 @@ async def _validate_redirect(
         if target.model_type != "native":
             raise HTTPException(
                 status_code=400,
-                detail=f"Target model '{redirect_to}' is not a native model (chained redirects not allowed)",
+                detail=f"Target model '{redirect_to}' is not a native model (chained proxies not allowed)",
             )
         if target.provider_id != provider_id:
             raise HTTPException(
                 status_code=400,
-                detail="Redirect target must be the same provider as the redirect model",
+                detail="Proxy target must be the same provider as the proxy model",
             )
     elif model_type == "native":
         if redirect_to:
@@ -126,19 +126,19 @@ async def create_model(
         )
 
     model_type = body.model_type or "native"
-    if model_type not in ("native", "redirect"):
+    if model_type not in ("native", "proxy"):
         raise HTTPException(
-            status_code=400, detail="model_type must be 'native' or 'redirect'"
+            status_code=400, detail="model_type must be 'native' or 'proxy'"
         )
 
-    await _validate_redirect(db, model_type, body.redirect_to, body.provider_id)
+    await _validate_proxy(db, model_type, body.redirect_to, body.provider_id)
 
     config = ModelConfig(
         provider_id=body.provider_id,
         model_id=body.model_id,
         display_name=body.display_name,
         model_type=model_type,
-        redirect_to=body.redirect_to if model_type == "redirect" else None,
+        redirect_to=body.redirect_to if model_type == "proxy" else None,
         lb_strategy=body.lb_strategy if model_type == "native" else "single",
         is_enabled=body.is_enabled,
     )
@@ -193,12 +193,12 @@ async def update_model(
     new_redirect_to = update_data.get("redirect_to", config.redirect_to)
     new_provider_id = update_data.get("provider_id", config.provider_id)
 
-    if new_model_type not in ("native", "redirect"):
+    if new_model_type not in ("native", "proxy"):
         raise HTTPException(
-            status_code=400, detail="model_type must be 'native' or 'redirect'"
+            status_code=400, detail="model_type must be 'native' or 'proxy'"
         )
 
-    await _validate_redirect(
+    await _validate_proxy(
         db,
         new_model_type,
         new_redirect_to,
@@ -244,7 +244,7 @@ async def delete_model(
             ids = ", ".join(r.model_id for r in referrer_list)
             raise HTTPException(
                 status_code=400,
-                detail=f"Cannot delete: redirect models [{ids}] point to this model",
+                detail=f"Cannot delete: proxy models [{ids}] point to this model",
             )
 
     await db.delete(config)

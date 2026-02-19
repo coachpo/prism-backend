@@ -25,7 +25,7 @@ async def get_model_config_with_endpoints(
     if not config:
         return None
 
-    if config.model_type == "redirect" and config.redirect_to:
+    if config.model_type == "proxy" and config.redirect_to:
         target_result = await db.execute(
             select(ModelConfig)
             .options(
@@ -40,7 +40,7 @@ async def get_model_config_with_endpoints(
         target = target_result.scalar_one_or_none()
         if not target:
             logger.warning(
-                "Redirect target model_id=%r not found or disabled for redirect model_id=%r",
+                "Proxy target model_id=%r not found or disabled for proxy model_id=%r",
                 config.redirect_to,
                 model_id,
             )

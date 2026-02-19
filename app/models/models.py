@@ -34,7 +34,7 @@ class ModelConfig(Base):
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model_type: Mapped[str] = mapped_column(
         String(20), default="native", nullable=False
-    )  # native, redirect
+    )  # native, proxy
     redirect_to: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )  # target model_id for redirect models

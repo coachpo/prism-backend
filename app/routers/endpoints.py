@@ -52,10 +52,10 @@ async def create_endpoint(
     if not model:
         raise HTTPException(status_code=404, detail="Model configuration not found")
 
-    if model.model_type == "redirect":
+    if model.model_type == "proxy":
         raise HTTPException(
             status_code=400,
-            detail="Cannot add endpoints to a redirect model",
+            detail="Cannot add endpoints to a proxy model",
         )
 
     endpoint = Endpoint(
