@@ -47,20 +47,102 @@ async def log_request(
         logger.exception("Failed to log request")
 
 
+def _parse_sse_events(raw: bytes) -> list[dict]:
+    events = []
+    try:
+        text = raw.decode("utf-8", errors="replace")
+    except Exception:
+        return events
+    for line in text.split("\n"):
+        line = line.strip()
+        if line.startswith("data: ") and line != "data: [DONE]":
+            try:
+                events.append(json.loads(line[6:]))
+            except (json.JSONDecodeError, ValueError):
+                continue
+    return events
+
+
+def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
+    events = _parse_sse_events(raw)
+    if not events:
+        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+    input_tokens = None
+    output_tokens = None
+    total_tokens = None
+
+    for event in events:
+        # OpenAI: final chunk with usage object
+        usage = event.get("usage")
+        if usage and isinstance(usage, dict):
+            input_tokens = (
+                usage.get("prompt_tokens") or usage.get("input_tokens") or input_tokens
+            )
+            output_tokens = (
+                usage.get("completion_tokens")
+                or usage.get("output_tokens")
+                or output_tokens
+            )
+            total_tokens = usage.get("total_tokens") or total_tokens
+
+        # Anthropic: message_start → message.usage.input_tokens
+        if event.get("type") == "message_start":
+            msg_usage = event.get("message", {}).get("usage", {})
+            if msg_usage.get("input_tokens") is not None:
+                input_tokens = msg_usage["input_tokens"]
+
+        # Anthropic: message_delta → usage.output_tokens
+        if event.get("type") == "message_delta":
+            delta_usage = event.get("usage", {})
+            if delta_usage.get("output_tokens") is not None:
+                output_tokens = delta_usage["output_tokens"]
+
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = (input_tokens or 0) + (output_tokens or 0)
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
     if not body:
         return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+
+    try:
+        text_preview = body[:100].decode("utf-8", errors="replace")
+    except Exception:
+        text_preview = ""
+    if "data: " in text_preview:
+        return _extract_from_sse(body)
+
     try:
         data = json.loads(body)
         usage = data.get("usage", {})
-        if not usage:
-            return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
-        return {
-            "input_tokens": usage.get("prompt_tokens") or usage.get("input_tokens"),
-            "output_tokens": usage.get("completion_tokens")
-            or usage.get("output_tokens"),
-            "total_tokens": usage.get("total_tokens"),
-        }
+        if usage:
+            input_t = usage.get("prompt_tokens") or usage.get("input_tokens")
+            output_t = usage.get("completion_tokens") or usage.get("output_tokens")
+            total_t = usage.get("total_tokens")
+            if total_t is None and (input_t is not None or output_t is not None):
+                total_t = (input_t or 0) + (output_t or 0)
+            return {
+                "input_tokens": input_t,
+                "output_tokens": output_t,
+                "total_tokens": total_t,
+            }
+
+        # Anthropic count_tokens: top-level input_tokens without usage wrapper
+        if "input_tokens" in data and "usage" not in data:
+            return {
+                "input_tokens": data["input_tokens"],
+                "output_tokens": None,
+                "total_tokens": None,
+            }
+
+        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
     except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
         return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
 

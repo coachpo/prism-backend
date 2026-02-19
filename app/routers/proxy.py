@@ -8,6 +8,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
+from app.core.database import AsyncSessionLocal
 from app.services.loadbalancer import (
     get_model_config_with_endpoints,
     select_endpoint,
@@ -148,30 +149,32 @@ async def _handle_proxy(
                 async def _iter_and_log(
                     resp: httpx.Response,
                 ) -> AsyncGenerator[bytes, None]:
-                    last_chunk = b""
+                    accumulated = bytearray()
                     try:
                         async for chunk in resp.aiter_bytes():
                             if chunk:
-                                last_chunk = chunk
+                                accumulated.extend(chunk)
                                 yield chunk
                     except Exception as e:
                         logger.error(f"Stream error: {e}")
                     finally:
                         await resp.aclose()
                         try:
-                            tokens = extract_token_usage(last_chunk)
-                            await log_request(
-                                db,
-                                model_id=_log_model_id,
-                                provider_type=_log_provider_type,
-                                endpoint_id=_log_endpoint_id,
-                                endpoint_base_url=_log_endpoint_base_url,
-                                status_code=_log_status_code,
-                                response_time_ms=_log_elapsed_ms,
-                                is_stream=True,
-                                request_path=_log_request_path,
-                                **tokens,
-                            )
+                            tokens = extract_token_usage(bytes(accumulated))
+                            async with AsyncSessionLocal() as log_db:
+                                await log_request(
+                                    log_db,
+                                    model_id=_log_model_id,
+                                    provider_type=_log_provider_type,
+                                    endpoint_id=_log_endpoint_id,
+                                    endpoint_base_url=_log_endpoint_base_url,
+                                    status_code=_log_status_code,
+                                    response_time_ms=_log_elapsed_ms,
+                                    is_stream=True,
+                                    request_path=_log_request_path,
+                                    **tokens,
+                                )
+                                await log_db.commit()
                         except Exception:
                             logger.exception("Failed to log streaming request")
 
