@@ -79,6 +79,7 @@ async def create_endpoint(
         is_active=body.is_active,
         priority=body.priority,
         description=body.description,
+        auth_type=body.auth_type,
     )
     db.add(endpoint)
     await db.flush()
@@ -143,8 +144,8 @@ async def health_check_endpoint(
     provider_type = endpoint.model_config_rel.provider.provider_type
     model_id = endpoint.model_config_rel.model_id
 
-    # Build request path and headers using the same logic as the proxy engine
-    if provider_type == "anthropic":
+    effective_auth = endpoint.auth_type or provider_type
+    if effective_auth == "anthropic":
         request_path = "/v1/messages"
         body = {
             "model": model_id,

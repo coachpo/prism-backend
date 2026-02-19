@@ -65,6 +65,9 @@ class Endpoint(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    auth_type: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )  # null=use provider default; "openai", "anthropic" to override
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy

@@ -26,6 +26,14 @@ async def log_request(
     total_tokens: int | None = None,
     error_detail: str | None = None,
 ) -> None:
+    """Log a proxy request to the database.
+
+    Uses an independent database session so that log entries survive even when
+    the caller's request-scoped session is rolled back (e.g. when an
+    HTTPException is raised after all failover endpoints fail).
+    """
+    from app.core.database import AsyncSessionLocal
+
     try:
         entry = RequestLog(
             model_id=model_id,
@@ -41,8 +49,9 @@ async def log_request(
             total_tokens=total_tokens,
             error_detail=error_detail,
         )
-        db.add(entry)
-        await db.flush()
+        async with AsyncSessionLocal() as log_db:
+            log_db.add(entry)
+            await log_db.commit()
     except Exception:
         logger.exception("Failed to log request")
 

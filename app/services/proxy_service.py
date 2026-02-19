@@ -117,7 +117,8 @@ def build_upstream_headers(
     Starts with forwarded client headers (minus hop-by-hop),
     then layers on auth and provider-specific headers which take precedence.
     """
-    config = PROVIDER_AUTH.get(provider_type, PROVIDER_AUTH["openai"])
+    auth_key = endpoint.auth_type or provider_type
+    config = PROVIDER_AUTH.get(auth_key, PROVIDER_AUTH["openai"])
 
     proxy_controlled_headers = {
         config["auth_header"].lower(),
@@ -206,6 +207,17 @@ def extract_model_from_body(raw_body: bytes) -> str | None:
         return parsed.get("model")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
+
+
+def rewrite_model_in_body(raw_body: bytes | None, target_model_id: str) -> bytes | None:
+    if not raw_body:
+        return raw_body
+    try:
+        parsed = json.loads(raw_body)
+        parsed["model"] = target_model_id
+        return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return raw_body
 
 
 def extract_stream_flag(raw_body: bytes) -> bool:

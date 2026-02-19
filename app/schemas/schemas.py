@@ -32,6 +32,7 @@ class EndpointBase(BaseModel):
     is_active: bool = True
     priority: int = 0
     description: str | None = None
+    auth_type: str | None = None
 
 
 class EndpointCreate(EndpointBase):
@@ -44,6 +45,7 @@ class EndpointUpdate(BaseModel):
     is_active: bool | None = None
     priority: int | None = None
     description: str | None = None
+    auth_type: str | None = None
 
 
 class EndpointResponse(BaseModel):
@@ -56,6 +58,7 @@ class EndpointResponse(BaseModel):
     is_active: bool
     priority: int
     description: str | None
+    auth_type: str | None
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
