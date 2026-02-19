@@ -1,8 +1,8 @@
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
-from sqlalchemy import select, func, case, and_
+from sqlalchemy import select, func, case, and_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import RequestLog
@@ -175,7 +175,7 @@ async def get_request_logs(
     if to_time:
         filters.append(RequestLog.created_at <= to_time)
 
-    where = and_(*filters) if filters else True
+    where = and_(*filters) if filters else literal(True)
 
     count_q = select(func.count()).select_from(RequestLog).where(where)
     total = (await db.execute(count_q)).scalar() or 0
@@ -198,15 +198,13 @@ async def get_stats_summary(
     to_time: datetime | None = None,
     group_by: str | None = None,
 ) -> dict:
-    if from_time is None:
-        from_time = datetime.utcnow() - timedelta(hours=24)
-    if to_time is None:
-        to_time = datetime.utcnow()
+    time_filters = []
+    if from_time is not None:
+        time_filters.append(RequestLog.created_at >= from_time)
+    if to_time is not None:
+        time_filters.append(RequestLog.created_at <= to_time)
 
-    time_filter = and_(
-        RequestLog.created_at >= from_time,
-        RequestLog.created_at <= to_time,
-    )
+    time_filter = and_(*time_filters) if time_filters else literal(True)
 
     success_case = case(
         (RequestLog.status_code.between(200, 299), 1),
@@ -302,15 +300,11 @@ async def get_endpoint_success_rates(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> list[dict]:
-    if from_time is None:
-        from_time = datetime.utcnow() - timedelta(hours=24)
-    if to_time is None:
-        to_time = datetime.utcnow()
-
-    time_filter = and_(
-        RequestLog.created_at >= from_time,
-        RequestLog.created_at <= to_time,
-    )
+    time_filters = []
+    if from_time is not None:
+        time_filters.append(RequestLog.created_at >= from_time)
+    if to_time is not None:
+        time_filters.append(RequestLog.created_at <= to_time)
 
     success_case = case(
         (RequestLog.status_code.between(200, 299), 1),
@@ -323,10 +317,11 @@ async def get_endpoint_success_rates(
             func.count().label("total_requests"),
             func.sum(success_case).label("success_count"),
         )
-        .where(time_filter)
         .where(RequestLog.endpoint_id.isnot(None))
         .group_by(RequestLog.endpoint_id)
     )
+    if time_filters:
+        q = q.where(and_(*time_filters))
 
     rows = (await db.execute(q)).all()
     results = []
@@ -353,30 +348,24 @@ async def get_model_health_stats(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> dict[str, dict]:
-    if from_time is None:
-        from_time = datetime.utcnow() - timedelta(hours=24)
-    if to_time is None:
-        to_time = datetime.utcnow()
-
-    time_filter = and_(
-        RequestLog.created_at >= from_time,
-        RequestLog.created_at <= to_time,
-    )
+    time_filters = []
+    if from_time is not None:
+        time_filters.append(RequestLog.created_at >= from_time)
+    if to_time is not None:
+        time_filters.append(RequestLog.created_at <= to_time)
 
     success_case = case(
         (RequestLog.status_code.between(200, 299), 1),
         else_=0,
     )
 
-    q = (
-        select(
-            RequestLog.model_id.label("model_id"),
-            func.count().label("total_requests"),
-            func.sum(success_case).label("success_count"),
-        )
-        .where(time_filter)
-        .group_by(RequestLog.model_id)
-    )
+    q = select(
+        RequestLog.model_id.label("model_id"),
+        func.count().label("total_requests"),
+        func.sum(success_case).label("success_count"),
+    ).group_by(RequestLog.model_id)
+    if time_filters:
+        q = q.where(and_(*time_filters))
 
     rows = (await db.execute(q)).all()
     result = {}

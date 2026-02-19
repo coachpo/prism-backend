@@ -115,6 +115,18 @@ async def _handle_proxy(
                         logger.warning(
                             f"Endpoint {ep.id} failed with {upstream_resp.status_code}, trying next"
                         )
+                        await log_request(
+                            db,
+                            model_id=model_id,
+                            provider_type=provider_type,
+                            endpoint_id=ep.id,
+                            endpoint_base_url=ep.base_url,
+                            status_code=upstream_resp.status_code,
+                            response_time_ms=elapsed_ms,
+                            is_stream=True,
+                            request_path=request_path,
+                            error_detail=body.decode("utf-8", errors="replace")[:500],
+                        )
                         continue
 
                     tokens = extract_token_usage(body)
@@ -205,6 +217,20 @@ async def _handle_proxy(
                     logger.warning(
                         f"Endpoint {ep.id} failed with {response.status_code}, trying next"
                     )
+                    await log_request(
+                        db,
+                        model_id=model_id,
+                        provider_type=provider_type,
+                        endpoint_id=ep.id,
+                        endpoint_base_url=ep.base_url,
+                        status_code=response.status_code,
+                        response_time_ms=elapsed_ms,
+                        is_stream=False,
+                        request_path=request_path,
+                        error_detail=response.content.decode("utf-8", errors="replace")[
+                            :500
+                        ],
+                    )
                     continue
 
                 tokens = extract_token_usage(response.content)
@@ -235,16 +261,55 @@ async def _handle_proxy(
                 )
 
         except httpx.ConnectError as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"Connection error: {e}"
             logger.warning(f"Endpoint {ep.id} connection failed: {e}")
+            await log_request(
+                db,
+                model_id=model_id,
+                provider_type=provider_type,
+                endpoint_id=ep.id,
+                endpoint_base_url=ep.base_url,
+                status_code=0,
+                response_time_ms=elapsed_ms,
+                is_stream=is_streaming,
+                request_path=request_path,
+                error_detail=str(e)[:500],
+            )
             continue
         except httpx.TimeoutException as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"Timeout: {e}"
             logger.warning(f"Endpoint {ep.id} timed out: {e}")
+            await log_request(
+                db,
+                model_id=model_id,
+                provider_type=provider_type,
+                endpoint_id=ep.id,
+                endpoint_base_url=ep.base_url,
+                status_code=0,
+                response_time_ms=elapsed_ms,
+                is_stream=is_streaming,
+                request_path=request_path,
+                error_detail=str(e)[:500],
+            )
             continue
         except httpx.HTTPStatusError as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"HTTP error: {e}"
             logger.warning(f"Endpoint {ep.id} HTTP error: {e}")
+            await log_request(
+                db,
+                model_id=model_id,
+                provider_type=provider_type,
+                endpoint_id=ep.id,
+                endpoint_base_url=ep.base_url,
+                status_code=e.response.status_code if e.response else 0,
+                response_time_ms=elapsed_ms,
+                is_stream=is_streaming,
+                request_path=request_path,
+                error_detail=str(e)[:500],
+            )
             continue
 
     raise HTTPException(
