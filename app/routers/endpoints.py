@@ -1,5 +1,6 @@
 from typing import Annotated
 from datetime import datetime
+import time
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,7 +16,7 @@ from app.schemas.schemas import (
     EndpointResponse,
     HealthCheckResponse,
 )
-from app.services.proxy_service import PROVIDER_AUTH
+from app.services.proxy_service import build_upstream_url, build_upstream_headers
 
 router = APIRouter(tags=["endpoints"])
 
@@ -122,55 +123,56 @@ async def health_check_endpoint(
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
     provider_type = endpoint.model_config_rel.provider.provider_type
-    config = PROVIDER_AUTH.get(provider_type, PROVIDER_AUTH["openai"])
+    model_id = endpoint.model_config_rel.model_id
 
-    headers = {
-        config["auth_header"]: f"{config['auth_prefix']}{endpoint.api_key}",
-    }
-    headers.update(config["extra_headers"])
+    # Build request path and headers using the same logic as the proxy engine
+    if provider_type == "anthropic":
+        request_path = "/v1/messages"
+        body = {
+            "model": model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    else:
+        request_path = "/v1/chat/completions"
+        body = {
+            "model": model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+
+    upstream_url = build_upstream_url(endpoint, request_path)
+    headers = build_upstream_headers(endpoint, provider_type)
 
     checked_at = datetime.utcnow()
     health_status = "unhealthy"
     detail = ""
+    response_time_ms = 0
 
     client: httpx.AsyncClient = request.app.state.http_client
-    base = endpoint.base_url.rstrip("/")
 
     try:
-        if provider_type == "anthropic":
-            resp = await client.post(
-                f"{base}/v1/messages",
-                headers=headers,
-                json={
-                    "model": "ping",
-                    "max_tokens": 1,
-                    "messages": [{"role": "user", "content": "hi"}],
-                },
-                timeout=10.0,
-            )
-            if resp.status_code in (400, 401, 403, 200, 529):
-                health_status = "healthy" if resp.status_code != 401 else "unhealthy"
-                detail = f"HTTP {resp.status_code}"
-                if resp.status_code == 401:
-                    detail = "Authentication failed"
-            else:
-                health_status = "healthy"
-                detail = f"HTTP {resp.status_code}"
+        start = time.monotonic()
+        resp = await client.post(
+            upstream_url,
+            headers=headers,
+            json=body,
+            timeout=15.0,
+        )
+        response_time_ms = int((time.monotonic() - start) * 1000)
+
+        if 200 <= resp.status_code < 300:
+            health_status = "healthy"
+            detail = "Connection successful"
+        elif resp.status_code == 429:
+            health_status = "healthy"
+            detail = "Rate limited (endpoint works)"
+        elif resp.status_code in (401, 403):
+            health_status = "unhealthy"
+            detail = f"Authentication failed (HTTP {resp.status_code})"
         else:
-            resp = await client.get(
-                f"{base}/v1/models",
-                headers=headers,
-                timeout=10.0,
-            )
-            if resp.status_code == 200:
-                health_status = "healthy"
-                detail = "Connection successful"
-            elif resp.status_code == 401:
-                health_status = "unhealthy"
-                detail = "Authentication failed"
-            else:
-                health_status = "healthy"
-                detail = f"HTTP {resp.status_code}"
+            health_status = "unhealthy"
+            detail = f"HTTP {resp.status_code}"
     except httpx.ConnectError as e:
         detail = f"Connection failed: {e}"
     except httpx.TimeoutException:
@@ -187,4 +189,5 @@ async def health_check_endpoint(
         health_status=health_status,
         checked_at=checked_at,
         detail=detail,
+        response_time_ms=response_time_ms,
     )

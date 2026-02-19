@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Annotated, AsyncGenerator
 
 import httpx
@@ -21,6 +22,7 @@ from app.services.proxy_service import (
     extract_stream_flag,
     filter_response_headers,
 )
+from app.services.stats_service import log_request, extract_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +41,6 @@ def _resolve_model_id(request: Request, raw_body: bytes | None) -> str | None:
         if model_id:
             return model_id
     return request.headers.get(MODEL_ID_HEADER)
-
-
-async def _iter_stream(
-    resp: httpx.Response,
-) -> AsyncGenerator[bytes, None]:
-    try:
-        async for chunk in resp.aiter_bytes():
-            if chunk:
-                yield chunk
-    except Exception as e:
-        logger.error(f"Stream error: {e}")
-    finally:
-        await resp.aclose()
 
 
 async def _handle_proxy(
@@ -102,6 +91,8 @@ async def _handle_proxy(
             upstream_url = f"{upstream_url}?{request.url.query}"
         headers = build_upstream_headers(ep, provider_type, client_headers)
 
+        start_time = time.monotonic()
+
         try:
             if is_streaming:
                 kwargs: dict = {"headers": headers}
@@ -112,6 +103,7 @@ async def _handle_proxy(
                 upstream_resp = await client.send(send_req, stream=True)
 
                 resp_headers_filtered = filter_response_headers(upstream_resp.headers)
+                elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
                 if upstream_resp.status_code >= 400:
                     body = await upstream_resp.aread()
@@ -124,17 +116,70 @@ async def _handle_proxy(
                         )
                         continue
 
+                    tokens = extract_token_usage(body)
+                    await log_request(
+                        db,
+                        model_id=model_id,
+                        provider_type=provider_type,
+                        endpoint_id=ep.id,
+                        endpoint_base_url=ep.base_url,
+                        status_code=upstream_resp.status_code,
+                        response_time_ms=elapsed_ms,
+                        is_stream=True,
+                        request_path=request_path,
+                        error_detail=body.decode("utf-8", errors="replace")[:500],
+                        **tokens,
+                    )
+
                     return Response(
                         content=body,
                         status_code=upstream_resp.status_code,
                         headers=resp_headers_filtered,
                     )
 
+                _log_model_id = model_id
+                _log_provider_type = provider_type
+                _log_endpoint_id = ep.id
+                _log_endpoint_base_url = ep.base_url
+                _log_status_code = upstream_resp.status_code
+                _log_elapsed_ms = elapsed_ms
+                _log_request_path = request_path
+
+                async def _iter_and_log(
+                    resp: httpx.Response,
+                ) -> AsyncGenerator[bytes, None]:
+                    last_chunk = b""
+                    try:
+                        async for chunk in resp.aiter_bytes():
+                            if chunk:
+                                last_chunk = chunk
+                                yield chunk
+                    except Exception as e:
+                        logger.error(f"Stream error: {e}")
+                    finally:
+                        await resp.aclose()
+                        try:
+                            tokens = extract_token_usage(last_chunk)
+                            await log_request(
+                                db,
+                                model_id=_log_model_id,
+                                provider_type=_log_provider_type,
+                                endpoint_id=_log_endpoint_id,
+                                endpoint_base_url=_log_endpoint_base_url,
+                                status_code=_log_status_code,
+                                response_time_ms=_log_elapsed_ms,
+                                is_stream=True,
+                                request_path=_log_request_path,
+                                **tokens,
+                            )
+                        except Exception:
+                            logger.exception("Failed to log streaming request")
+
                 media_type = upstream_resp.headers.get(
                     "content-type", "text/event-stream"
                 )
                 return StreamingResponse(
-                    _iter_stream(upstream_resp),
+                    _iter_and_log(upstream_resp),
                     status_code=upstream_resp.status_code,
                     media_type=media_type,
                     headers={
@@ -147,6 +192,7 @@ async def _handle_proxy(
                 response = await proxy_request(
                     client, method, upstream_url, headers, raw_body
                 )
+                elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 resp_headers = filter_response_headers(response.headers)
 
                 if response.status_code >= 400 and should_failover(
@@ -158,12 +204,26 @@ async def _handle_proxy(
                     )
                     continue
 
+                tokens = extract_token_usage(response.content)
+                error_detail = None
                 if response.status_code >= 400:
-                    return Response(
-                        content=response.content,
-                        status_code=response.status_code,
-                        headers=resp_headers,
-                    )
+                    error_detail = response.content.decode("utf-8", errors="replace")[
+                        :500
+                    ]
+
+                await log_request(
+                    db,
+                    model_id=model_id,
+                    provider_type=provider_type,
+                    endpoint_id=ep.id,
+                    endpoint_base_url=ep.base_url,
+                    status_code=response.status_code,
+                    response_time_ms=elapsed_ms,
+                    is_stream=False,
+                    request_path=request_path,
+                    error_detail=error_detail,
+                    **tokens,
+                )
 
                 return Response(
                     content=response.content,

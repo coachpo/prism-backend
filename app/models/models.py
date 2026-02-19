@@ -75,3 +75,24 @@ class Endpoint(Base):
     )
 
     model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="endpoints")
+
+
+class RequestLog(Base):
+    __tablename__ = "request_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    endpoint_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    request_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )

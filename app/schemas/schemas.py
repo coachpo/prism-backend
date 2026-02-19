@@ -67,6 +67,7 @@ class HealthCheckResponse(BaseModel):
     health_status: str
     checked_at: datetime
     detail: str
+    response_time_ms: int
 
 
 # --- Model Config Schemas ---
@@ -129,3 +130,54 @@ class ModelConfigListResponse(BaseModel):
     active_endpoint_count: int
     created_at: datetime
     updated_at: datetime
+
+
+# --- Statistics Schemas ---
+
+
+class RequestLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    model_id: str
+    provider_type: str
+    endpoint_id: int | None
+    endpoint_base_url: str | None
+    status_code: int
+    response_time_ms: int
+    is_stream: bool
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    request_path: str
+    error_detail: str | None
+    created_at: datetime
+
+
+class RequestLogListResponse(BaseModel):
+    items: list[RequestLogResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class StatGroupResponse(BaseModel):
+    key: str
+    total_requests: int
+    success_count: int
+    error_count: int
+    avg_response_time_ms: float
+    total_tokens: int
+
+
+class StatsSummaryResponse(BaseModel):
+    total_requests: int
+    success_count: int
+    error_count: int
+    success_rate: float
+    avg_response_time_ms: float
+    p95_response_time_ms: int
+    total_input_tokens: int
+    total_output_tokens: int
+    total_tokens: int
+    groups: list[StatGroupResponse]
