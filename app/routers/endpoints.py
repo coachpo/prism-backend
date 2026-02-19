@@ -1,6 +1,7 @@
 from typing import Annotated
 from datetime import datetime
 import time
+import logging
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,7 +17,14 @@ from app.schemas.schemas import (
     EndpointResponse,
     HealthCheckResponse,
 )
-from app.services.proxy_service import build_upstream_url, build_upstream_headers
+from app.services.proxy_service import (
+    build_upstream_url,
+    build_upstream_headers,
+    normalize_base_url,
+    validate_base_url,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["endpoints"])
 
@@ -59,9 +67,14 @@ async def create_endpoint(
             detail="Cannot add endpoints to a proxy model",
         )
 
+    normalized_url = normalize_base_url(body.base_url)
+    url_warnings = validate_base_url(normalized_url)
+    if url_warnings:
+        raise HTTPException(status_code=422, detail="; ".join(url_warnings))
+
     endpoint = Endpoint(
         model_config_id=model_config_id,
-        base_url=body.base_url,
+        base_url=normalized_url,
         api_key=body.api_key,
         is_active=body.is_active,
         priority=body.priority,
@@ -84,6 +97,11 @@ async def update_endpoint(
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
     update_data = body.model_dump(exclude_unset=True)
+    if "base_url" in update_data:
+        update_data["base_url"] = normalize_base_url(update_data["base_url"])
+        url_warnings = validate_base_url(update_data["base_url"])
+        if url_warnings:
+            raise HTTPException(status_code=422, detail="; ".join(url_warnings))
     for key, value in update_data.items():
         setattr(endpoint, key, value)
     endpoint.updated_at = datetime.utcnow()
@@ -161,6 +179,19 @@ async def health_check_endpoint(
         )
         response_time_ms = int((time.monotonic() - start) * 1000)
 
+        # Try to extract upstream error message from response body
+        upstream_msg = ""
+        if resp.status_code >= 400:
+            try:
+                resp_json = resp.json()
+                err = resp_json.get("error", {})
+                if isinstance(err, dict):
+                    upstream_msg = err.get("message", "")
+                elif isinstance(err, str):
+                    upstream_msg = err
+            except Exception:
+                pass
+
         if 200 <= resp.status_code < 300:
             health_status = "healthy"
             detail = "Connection successful"
@@ -170,9 +201,13 @@ async def health_check_endpoint(
         elif resp.status_code in (401, 403):
             health_status = "unhealthy"
             detail = f"Authentication failed (HTTP {resp.status_code})"
+            if upstream_msg:
+                detail += f": {upstream_msg}"
         else:
             health_status = "unhealthy"
             detail = f"HTTP {resp.status_code}"
+            if upstream_msg:
+                detail += f": {upstream_msg}"
     except httpx.ConnectError as e:
         detail = f"Connection failed: {e}"
     except httpx.TimeoutException:
@@ -180,7 +215,16 @@ async def health_check_endpoint(
     except Exception as e:
         detail = f"Error: {e}"
 
+    logger.info(
+        "Health check endpoint_id=%d url=%s status=%s detail=%s",
+        endpoint.id,
+        upstream_url,
+        health_status,
+        detail,
+    )
+
     endpoint.health_status = health_status
+    endpoint.health_detail = detail
     endpoint.last_health_check = checked_at
     await db.flush()
 

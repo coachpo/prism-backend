@@ -57,6 +57,7 @@ class EndpointResponse(BaseModel):
     priority: int
     description: str | None
     health_status: str
+    health_detail: str | None
     last_health_check: datetime | None
     created_at: datetime
     updated_at: datetime

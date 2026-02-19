@@ -68,6 +68,7 @@ class Endpoint(Base):
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy
+    health_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_health_check: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

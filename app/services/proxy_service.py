@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import AsyncGenerator
 
 import httpx
@@ -46,6 +47,33 @@ HOP_BY_HOP_HEADERS = frozenset(
 )
 
 
+_DOUBLE_SEGMENT_RE = re.compile(r"(/v\d+)\1")
+
+
+def normalize_base_url(raw_url: str) -> str:
+    """Strip trailing slashes from a base URL for consistent path joining."""
+    return raw_url.rstrip("/")
+
+
+def validate_base_url(base_url: str) -> list[str]:
+    """Return a list of warnings about a base_url (empty list = OK)."""
+    warnings: list[str] = []
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    if not parsed.scheme or not parsed.netloc:
+        warnings.append(
+            "base_url must include scheme and host (e.g. https://api.example.com/v1)"
+        )
+    path = parsed.path.rstrip("/")
+    if _DOUBLE_SEGMENT_RE.search(path):
+        warnings.append(
+            f"base_url path '{path}' contains a repeated version segment (e.g. /v1/v1). "
+            "This is likely a misconfiguration."
+        )
+    return warnings
+
+
 def build_upstream_url(endpoint: Endpoint, request_path: str) -> str:
     """Forward the exact request path to the endpoint's base URL.
 
@@ -63,6 +91,18 @@ def build_upstream_url(endpoint: Endpoint, request_path: str) -> str:
         final_path = req_path
     else:
         final_path = f"{base_path}{req_path}"
+
+    if _DOUBLE_SEGMENT_RE.search(final_path):
+        fixed_path = _DOUBLE_SEGMENT_RE.sub(r"\1", final_path)
+        logger.warning(
+            "Double version segment detected in URL path: %s -> auto-corrected to %s "
+            "(base_url=%s, request_path=%s)",
+            final_path,
+            fixed_path,
+            endpoint.base_url,
+            request_path,
+        )
+        final_path = fixed_path
 
     return urlunparse((parsed.scheme, parsed.netloc, final_path, "", "", ""))
 
