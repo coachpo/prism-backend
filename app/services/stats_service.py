@@ -212,3 +212,98 @@ async def get_stats_summary(
         "total_tokens": row.total_tokens or 0,
         "groups": groups,
     }
+
+
+async def get_endpoint_success_rates(
+    db: AsyncSession,
+    *,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+) -> list[dict]:
+    if from_time is None:
+        from_time = datetime.utcnow() - timedelta(hours=24)
+    if to_time is None:
+        to_time = datetime.utcnow()
+
+    time_filter = and_(
+        RequestLog.created_at >= from_time,
+        RequestLog.created_at <= to_time,
+    )
+
+    success_case = case(
+        (RequestLog.status_code.between(200, 299), 1),
+        else_=0,
+    )
+
+    q = (
+        select(
+            RequestLog.endpoint_id.label("endpoint_id"),
+            func.count().label("total_requests"),
+            func.sum(success_case).label("success_count"),
+        )
+        .where(time_filter)
+        .where(RequestLog.endpoint_id.isnot(None))
+        .group_by(RequestLog.endpoint_id)
+    )
+
+    rows = (await db.execute(q)).all()
+    results = []
+    for row in rows:
+        total = row.total_requests or 0
+        success = row.success_count or 0
+        error = total - success
+        rate = round((success / total * 100), 2) if total > 0 else None
+        results.append(
+            {
+                "endpoint_id": row.endpoint_id,
+                "total_requests": total,
+                "success_count": success,
+                "error_count": error,
+                "success_rate": rate,
+            }
+        )
+    return results
+
+
+async def get_model_health_stats(
+    db: AsyncSession,
+    *,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+) -> dict[str, dict]:
+    if from_time is None:
+        from_time = datetime.utcnow() - timedelta(hours=24)
+    if to_time is None:
+        to_time = datetime.utcnow()
+
+    time_filter = and_(
+        RequestLog.created_at >= from_time,
+        RequestLog.created_at <= to_time,
+    )
+
+    success_case = case(
+        (RequestLog.status_code.between(200, 299), 1),
+        else_=0,
+    )
+
+    q = (
+        select(
+            RequestLog.model_id.label("model_id"),
+            func.count().label("total_requests"),
+            func.sum(success_case).label("success_count"),
+        )
+        .where(time_filter)
+        .group_by(RequestLog.model_id)
+    )
+
+    rows = (await db.execute(q)).all()
+    result = {}
+    for row in rows:
+        total = row.total_requests or 0
+        success = row.success_count or 0
+        rate = round((success / total * 100), 2) if total > 0 else None
+        result[row.model_id] = {
+            "health_success_rate": rate,
+            "health_total_requests": total,
+        }
+    return result

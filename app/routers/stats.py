@@ -5,8 +5,16 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.schemas.schemas import RequestLogListResponse, StatsSummaryResponse
-from app.services.stats_service import get_request_logs, get_stats_summary
+from app.schemas.schemas import (
+    RequestLogListResponse,
+    StatsSummaryResponse,
+    EndpointSuccessRateResponse,
+)
+from app.services.stats_service import (
+    get_request_logs,
+    get_stats_summary,
+    get_endpoint_success_rates,
+)
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
@@ -51,3 +59,12 @@ async def stats_summary(
         group_by=group_by,
     )
     return StatsSummaryResponse(**result)
+
+
+@router.get("/endpoint-success-rates", response_model=list[EndpointSuccessRateResponse])
+async def endpoint_success_rates(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+):
+    return await get_endpoint_success_rates(db, from_time=from_time, to_time=to_time)

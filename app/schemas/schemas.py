@@ -129,6 +129,8 @@ class ModelConfigListResponse(BaseModel):
     is_enabled: bool
     endpoint_count: int
     active_endpoint_count: int
+    health_success_rate: float | None = None
+    health_total_requests: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -182,3 +184,11 @@ class StatsSummaryResponse(BaseModel):
     total_output_tokens: int
     total_tokens: int
     groups: list[StatGroupResponse]
+
+
+class EndpointSuccessRateResponse(BaseModel):
+    endpoint_id: int
+    total_requests: int
+    success_count: int
+    error_count: int
+    success_rate: float | None

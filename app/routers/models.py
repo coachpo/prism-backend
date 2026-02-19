@@ -15,6 +15,7 @@ from app.schemas.schemas import (
     ModelConfigListResponse,
     ProviderResponse,
 )
+from app.services.stats_service import get_model_health_stats
 
 router = APIRouter(prefix="/api/models", tags=["models"])
 
@@ -72,8 +73,11 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
     )
     configs = result.scalars().all()
 
+    health_stats = await get_model_health_stats(db)
+
     response = []
     for config in configs:
+        stats = health_stats.get(config.model_id, {})
         response.append(
             ModelConfigListResponse(
                 id=config.id,
@@ -87,6 +91,8 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
                 is_enabled=config.is_enabled,
                 endpoint_count=len(config.endpoints),
                 active_endpoint_count=sum(1 for ep in config.endpoints if ep.is_active),
+                health_success_rate=stats.get("health_success_rate"),
+                health_total_requests=stats.get("health_total_requests", 0),
                 created_at=config.created_at,
                 updated_at=config.updated_at,
             )
