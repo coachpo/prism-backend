@@ -24,7 +24,6 @@ from app.services.proxy_service import (
     filter_response_headers,
     rewrite_model_in_body,
     inject_stream_options,
-    print_raw_request_if_anthropic,
 )
 from app.services.stats_service import log_request, extract_token_usage
 from app.services.audit_service import record_audit_log
@@ -131,11 +130,6 @@ async def _handle_proxy(
                     kwargs["content"] = raw_body
 
                 send_req = client.build_request(method, upstream_url, **kwargs)
-                print_raw_request_if_anthropic(
-                    send_req,
-                    provider_type=provider_type,
-                    endpoint_auth_type=ep.auth_type,
-                )
                 upstream_resp = await client.send(send_req, stream=True)
 
                 resp_headers_filtered = filter_response_headers(upstream_resp.headers)
@@ -304,8 +298,6 @@ async def _handle_proxy(
                     upstream_url,
                     headers,
                     raw_body,
-                    provider_type,
-                    ep.auth_type,
                 )
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 resp_headers = filter_response_headers(response.headers)
