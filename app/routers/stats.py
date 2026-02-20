@@ -1,14 +1,17 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
+from app.models.models import RequestLog
 from app.schemas.schemas import (
     RequestLogListResponse,
     StatsSummaryResponse,
     EndpointSuccessRateResponse,
+    BatchDeleteResponse,
 )
 from app.services.stats_service import (
     get_request_logs,
@@ -17,6 +20,8 @@ from app.services.stats_service import (
 )
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
+
+VALID_OLDER_THAN_DAYS = {7, 15, 30}
 
 
 @router.get("/requests", response_model=RequestLogListResponse)
@@ -68,3 +73,22 @@ async def endpoint_success_rates(
     to_time: datetime | None = None,
 ):
     return await get_endpoint_success_rates(db, from_time=from_time, to_time=to_time)
+
+
+@router.delete("/requests", response_model=BatchDeleteResponse)
+async def delete_request_logs(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    older_than_days: int = Query(...),
+):
+    if older_than_days not in VALID_OLDER_THAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"older_than_days is required and must be one of: {sorted(VALID_OLDER_THAN_DAYS)}",
+        )
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+        days=older_than_days
+    )
+    stmt = delete(RequestLog).where(RequestLog.created_at < cutoff)
+    result = await db.execute(stmt)
+    await db.flush()
+    return BatchDeleteResponse(deleted_count=result.rowcount)

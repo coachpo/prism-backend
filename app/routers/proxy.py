@@ -24,8 +24,10 @@ from app.services.proxy_service import (
     filter_response_headers,
     rewrite_model_in_body,
     inject_stream_options,
+    print_raw_request_if_anthropic,
 )
 from app.services.stats_service import log_request, extract_token_usage
+from app.services.audit_service import record_audit_log
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +90,9 @@ async def _handle_proxy(
         )
 
     provider_type = model_config.provider.provider_type
+    audit_enabled = model_config.provider.audit_enabled
+    audit_capture_bodies = model_config.provider.audit_capture_bodies
+    provider_id = model_config.provider.id
     client: httpx.AsyncClient = request.app.state.http_client
     is_streaming = extract_stream_flag(raw_body) if raw_body else False
     client_headers = _get_client_headers(request)
@@ -126,6 +131,11 @@ async def _handle_proxy(
                     kwargs["content"] = raw_body
 
                 send_req = client.build_request(method, upstream_url, **kwargs)
+                print_raw_request_if_anthropic(
+                    send_req,
+                    provider_type=provider_type,
+                    endpoint_auth_type=ep.auth_type,
+                )
                 upstream_resp = await client.send(send_req, stream=True)
 
                 resp_headers_filtered = filter_response_headers(upstream_resp.headers)
@@ -152,6 +162,22 @@ async def _handle_proxy(
                             request_path=request_path,
                             error_detail=body.decode("utf-8", errors="replace")[:500],
                         )
+                        if audit_enabled:
+                            await record_audit_log(
+                                request_log_id=None,
+                                provider_id=provider_id,
+                                model_id=model_id,
+                                request_method=method,
+                                request_url=upstream_url,
+                                request_headers=headers,
+                                request_body=raw_body,
+                                response_status=upstream_resp.status_code,
+                                response_headers=dict(upstream_resp.headers),
+                                response_body=body,
+                                is_stream=True,
+                                duration_ms=elapsed_ms,
+                                capture_bodies=audit_capture_bodies,
+                            )
                         continue
 
                     tokens = extract_token_usage(body)
@@ -168,6 +194,22 @@ async def _handle_proxy(
                         error_detail=body.decode("utf-8", errors="replace")[:500],
                         **tokens,
                     )
+                    if audit_enabled:
+                        await record_audit_log(
+                            request_log_id=None,
+                            provider_id=provider_id,
+                            model_id=model_id,
+                            request_method=method,
+                            request_url=upstream_url,
+                            request_headers=headers,
+                            request_body=raw_body,
+                            response_status=upstream_resp.status_code,
+                            response_headers=dict(upstream_resp.headers),
+                            response_body=body,
+                            is_stream=True,
+                            duration_ms=elapsed_ms,
+                            capture_bodies=audit_capture_bodies,
+                        )
 
                     return Response(
                         content=body,
@@ -182,6 +224,14 @@ async def _handle_proxy(
                 _log_status_code = upstream_resp.status_code
                 _log_elapsed_ms = elapsed_ms
                 _log_request_path = request_path
+                _audit_enabled = audit_enabled
+                _audit_capture_bodies = audit_capture_bodies
+                _audit_provider_id = provider_id
+                _audit_method = method
+                _audit_upstream_url = upstream_url
+                _audit_headers = headers
+                _audit_raw_body = raw_body
+                _audit_resp_headers = dict(upstream_resp.headers)
 
                 async def _iter_and_log(
                     resp: httpx.Response,
@@ -217,6 +267,25 @@ async def _handle_proxy(
                             )
                         except BaseException:
                             logger.exception("Failed to log streaming request")
+                        if _audit_enabled:
+                            try:
+                                await record_audit_log(
+                                    request_log_id=None,
+                                    provider_id=_audit_provider_id,
+                                    model_id=_log_model_id,
+                                    request_method=_audit_method,
+                                    request_url=_audit_upstream_url,
+                                    request_headers=_audit_headers,
+                                    request_body=_audit_raw_body,
+                                    response_status=_log_status_code,
+                                    response_headers=_audit_resp_headers,
+                                    response_body=None,
+                                    is_stream=True,
+                                    duration_ms=_log_elapsed_ms,
+                                    capture_bodies=_audit_capture_bodies,
+                                )
+                            except BaseException:
+                                logger.exception("Failed to record streaming audit log")
 
                 media_type = upstream_resp.headers.get(
                     "content-type", "text/event-stream"
@@ -233,7 +302,13 @@ async def _handle_proxy(
                 )
             else:
                 response = await proxy_request(
-                    client, method, upstream_url, headers, raw_body
+                    client,
+                    method,
+                    upstream_url,
+                    headers,
+                    raw_body,
+                    provider_type,
+                    ep.auth_type,
                 )
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 resp_headers = filter_response_headers(response.headers)
@@ -259,6 +334,22 @@ async def _handle_proxy(
                             :500
                         ],
                     )
+                    if audit_enabled:
+                        await record_audit_log(
+                            request_log_id=None,
+                            provider_id=provider_id,
+                            model_id=model_id,
+                            request_method=method,
+                            request_url=upstream_url,
+                            request_headers=headers,
+                            request_body=raw_body,
+                            response_status=response.status_code,
+                            response_headers=dict(response.headers),
+                            response_body=response.content,
+                            is_stream=False,
+                            duration_ms=elapsed_ms,
+                            capture_bodies=audit_capture_bodies,
+                        )
                     continue
 
                 tokens = extract_token_usage(response.content)
@@ -281,6 +372,22 @@ async def _handle_proxy(
                     error_detail=error_detail,
                     **tokens,
                 )
+                if audit_enabled:
+                    await record_audit_log(
+                        request_log_id=None,
+                        provider_id=provider_id,
+                        model_id=model_id,
+                        request_method=method,
+                        request_url=upstream_url,
+                        request_headers=headers,
+                        request_body=raw_body,
+                        response_status=response.status_code,
+                        response_headers=dict(response.headers),
+                        response_body=response.content,
+                        is_stream=False,
+                        duration_ms=elapsed_ms,
+                        capture_bodies=audit_capture_bodies,
+                    )
 
                 return Response(
                     content=response.content,

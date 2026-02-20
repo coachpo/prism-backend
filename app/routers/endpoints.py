@@ -1,5 +1,6 @@
 from typing import Annotated
 from datetime import datetime
+import json
 import time
 import logging
 
@@ -80,6 +81,7 @@ async def create_endpoint(
         priority=body.priority,
         description=body.description,
         auth_type=body.auth_type,
+        custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
     )
     db.add(endpoint)
     await db.flush()
@@ -103,6 +105,9 @@ async def update_endpoint(
         url_warnings = validate_base_url(update_data["base_url"])
         if url_warnings:
             raise HTTPException(status_code=422, detail="; ".join(url_warnings))
+    if "custom_headers" in update_data:
+        ch = update_data["custom_headers"]
+        update_data["custom_headers"] = json.dumps(ch) if ch else None
     for key, value in update_data.items():
         setattr(endpoint, key, value)
     endpoint.updated_at = datetime.utcnow()

@@ -15,6 +15,10 @@ class Provider(Base):
         String(50), nullable=False
     )  # openai, anthropic, gemini
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audit_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    audit_capture_bodies: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -68,6 +72,9 @@ class Endpoint(Base):
     auth_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # null=use provider default; "openai", "anthropic" to override
+    custom_headers: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )  # JSON object of custom HTTP headers
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy
@@ -97,6 +104,35 @@ class RequestLog(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     request_path: Mapped[str] = mapped_column(String(500), nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_log_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("request_logs.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
+    provider_id: Mapped[int] = mapped_column(
+        ForeignKey("providers.id"), nullable=False, index=True
+    )
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    request_method: Mapped[str] = mapped_column(String(10), nullable=False)
+    request_url: Mapped[str] = mapped_column(String(2000), nullable=False)
+    request_headers: Mapped[str] = mapped_column(Text, nullable=False)
+    request_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_status: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    response_headers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    response_body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )

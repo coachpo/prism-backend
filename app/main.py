@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.models.models import Provider
-from app.routers import providers, models, endpoints, proxy, stats, config
+from app.routers import providers, models, endpoints, proxy, stats, config, audit
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +50,32 @@ async def seed_providers():
 async def _add_missing_columns(conn):
     """Add columns introduced after initial schema to existing SQLite tables."""
     result = await conn.execute(text("PRAGMA table_info(endpoints)"))
-    columns = {row[1] for row in result.fetchall()}
-    if "auth_type" not in columns:
+    ep_columns = {row[1] for row in result.fetchall()}
+    if "auth_type" not in ep_columns:
         await conn.execute(
             text("ALTER TABLE endpoints ADD COLUMN auth_type VARCHAR(50)")
         )
         logger.info("Migrated: added auth_type column to endpoints table")
+    if "custom_headers" not in ep_columns:
+        await conn.execute(text("ALTER TABLE endpoints ADD COLUMN custom_headers TEXT"))
+        logger.info("Migrated: added custom_headers column to endpoints table")
+
+    result = await conn.execute(text("PRAGMA table_info(providers)"))
+    prov_columns = {row[1] for row in result.fetchall()}
+    if "audit_enabled" not in prov_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE providers ADD COLUMN audit_enabled BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        logger.info("Migrated: added audit_enabled column to providers table")
+    if "audit_capture_bodies" not in prov_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE providers ADD COLUMN audit_capture_bodies BOOLEAN NOT NULL DEFAULT 1"
+            )
+        )
+        logger.info("Migrated: added audit_capture_bodies column to providers table")
 
 
 @asynccontextmanager
@@ -109,6 +129,7 @@ app.include_router(providers.router)
 app.include_router(models.router)
 app.include_router(endpoints.router)
 app.include_router(stats.router)
+app.include_router(audit.router)
 app.include_router(config.router)
 app.include_router(proxy.router)
 

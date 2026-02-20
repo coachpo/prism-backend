@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Annotated
+import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
@@ -36,6 +37,8 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
             name=p.name,
             provider_type=p.provider_type,
             description=p.description,
+            audit_enabled=p.audit_enabled,
+            audit_capture_bodies=p.audit_capture_bodies,
         )
         for p in providers
     ]
@@ -57,6 +60,9 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     priority=ep.priority,
                     description=ep.description,
                     auth_type=ep.auth_type,
+                    custom_headers=json.loads(ep.custom_headers)
+                    if ep.custom_headers
+                    else None,
                 )
                 for ep in mc.endpoints
             ],
@@ -167,6 +173,8 @@ async def import_config(
             name=p.name,
             provider_type=p.provider_type,
             description=p.description,
+            audit_enabled=p.audit_enabled,
+            audit_capture_bodies=p.audit_capture_bodies,
         )
         db.add(provider)
         await db.flush()
@@ -199,6 +207,9 @@ async def import_config(
                 priority=ep_data.priority,
                 description=ep_data.description,
                 auth_type=ep_data.auth_type,
+                custom_headers=json.dumps(ep_data.custom_headers)
+                if ep_data.custom_headers
+                else None,
             )
             db.add(ep)
             endpoints_count += 1

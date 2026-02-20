@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+from urllib.parse import urlparse
 from typing import AsyncGenerator
 
 import httpx
@@ -123,8 +124,11 @@ def build_upstream_headers(
 ) -> dict[str, str]:
     """Build headers for the upstream request.
 
-    Starts with forwarded client headers (minus hop-by-hop),
-    then layers on auth and provider-specific headers which take precedence.
+    Merge order:
+    1. Client headers (minus hop-by-hop, minus client auth, minus proxy-controlled)
+    2. Provider auth headers
+    3. Provider extra headers (e.g., anthropic-version)
+    4. Endpoint custom_headers — applied LAST, overwrites same-name
     """
     auth_key = endpoint.auth_type or provider_type
     config = PROVIDER_AUTH.get(auth_key, PROVIDER_AUTH["openai"])
@@ -151,6 +155,14 @@ def build_upstream_headers(
     headers[config["auth_header"]] = f"{config['auth_prefix']}{endpoint.api_key}"
     headers.update(config["extra_headers"])
 
+    if endpoint.custom_headers:
+        try:
+            custom = json.loads(endpoint.custom_headers)
+            if isinstance(custom, dict):
+                headers.update(custom)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
     return headers
 
 
@@ -169,12 +181,16 @@ async def proxy_request(
     upstream_url: str,
     headers: dict[str, str],
     raw_body: bytes | None,
+    provider_type: str,
+    endpoint_auth_type: str | None,
 ) -> httpx.Response:
     """Send a non-streaming request to the upstream provider."""
     kwargs: dict = {"headers": headers}
     if raw_body:
         kwargs["content"] = raw_body
-    return await client.request(method, upstream_url, **kwargs)
+    send_req = client.build_request(method, upstream_url, **kwargs)
+    print_raw_request_if_anthropic(send_req, provider_type, endpoint_auth_type)
+    return await client.send(send_req, follow_redirects=True)
 
 
 async def proxy_stream(
@@ -253,3 +269,41 @@ def inject_stream_options(raw_body: bytes | None, provider_type: str) -> bytes |
         return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return raw_body
+
+
+def _is_anthropic_request(
+    provider_type: str,
+    endpoint_auth_type: str | None,
+) -> bool:
+    return (endpoint_auth_type or provider_type) == "anthropic"
+
+
+def _format_raw_http_request(request: httpx.Request) -> str:
+    parsed = urlparse(str(request.url))
+    raw_path = parsed.path or "/"
+    if parsed.query:
+        raw_path = f"{raw_path}?{parsed.query}"
+
+    lines: list[str] = [f"{request.method} {raw_path} HTTP/1.1"]
+    for key, value in request.headers.multi_items():
+        lines.append(f"{key}: {value}")
+
+    body = request.content if request.content is not None else b""
+    lines.append("")
+    if body:
+        lines.append(body.decode("utf-8", errors="replace"))
+    return "\n".join(lines)
+
+
+def print_raw_request_if_anthropic(
+    request: httpx.Request,
+    provider_type: str,
+    endpoint_auth_type: str | None,
+) -> None:
+    if not _is_anthropic_request(provider_type, endpoint_auth_type):
+        return
+
+    logger.warning(
+        "Anthropic upstream raw HTTP request:\n%s",
+        _format_raw_http_request(request),
+    )

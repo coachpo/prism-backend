@@ -1,5 +1,6 @@
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+import json
 
 
 # --- Provider Schemas ---
@@ -15,10 +16,17 @@ class ProviderCreate(ProviderBase):
     pass
 
 
+class ProviderUpdate(BaseModel):
+    audit_enabled: bool | None = None
+    audit_capture_bodies: bool | None = None
+
+
 class ProviderResponse(ProviderBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    audit_enabled: bool
+    audit_capture_bodies: bool
     created_at: datetime
     updated_at: datetime
 
@@ -33,6 +41,7 @@ class EndpointBase(BaseModel):
     priority: int = 0
     description: str | None = None
     auth_type: str | None = None
+    custom_headers: dict[str, str] | None = None
 
 
 class EndpointCreate(EndpointBase):
@@ -46,6 +55,7 @@ class EndpointUpdate(BaseModel):
     priority: int | None = None
     description: str | None = None
     auth_type: str | None = None
+    custom_headers: dict[str, str] | None = None
 
 
 class EndpointResponse(BaseModel):
@@ -59,11 +69,21 @@ class EndpointResponse(BaseModel):
     priority: int
     description: str | None
     auth_type: str | None
+    custom_headers: dict[str, str] | None
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("custom_headers", mode="before")
+    @classmethod
+    def parse_custom_headers(cls, v: str | dict | None) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return v
+        return json.loads(v)
 
 
 class HealthCheckResponse(BaseModel):
@@ -207,6 +227,7 @@ class ConfigEndpointExport(BaseModel):
     priority: int = 0
     description: str | None = None
     auth_type: str | None = None
+    custom_headers: dict[str, str] | None = None
 
 
 class ConfigModelExport(BaseModel):
@@ -224,6 +245,8 @@ class ConfigProviderExport(BaseModel):
     name: str
     provider_type: str
     description: str | None = None
+    audit_enabled: bool = False
+    audit_capture_bodies: bool = True
 
 
 class ConfigExportResponse(BaseModel):
@@ -244,3 +267,60 @@ class ConfigImportResponse(BaseModel):
     providers_imported: int
     models_imported: int
     endpoints_imported: int
+
+
+# --- Audit Log Schemas ---
+
+
+class AuditLogListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    request_log_id: int | None
+    provider_id: int
+    model_id: str
+    request_method: str
+    request_url: str
+    request_headers: str
+    request_body_preview: str | None
+    response_status: int
+    is_stream: bool
+    duration_ms: int
+    created_at: datetime
+
+
+class AuditLogDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    request_log_id: int | None
+    provider_id: int
+    model_id: str
+    request_method: str
+    request_url: str
+    request_headers: str
+    request_body: str | None
+    response_status: int
+    response_headers: str | None
+    response_body: str | None
+    is_stream: bool
+    duration_ms: int
+    created_at: datetime
+
+
+class AuditLogListResponse(BaseModel):
+    items: list[AuditLogListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class AuditLogDeleteResponse(BaseModel):
+    deleted_count: int
+
+
+# --- Batch Delete Schemas ---
+
+
+class BatchDeleteResponse(BaseModel):
+    deleted_count: int
