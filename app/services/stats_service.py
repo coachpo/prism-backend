@@ -82,7 +82,6 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
     total_tokens = None
 
     for event in events:
-        # OpenAI: final chunk with usage object
         usage = event.get("usage")
         if usage and isinstance(usage, dict):
             input_tokens = (
@@ -95,17 +94,27 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
             )
             total_tokens = usage.get("total_tokens") or total_tokens
 
-        # Anthropic: message_start → message.usage.input_tokens
         if event.get("type") == "message_start":
             msg_usage = event.get("message", {}).get("usage", {})
             if msg_usage.get("input_tokens") is not None:
                 input_tokens = msg_usage["input_tokens"]
 
-        # Anthropic: message_delta → usage.output_tokens
         if event.get("type") == "message_delta":
             delta_usage = event.get("usage", {})
             if delta_usage.get("output_tokens") is not None:
                 output_tokens = delta_usage["output_tokens"]
+
+        gemini_usage = event.get("usageMetadata")
+        if gemini_usage and isinstance(gemini_usage, dict):
+            pt = gemini_usage.get("promptTokenCount")
+            ct = gemini_usage.get("candidatesTokenCount")
+            tt = gemini_usage.get("totalTokenCount")
+            if pt is not None:
+                input_tokens = pt
+            if ct is not None:
+                output_tokens = ct
+            if tt is not None:
+                total_tokens = tt
 
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = (input_tokens or 0) + (output_tokens or 0)
@@ -143,7 +152,19 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "total_tokens": total_t,
             }
 
-        # Anthropic count_tokens: top-level input_tokens without usage wrapper
+        gemini_usage = data.get("usageMetadata")
+        if gemini_usage and isinstance(gemini_usage, dict):
+            input_t = gemini_usage.get("promptTokenCount")
+            output_t = gemini_usage.get("candidatesTokenCount")
+            total_t = gemini_usage.get("totalTokenCount")
+            if total_t is None and (input_t is not None or output_t is not None):
+                total_t = (input_t or 0) + (output_t or 0)
+            return {
+                "input_tokens": input_t,
+                "output_tokens": output_t,
+                "total_tokens": total_t,
+            }
+
         if "input_tokens" in data and "usage" not in data:
             return {
                 "input_tokens": data["input_tokens"],
