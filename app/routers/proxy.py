@@ -411,6 +411,22 @@ async def _handle_proxy(
                 request_path=request_path,
                 error_detail=str(e)[:500],
             )
+            if audit_enabled:
+                await record_audit_log(
+                    request_log_id=None,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    request_method=method,
+                    request_url=upstream_url,
+                    request_headers=headers,
+                    request_body=raw_body,
+                    response_status=0,
+                    response_headers=None,
+                    response_body=None,
+                    is_stream=is_streaming,
+                    duration_ms=elapsed_ms,
+                    capture_bodies=audit_capture_bodies,
+                )
             continue
         except httpx.TimeoutException as e:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -428,23 +444,56 @@ async def _handle_proxy(
                 request_path=request_path,
                 error_detail=str(e)[:500],
             )
+            if audit_enabled:
+                await record_audit_log(
+                    request_log_id=None,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    request_method=method,
+                    request_url=upstream_url,
+                    request_headers=headers,
+                    request_body=raw_body,
+                    response_status=0,
+                    response_headers=None,
+                    response_body=None,
+                    is_stream=is_streaming,
+                    duration_ms=elapsed_ms,
+                    capture_bodies=audit_capture_bodies,
+                )
             continue
         except httpx.HTTPStatusError as e:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"HTTP error: {e}"
             logger.warning(f"Endpoint {ep.id} HTTP error: {e}")
+            resp_status = e.response.status_code if e.response else 0
             await log_request(
                 db,
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
                 endpoint_base_url=ep.base_url,
-                status_code=e.response.status_code if e.response else 0,
+                status_code=resp_status,
                 response_time_ms=elapsed_ms,
                 is_stream=is_streaming,
                 request_path=request_path,
                 error_detail=str(e)[:500],
             )
+            if audit_enabled:
+                await record_audit_log(
+                    request_log_id=None,
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    request_method=method,
+                    request_url=upstream_url,
+                    request_headers=headers,
+                    request_body=raw_body,
+                    response_status=resp_status,
+                    response_headers=dict(e.response.headers) if e.response else None,
+                    response_body=e.response.content if e.response else None,
+                    is_stream=is_streaming,
+                    duration_ms=elapsed_ms,
+                    capture_bodies=audit_capture_bodies,
+                )
             continue
 
     raise HTTPException(
