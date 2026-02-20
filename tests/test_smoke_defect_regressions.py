@@ -32,7 +32,6 @@ class TestDEF001_LogsSurviveFailoverRollback:
             return_value=mock_session_ctx,
         ):
             await log_request(
-                AsyncMock(),
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
@@ -48,9 +47,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
         mock_session.commit.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_log_request_does_not_use_caller_session(self):
-        caller_db = AsyncMock()
-
+    async def test_log_request_uses_independent_session_without_caller_db(self):
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
@@ -64,7 +61,6 @@ class TestDEF001_LogsSurviveFailoverRollback:
             return_value=mock_session_ctx,
         ):
             await log_request(
-                caller_db,
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
@@ -75,10 +71,8 @@ class TestDEF001_LogsSurviveFailoverRollback:
                 request_path="/v1/chat/completions",
                 error_detail="connection refused",
             )
-
-        caller_db.add.assert_not_called()
-        caller_db.flush.assert_not_called()
-        caller_db.commit.assert_not_called()
+        mock_session.add.assert_called_once()
+        mock_session.commit.assert_awaited_once()
 
 
 class TestDEF002_ModelIdRewriting:

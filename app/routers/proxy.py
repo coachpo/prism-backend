@@ -151,7 +151,6 @@ async def _handle_proxy(
                             f"Endpoint {ep.id} failed with {upstream_resp.status_code}, trying next"
                         )
                         await log_request(
-                            db,
                             model_id=model_id,
                             provider_type=provider_type,
                             endpoint_id=ep.id,
@@ -182,7 +181,6 @@ async def _handle_proxy(
 
                     tokens = extract_token_usage(body)
                     await log_request(
-                        db,
                         model_id=model_id,
                         provider_type=provider_type,
                         endpoint_id=ep.id,
@@ -254,7 +252,6 @@ async def _handle_proxy(
                         try:
                             tokens = extract_token_usage(bytes(accumulated))
                             await log_request(
-                                db,
                                 model_id=_log_model_id,
                                 provider_type=_log_provider_type,
                                 endpoint_id=_log_endpoint_id,
@@ -321,7 +318,6 @@ async def _handle_proxy(
                         f"Endpoint {ep.id} failed with {response.status_code}, trying next"
                     )
                     await log_request(
-                        db,
                         model_id=model_id,
                         provider_type=provider_type,
                         endpoint_id=ep.id,
@@ -360,7 +356,6 @@ async def _handle_proxy(
                     ]
 
                 await log_request(
-                    db,
                     model_id=model_id,
                     provider_type=provider_type,
                     endpoint_id=ep.id,
@@ -400,7 +395,6 @@ async def _handle_proxy(
             last_error = f"Connection error: {e}"
             logger.warning(f"Endpoint {ep.id} connection failed: {e}")
             await log_request(
-                db,
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
@@ -433,7 +427,6 @@ async def _handle_proxy(
             last_error = f"Timeout: {e}"
             logger.warning(f"Endpoint {ep.id} timed out: {e}")
             await log_request(
-                db,
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
@@ -467,7 +460,6 @@ async def _handle_proxy(
             logger.warning(f"Endpoint {ep.id} HTTP error: {e}")
             resp_status = e.response.status_code if e.response else 0
             await log_request(
-                db,
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
@@ -506,7 +498,7 @@ async def _handle_proxy(
 async def proxy_catch_all(
     request: Request,
     path: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ):
     raw_body = await request.body() or None
     return await _handle_proxy(request, db, raw_body, f"/v1/{path}")
@@ -518,7 +510,7 @@ async def proxy_catch_all(
 async def proxy_catch_all_v1beta(
     request: Request,
     path: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
 ):
     raw_body = await request.body() or None
     return await _handle_proxy(request, db, raw_body, f"/v1beta/{path}")

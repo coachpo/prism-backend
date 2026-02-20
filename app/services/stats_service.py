@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 async def log_request(
-    db: AsyncSession,
     *,
     model_id: str,
     provider_type: str,
@@ -29,8 +28,8 @@ async def log_request(
     """Log a proxy request to the database.
 
     Uses an independent database session so that log entries survive even when
-    the caller's request-scoped session is rolled back (e.g. when an
-    HTTPException is raised after all failover endpoints fail).
+    the request-scoped session is rolled back (e.g. when an HTTPException is
+    raised after all failover endpoints fail).
     """
     from app.core.database import AsyncSessionLocal
 
