@@ -16,8 +16,6 @@ from app.schemas.schemas import (
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
-VALID_OLDER_THAN_DAYS = {7, 15, 30}
-
 
 @router.get("/logs", response_model=AuditLogListResponse)
 async def list_audit_logs(
@@ -97,32 +95,26 @@ async def get_audit_log(
 async def delete_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
     before: datetime | None = None,
-    older_than_days: int | None = None,
+    older_than_days: int | None = Query(default=None, ge=1),
+    delete_all: bool = Query(default=False),
 ):
-    if before and older_than_days is not None:
+    provided = sum([before is not None, older_than_days is not None, delete_all])
+    if provided != 1:
         raise HTTPException(
             status_code=400,
-            detail="Provide either 'before' or 'older_than_days', not both",
-        )
-    if before is None and older_than_days is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either 'before' or 'older_than_days'",
+            detail="Provide exactly one of 'before', 'older_than_days', or 'delete_all'",
         )
 
-    if older_than_days is not None:
-        if older_than_days not in VALID_OLDER_THAN_DAYS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"older_than_days must be one of: {sorted(VALID_OLDER_THAN_DAYS)}",
-            )
+    if delete_all:
+        stmt = delete(AuditLog)
+    elif older_than_days is not None:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             days=older_than_days
         )
+        stmt = delete(AuditLog).where(AuditLog.created_at < cutoff)
     else:
-        cutoff = before
+        stmt = delete(AuditLog).where(AuditLog.created_at < before)
 
-    stmt = delete(AuditLog).where(AuditLog.created_at < cutoff)
     result = await db.execute(stmt)
     await db.flush()
     return AuditLogDeleteResponse(deleted_count=result.rowcount)

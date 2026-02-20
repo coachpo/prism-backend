@@ -21,8 +21,6 @@ from app.services.stats_service import (
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
-VALID_OLDER_THAN_DAYS = {7, 15, 30}
-
 
 @router.get("/requests", response_model=RequestLogListResponse)
 async def list_request_logs(
@@ -78,17 +76,28 @@ async def endpoint_success_rates(
 @router.delete("/requests", response_model=BatchDeleteResponse)
 async def delete_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    older_than_days: int = Query(...),
+    older_than_days: int | None = Query(default=None, ge=1),
+    delete_all: bool = Query(default=False),
 ):
-    if older_than_days not in VALID_OLDER_THAN_DAYS:
+    if delete_all and older_than_days is not None:
         raise HTTPException(
             status_code=400,
-            detail=f"older_than_days is required and must be one of: {sorted(VALID_OLDER_THAN_DAYS)}",
+            detail="Provide either 'older_than_days' or 'delete_all', not both",
         )
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-        days=older_than_days
-    )
-    stmt = delete(RequestLog).where(RequestLog.created_at < cutoff)
+    if not delete_all and older_than_days is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'older_than_days' (integer >= 1) or 'delete_all=true'",
+        )
+
+    if delete_all:
+        stmt = delete(RequestLog)
+    else:
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            days=older_than_days  # type: ignore[arg-type]
+        )
+        stmt = delete(RequestLog).where(RequestLog.created_at < cutoff)
+
     result = await db.execute(stmt)
     await db.flush()
     return BatchDeleteResponse(deleted_count=result.rowcount)
