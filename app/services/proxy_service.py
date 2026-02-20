@@ -236,3 +236,20 @@ def extract_stream_flag(raw_body: bytes) -> bool:
         return bool(parsed.get("stream", False))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return False
+
+
+def inject_stream_options(raw_body: bytes | None, provider_type: str) -> bytes | None:
+    if not raw_body:
+        return raw_body
+    if provider_type != "openai":
+        return raw_body
+    try:
+        parsed = json.loads(raw_body)
+        if not parsed.get("stream"):
+            return raw_body
+        stream_opts = parsed.get("stream_options") or {}
+        stream_opts["include_usage"] = True
+        parsed["stream_options"] = stream_opts
+        return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return raw_body

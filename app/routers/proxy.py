@@ -23,6 +23,7 @@ from app.services.proxy_service import (
     extract_stream_flag,
     filter_response_headers,
     rewrite_model_in_body,
+    inject_stream_options,
 )
 from app.services.stats_service import log_request, extract_token_usage
 
@@ -97,6 +98,9 @@ async def _handle_proxy(
         raw_body = rewrite_model_in_body(raw_body, upstream_model_id)
     elif raw_body and not extract_model_from_body(raw_body):
         raw_body = rewrite_model_in_body(raw_body, upstream_model_id)
+
+    if is_streaming and raw_body:
+        raw_body = inject_stream_options(raw_body, provider_type)
 
     endpoint = select_endpoint(model_config)
     if not endpoint:
