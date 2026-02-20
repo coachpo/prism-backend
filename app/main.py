@@ -9,7 +9,7 @@ from sqlalchemy import select, text
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.models.models import Provider
-from app.routers import providers, models, endpoints, proxy, stats
+from app.routers import providers, models, endpoints, proxy, stats, config
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ app.include_router(providers.router)
 app.include_router(models.router)
 app.include_router(endpoints.router)
 app.include_router(stats.router)
+app.include_router(config.router)
 app.include_router(proxy.router)
 
 

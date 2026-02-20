@@ -195,3 +195,52 @@ class EndpointSuccessRateResponse(BaseModel):
     success_count: int
     error_count: int
     success_rate: float | None
+
+
+# --- Config Export/Import Schemas ---
+
+
+class ConfigEndpointExport(BaseModel):
+    base_url: str
+    api_key: str
+    is_active: bool = True
+    priority: int = 0
+    description: str | None = None
+    auth_type: str | None = None
+
+
+class ConfigModelExport(BaseModel):
+    provider_type: str
+    model_id: str
+    display_name: str | None = None
+    model_type: str = "native"
+    redirect_to: str | None = None
+    lb_strategy: str = "single"
+    is_enabled: bool = True
+    endpoints: list[ConfigEndpointExport] = []
+
+
+class ConfigProviderExport(BaseModel):
+    name: str
+    provider_type: str
+    description: str | None = None
+
+
+class ConfigExportResponse(BaseModel):
+    version: int = 1
+    exported_at: datetime
+    providers: list[ConfigProviderExport]
+    models: list[ConfigModelExport]
+
+
+class ConfigImportRequest(BaseModel):
+    version: int
+    exported_at: datetime | None = None
+    providers: list[ConfigProviderExport]
+    models: list[ConfigModelExport]
+
+
+class ConfigImportResponse(BaseModel):
+    providers_imported: int
+    models_imported: int
+    endpoints_imported: int
