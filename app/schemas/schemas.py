@@ -94,6 +94,14 @@ class HealthCheckResponse(BaseModel):
     response_time_ms: int
 
 
+class EndpointOwnerResponse(BaseModel):
+    endpoint_id: int
+    model_config_id: int
+    model_id: str
+    endpoint_description: str | None
+    endpoint_base_url: str
+
+
 # --- Model Config Schemas ---
 
 

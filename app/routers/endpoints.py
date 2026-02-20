@@ -17,6 +17,7 @@ from app.schemas.schemas import (
     EndpointUpdate,
     EndpointResponse,
     HealthCheckResponse,
+    EndpointOwnerResponse,
 )
 from app.services.proxy_service import (
     build_upstream_url,
@@ -240,4 +241,30 @@ async def health_check_endpoint(
         checked_at=checked_at,
         detail=detail,
         response_time_ms=response_time_ms,
+    )
+
+
+@router.get(
+    "/api/endpoints/{endpoint_id}/owner",
+    response_model=EndpointOwnerResponse,
+)
+async def get_endpoint_owner(
+    endpoint_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(
+        select(Endpoint)
+        .options(selectinload(Endpoint.model_config_rel))
+        .where(Endpoint.id == endpoint_id)
+    )
+    endpoint = result.scalar_one_or_none()
+    if not endpoint:
+        raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    return EndpointOwnerResponse(
+        endpoint_id=endpoint.id,
+        model_config_id=endpoint.model_config_id,
+        model_id=endpoint.model_config_rel.model_id,
+        endpoint_description=endpoint.description,
+        endpoint_base_url=endpoint.base_url,
     )

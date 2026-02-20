@@ -620,3 +620,60 @@ class TestDEF007_EndpointIdentityInLogs:
 
         fields = set(RequestLogResponse.model_fields.keys())
         assert "endpoint_description" in fields
+
+
+class TestEndpointOwnerRoute:
+    def test_owner_response_schema_has_required_fields(self):
+        from app.schemas.schemas import EndpointOwnerResponse
+
+        fields = set(EndpointOwnerResponse.model_fields.keys())
+        assert fields == {
+            "endpoint_id",
+            "model_config_id",
+            "model_id",
+            "endpoint_description",
+            "endpoint_base_url",
+        }
+
+    @pytest.mark.asyncio
+    async def test_owner_route_returns_correct_data(self):
+        from app.routers.endpoints import get_endpoint_owner
+
+        mock_model_config = MagicMock()
+        mock_model_config.model_id = "gpt-4"
+
+        mock_endpoint = MagicMock()
+        mock_endpoint.id = 7
+        mock_endpoint.model_config_id = 3
+        mock_endpoint.description = "PackyCode"
+        mock_endpoint.base_url = "https://api.openai.com/v1"
+        mock_endpoint.model_config_rel = mock_model_config
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = mock_endpoint
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        response = await get_endpoint_owner(endpoint_id=7, db=mock_db)
+
+        assert response.endpoint_id == 7
+        assert response.model_config_id == 3
+        assert response.model_id == "gpt-4"
+        assert response.endpoint_description == "PackyCode"
+        assert response.endpoint_base_url == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_owner_route_returns_404_for_missing_endpoint(self):
+        from app.routers.endpoints import get_endpoint_owner
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_endpoint_owner(endpoint_id=9999, db=mock_db)
+
+        assert exc_info.value.status_code == 404
