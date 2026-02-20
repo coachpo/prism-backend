@@ -46,6 +46,15 @@ HOP_BY_HOP_HEADERS = frozenset(
     }
 )
 
+# Auth headers from clients must never be forwarded — the proxy replaces auth entirely
+CLIENT_AUTH_HEADERS = frozenset(
+    {
+        "authorization",
+        "x-api-key",
+        "x-goog-api-key",
+    }
+)
+
 
 _DOUBLE_SEGMENT_RE = re.compile(r"(/v\d+)\1")
 
@@ -132,6 +141,7 @@ def build_upstream_headers(
             k_lower = key.lower()
             if (
                 k_lower not in HOP_BY_HOP_HEADERS
+                and k_lower not in CLIENT_AUTH_HEADERS
                 and k_lower != "content-length"
                 and k_lower != "accept-encoding"
                 and k_lower not in proxy_controlled_headers

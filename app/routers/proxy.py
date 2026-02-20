@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 from typing import Annotated, AsyncGenerator
 
@@ -8,7 +9,6 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.core.database import AsyncSessionLocal
 from app.services.loadbalancer import (
     get_model_config_with_endpoints,
     select_endpoint,
@@ -32,17 +32,31 @@ router = APIRouter(tags=["proxy"])
 
 MODEL_ID_HEADER = "x-model-id"
 
+# Gemini URL pattern: /v1beta/models/{model_id}:{action}
+_GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
+
 
 def _get_client_headers(request: Request) -> dict[str, str]:
     return dict(request.headers)
 
 
-def _resolve_model_id(request: Request, raw_body: bytes | None) -> str | None:
+def _extract_model_from_path(request_path: str) -> str | None:
+    m = _GEMINI_MODEL_RE.search(request_path)
+    return m.group(1) if m else None
+
+
+def _resolve_model_id(
+    request: Request, raw_body: bytes | None, request_path: str
+) -> str | None:
     if raw_body:
         model_id = extract_model_from_body(raw_body)
         if model_id:
             return model_id
-    return request.headers.get(MODEL_ID_HEADER)
+    header_id = request.headers.get(MODEL_ID_HEADER)
+    if header_id:
+        return header_id
+    # Gemini-style: model is in the URL path, not the body
+    return _extract_model_from_path(request_path)
 
 
 async def _handle_proxy(
@@ -51,7 +65,7 @@ async def _handle_proxy(
     raw_body: bytes | None,
     request_path: str,
 ):
-    model_id = _resolve_model_id(request, raw_body)
+    model_id = _resolve_model_id(request, raw_body, request_path)
     if not model_id:
         raise HTTPException(
             status_code=400,
@@ -174,27 +188,30 @@ async def _handle_proxy(
                             if chunk:
                                 accumulated.extend(chunk)
                                 yield chunk
-                    except Exception as e:
+                    except GeneratorExit:
+                        return
+                    except BaseException as e:
                         logger.error(f"Stream error: {e}")
                     finally:
-                        await resp.aclose()
+                        try:
+                            await resp.aclose()
+                        except BaseException:
+                            pass
                         try:
                             tokens = extract_token_usage(bytes(accumulated))
-                            async with AsyncSessionLocal() as log_db:
-                                await log_request(
-                                    log_db,
-                                    model_id=_log_model_id,
-                                    provider_type=_log_provider_type,
-                                    endpoint_id=_log_endpoint_id,
-                                    endpoint_base_url=_log_endpoint_base_url,
-                                    status_code=_log_status_code,
-                                    response_time_ms=_log_elapsed_ms,
-                                    is_stream=True,
-                                    request_path=_log_request_path,
-                                    **tokens,
-                                )
-                                await log_db.commit()
-                        except Exception:
+                            await log_request(
+                                db,
+                                model_id=_log_model_id,
+                                provider_type=_log_provider_type,
+                                endpoint_id=_log_endpoint_id,
+                                endpoint_base_url=_log_endpoint_base_url,
+                                status_code=_log_status_code,
+                                response_time_ms=_log_elapsed_ms,
+                                is_stream=True,
+                                request_path=_log_request_path,
+                                **tokens,
+                            )
+                        except BaseException:
                             logger.exception("Failed to log streaming request")
 
                 media_type = upstream_resp.headers.get(
@@ -333,3 +350,15 @@ async def proxy_catch_all(
 ):
     raw_body = await request.body() or None
     return await _handle_proxy(request, db, raw_body, f"/v1/{path}")
+
+
+@router.api_route(
+    "/v1beta/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
+)
+async def proxy_catch_all_v1beta(
+    request: Request,
+    path: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    raw_body = await request.body() or None
+    return await _handle_proxy(request, db, raw_body, f"/v1beta/{path}")
