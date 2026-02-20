@@ -47,6 +47,16 @@ def _extract_model_from_path(request_path: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _rewrite_model_in_path(
+    request_path: str, original_model: str, target_model: str
+) -> str:
+    if original_model == target_model:
+        return request_path
+    return request_path.replace(
+        f"/models/{original_model}", f"/models/{target_model}", 1
+    )
+
+
 def _resolve_model_id(
     request: Request, raw_body: bytes | None, request_path: str
 ) -> str | None:
@@ -103,6 +113,13 @@ async def _handle_proxy(
     elif raw_body and not extract_model_from_body(raw_body):
         raw_body = rewrite_model_in_body(raw_body, upstream_model_id)
 
+    path_model = _extract_model_from_path(request_path)
+    effective_request_path = request_path
+    if path_model and upstream_model_id != model_id:
+        effective_request_path = _rewrite_model_in_path(
+            request_path, path_model, upstream_model_id
+        )
+
     if is_streaming and raw_body:
         raw_body = inject_stream_options(raw_body, provider_type)
 
@@ -116,7 +133,7 @@ async def _handle_proxy(
 
     last_error = None
     for ep in endpoints_to_try:
-        upstream_url = build_upstream_url(ep, request_path)
+        upstream_url = build_upstream_url(ep, effective_request_path)
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
         headers = build_upstream_headers(ep, provider_type, client_headers)

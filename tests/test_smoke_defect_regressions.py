@@ -336,3 +336,202 @@ class TestBatchDeleteValidation:
                 db=mock_db, before=None, older_than_days=None, delete_all=False
             )
         assert exc_info.value.status_code == 400
+
+
+class TestDEF005_GeminiPathModelRewrite:
+    """DEF-005 (P0): proxy must rewrite model ID in Gemini-style URL paths."""
+
+    def test_rewrite_gemini_path(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        result = _rewrite_model_in_path(
+            "/v1beta/models/gemini-3-flash:generateContent",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+        )
+        assert result == "/v1beta/models/gemini-3-flash-preview:generateContent"
+
+    def test_rewrite_gemini_path_stream(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        result = _rewrite_model_in_path(
+            "/v1beta/models/gemini-3-flash:streamGenerateContent",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+        )
+        assert result == "/v1beta/models/gemini-3-flash-preview:streamGenerateContent"
+
+    def test_no_rewrite_when_same_model(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        path = "/v1beta/models/gemini-3-flash:generateContent"
+        result = _rewrite_model_in_path(path, "gemini-3-flash", "gemini-3-flash")
+        assert result == path
+
+    def test_non_gemini_path_unchanged(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert _extract_model_from_path("/v1/chat/completions") is None
+
+    def test_extract_model_from_gemini_path(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert (
+            _extract_model_from_path("/v1beta/models/gemini-3-flash:generateContent")
+            == "gemini-3-flash"
+        )
+
+
+class TestDEF006_ConfigExportImportFieldCoverage:
+    """DEF-006 (P0): config export/import must preserve all mutable fields including custom_headers."""
+
+    def test_export_schema_includes_all_endpoint_fields(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        fields = set(ConfigEndpointExport.model_fields.keys())
+        expected = {
+            "base_url",
+            "api_key",
+            "is_active",
+            "priority",
+            "description",
+            "auth_type",
+            "custom_headers",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_export_schema_includes_all_provider_fields(self):
+        from app.schemas.schemas import ConfigProviderExport
+
+        fields = set(ConfigProviderExport.model_fields.keys())
+        expected = {
+            "name",
+            "provider_type",
+            "description",
+            "audit_enabled",
+            "audit_capture_bodies",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_export_schema_includes_all_model_fields(self):
+        from app.schemas.schemas import ConfigModelExport
+
+        fields = set(ConfigModelExport.model_fields.keys())
+        expected = {
+            "provider_type",
+            "model_id",
+            "display_name",
+            "model_type",
+            "redirect_to",
+            "lb_strategy",
+            "is_enabled",
+            "endpoints",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_roundtrip_custom_headers_preserved(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        headers = {"X-Custom": "value", "X-Another": "test"}
+        ep = ConfigEndpointExport(
+            base_url="https://api.example.com",
+            api_key="sk-test",
+            custom_headers=headers,
+            auth_type="openai",
+        )
+        exported = ep.model_dump(mode="json")
+        reimported = ConfigEndpointExport(**exported)
+        assert reimported.custom_headers == headers
+        assert reimported.auth_type == "openai"
+
+    def test_roundtrip_custom_headers_null(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        ep = ConfigEndpointExport(
+            base_url="https://api.example.com",
+            api_key="sk-test",
+            custom_headers=None,
+        )
+        exported = ep.model_dump(mode="json")
+        reimported = ConfigEndpointExport(**exported)
+        assert reimported.custom_headers is None
+
+    def test_roundtrip_custom_headers_empty_dict(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        ep = ConfigEndpointExport(
+            base_url="https://api.example.com",
+            api_key="sk-test",
+            custom_headers={},
+        )
+        exported = ep.model_dump(mode="json")
+        reimported = ConfigEndpointExport(**exported)
+        assert reimported.custom_headers == {}
+
+    def test_import_serializes_custom_headers_to_json_string(self):
+        import json
+
+        headers = {"X-Custom": "value"}
+        serialized = json.dumps(headers) if headers is not None else None
+        assert serialized == '{"X-Custom": "value"}'
+        assert json.loads(serialized) == headers
+
+    def test_full_config_roundtrip_schema(self):
+        from app.schemas.schemas import (
+            ConfigExportResponse,
+            ConfigImportRequest,
+            ConfigProviderExport,
+            ConfigModelExport,
+            ConfigEndpointExport,
+        )
+        from datetime import datetime, timezone
+
+        config = ConfigExportResponse(
+            version=1,
+            exported_at=datetime.now(timezone.utc),
+            providers=[
+                ConfigProviderExport(
+                    name="OpenAI",
+                    provider_type="openai",
+                    description="Main provider",
+                    audit_enabled=True,
+                    audit_capture_bodies=False,
+                )
+            ],
+            models=[
+                ConfigModelExport(
+                    provider_type="openai",
+                    model_id="gpt-4o",
+                    display_name="GPT-4o",
+                    model_type="native",
+                    lb_strategy="failover",
+                    is_enabled=True,
+                    endpoints=[
+                        ConfigEndpointExport(
+                            base_url="https://api.openai.com/v1",
+                            api_key="sk-test",
+                            is_active=True,
+                            priority=0,
+                            description="Primary",
+                            auth_type="openai",
+                            custom_headers={"X-Org": "my-org"},
+                        )
+                    ],
+                )
+            ],
+        )
+        exported = config.model_dump(mode="json")
+        reimported = ConfigImportRequest(**exported)
+
+        assert len(reimported.providers) == 1
+        assert reimported.providers[0].audit_enabled is True
+        assert reimported.providers[0].audit_capture_bodies is False
+        assert len(reimported.models) == 1
+        m = reimported.models[0]
+        assert m.model_id == "gpt-4o"
+        assert m.lb_strategy == "failover"
+        assert len(m.endpoints) == 1
+        ep = m.endpoints[0]
+        assert ep.custom_headers == {"X-Org": "my-org"}
+        assert ep.auth_type == "openai"
+        assert ep.priority == 0

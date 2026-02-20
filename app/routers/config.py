@@ -61,7 +61,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     description=ep.description,
                     auth_type=ep.auth_type,
                     custom_headers=json.loads(ep.custom_headers)
-                    if ep.custom_headers
+                    if ep.custom_headers is not None
                     else None,
                 )
                 for ep in mc.endpoints
@@ -208,7 +208,7 @@ async def import_config(
                 description=ep_data.description,
                 auth_type=ep_data.auth_type,
                 custom_headers=json.dumps(ep_data.custom_headers)
-                if ep_data.custom_headers
+                if ep_data.custom_headers is not None
                 else None,
             )
             db.add(ep)
