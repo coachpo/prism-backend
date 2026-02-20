@@ -104,6 +104,7 @@ class RequestLog(Base):
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     request_path: Mapped[str] = mapped_column(String(500), nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
@@ -124,6 +125,9 @@ class AuditLog(Base):
         ForeignKey("providers.id"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    endpoint_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_method: Mapped[str] = mapped_column(String(10), nullable=False)
     request_url: Mapped[str] = mapped_column(String(2000), nullable=False)
     request_headers: Mapped[str] = mapped_column(Text, nullable=False)

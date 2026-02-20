@@ -77,6 +77,66 @@ async def _add_missing_columns(conn):
         )
         logger.info("Migrated: added audit_capture_bodies column to providers table")
 
+    result = await conn.execute(text("PRAGMA table_info(request_logs)"))
+    rl_columns = {row[1] for row in result.fetchall()}
+    if "endpoint_description" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN endpoint_description TEXT")
+        )
+        logger.info("Migrated: added endpoint_description column to request_logs table")
+
+    result = await conn.execute(text("PRAGMA table_info(audit_logs)"))
+    al_columns = {row[1] for row in result.fetchall()}
+    if "endpoint_id" not in al_columns:
+        await conn.execute(
+            text("ALTER TABLE audit_logs ADD COLUMN endpoint_id INTEGER")
+        )
+        logger.info("Migrated: added endpoint_id column to audit_logs table")
+    if "endpoint_base_url" not in al_columns:
+        await conn.execute(
+            text("ALTER TABLE audit_logs ADD COLUMN endpoint_base_url VARCHAR(500)")
+        )
+        logger.info("Migrated: added endpoint_base_url column to audit_logs table")
+    if "endpoint_description" not in al_columns:
+        await conn.execute(
+            text("ALTER TABLE audit_logs ADD COLUMN endpoint_description TEXT")
+        )
+        logger.info("Migrated: added endpoint_description column to audit_logs table")
+
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_endpoint_id ON audit_logs(endpoint_id)"
+        )
+    )
+
+    await conn.execute(
+        text(
+            """
+            UPDATE request_logs SET endpoint_description = (
+                SELECT endpoints.description FROM endpoints
+                WHERE endpoints.id = request_logs.endpoint_id
+            )
+            WHERE request_logs.endpoint_id IS NOT NULL
+              AND request_logs.endpoint_description IS NULL
+            """
+        )
+    )
+
+    await conn.execute(
+        text(
+            """
+            UPDATE audit_logs SET
+                endpoint_id = rl.endpoint_id,
+                endpoint_base_url = rl.endpoint_base_url,
+                endpoint_description = rl.endpoint_description
+            FROM request_logs rl
+            WHERE audit_logs.request_log_id = rl.id
+              AND audit_logs.request_log_id IS NOT NULL
+              AND audit_logs.endpoint_id IS NULL
+            """
+        )
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

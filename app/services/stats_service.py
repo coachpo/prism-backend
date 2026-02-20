@@ -24,13 +24,8 @@ async def log_request(
     output_tokens: int | None = None,
     total_tokens: int | None = None,
     error_detail: str | None = None,
-) -> None:
-    """Log a proxy request to the database.
-
-    Uses an independent database session so that log entries survive even when
-    the request-scoped session is rolled back (e.g. when an HTTPException is
-    raised after all failover endpoints fail).
-    """
+    endpoint_description: str | None = None,
+) -> int | None:
     from app.core.database import AsyncSessionLocal
 
     try:
@@ -47,12 +42,16 @@ async def log_request(
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             error_detail=error_detail,
+            endpoint_description=endpoint_description,
         )
         async with AsyncSessionLocal() as log_db:
             log_db.add(entry)
             await log_db.commit()
+            await log_db.refresh(entry)
+            return entry.id
     except Exception:
         logger.exception("Failed to log request")
+        return None
 
 
 def _parse_sse_events(raw: bytes) -> list[dict]:
@@ -185,6 +184,7 @@ async def get_request_logs(
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
+    endpoint_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[RequestLog], int]:
@@ -203,6 +203,8 @@ async def get_request_logs(
         filters.append(RequestLog.created_at >= from_time)
     if to_time:
         filters.append(RequestLog.created_at <= to_time)
+    if endpoint_id is not None:
+        filters.append(RequestLog.endpoint_id == endpoint_id)
 
     where = and_(*filters) if filters else literal(True)
 
@@ -226,12 +228,21 @@ async def get_stats_summary(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     group_by: str | None = None,
+    model_id: str | None = None,
+    provider_type: str | None = None,
+    endpoint_id: int | None = None,
 ) -> dict:
     time_filters = []
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
         time_filters.append(RequestLog.created_at <= to_time)
+    if model_id:
+        time_filters.append(RequestLog.model_id == model_id)
+    if provider_type:
+        time_filters.append(RequestLog.provider_type == provider_type)
+    if endpoint_id is not None:
+        time_filters.append(RequestLog.endpoint_id == endpoint_id)
 
     time_filter = and_(*time_filters) if time_filters else literal(True)
 

@@ -137,6 +137,7 @@ async def _handle_proxy(
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
         headers = build_upstream_headers(ep, provider_type, client_headers)
+        ep_desc = ep.description
 
         start_time = time.monotonic()
 
@@ -161,11 +162,12 @@ async def _handle_proxy(
                         logger.warning(
                             f"Endpoint {ep.id} failed with {upstream_resp.status_code}, trying next"
                         )
-                        await log_request(
+                        rl_id = await log_request(
                             model_id=model_id,
                             provider_type=provider_type,
                             endpoint_id=ep.id,
                             endpoint_base_url=ep.base_url,
+                            endpoint_description=ep_desc,
                             status_code=upstream_resp.status_code,
                             response_time_ms=elapsed_ms,
                             is_stream=True,
@@ -174,8 +176,11 @@ async def _handle_proxy(
                         )
                         if audit_enabled:
                             await record_audit_log(
-                                request_log_id=None,
+                                request_log_id=rl_id,
                                 provider_id=provider_id,
+                                endpoint_id=ep.id,
+                                endpoint_base_url=ep.base_url,
+                                endpoint_description=ep_desc,
                                 model_id=model_id,
                                 request_method=method,
                                 request_url=upstream_url,
@@ -191,11 +196,12 @@ async def _handle_proxy(
                         continue
 
                     tokens = extract_token_usage(body)
-                    await log_request(
+                    rl_id = await log_request(
                         model_id=model_id,
                         provider_type=provider_type,
                         endpoint_id=ep.id,
                         endpoint_base_url=ep.base_url,
+                        endpoint_description=ep_desc,
                         status_code=upstream_resp.status_code,
                         response_time_ms=elapsed_ms,
                         is_stream=True,
@@ -205,8 +211,11 @@ async def _handle_proxy(
                     )
                     if audit_enabled:
                         await record_audit_log(
-                            request_log_id=None,
+                            request_log_id=rl_id,
                             provider_id=provider_id,
+                            endpoint_id=ep.id,
+                            endpoint_base_url=ep.base_url,
+                            endpoint_description=ep_desc,
                             model_id=model_id,
                             request_method=method,
                             request_url=upstream_url,
@@ -230,6 +239,7 @@ async def _handle_proxy(
                 _log_provider_type = provider_type
                 _log_endpoint_id = ep.id
                 _log_endpoint_base_url = ep.base_url
+                _log_endpoint_desc = ep_desc
                 _log_status_code = upstream_resp.status_code
                 _log_elapsed_ms = elapsed_ms
                 _log_request_path = request_path
@@ -245,6 +255,7 @@ async def _handle_proxy(
                 async def _iter_and_log(
                     resp: httpx.Response,
                 ) -> AsyncGenerator[bytes, None]:
+                    rl_id = None
                     accumulated = bytearray()
                     try:
                         async for chunk in resp.aiter_bytes():
@@ -262,11 +273,12 @@ async def _handle_proxy(
                             pass
                         try:
                             tokens = extract_token_usage(bytes(accumulated))
-                            await log_request(
+                            rl_id = await log_request(
                                 model_id=_log_model_id,
                                 provider_type=_log_provider_type,
                                 endpoint_id=_log_endpoint_id,
                                 endpoint_base_url=_log_endpoint_base_url,
+                                endpoint_description=_log_endpoint_desc,
                                 status_code=_log_status_code,
                                 response_time_ms=_log_elapsed_ms,
                                 is_stream=True,
@@ -278,8 +290,11 @@ async def _handle_proxy(
                         if _audit_enabled:
                             try:
                                 await record_audit_log(
-                                    request_log_id=None,
+                                    request_log_id=rl_id,
                                     provider_id=_audit_provider_id,
+                                    endpoint_id=_log_endpoint_id,
+                                    endpoint_base_url=_log_endpoint_base_url,
+                                    endpoint_description=_log_endpoint_desc,
                                     model_id=_log_model_id,
                                     request_method=_audit_method,
                                     request_url=_audit_upstream_url,
@@ -326,11 +341,12 @@ async def _handle_proxy(
                     logger.warning(
                         f"Endpoint {ep.id} failed with {response.status_code}, trying next"
                     )
-                    await log_request(
+                    rl_id = await log_request(
                         model_id=model_id,
                         provider_type=provider_type,
                         endpoint_id=ep.id,
                         endpoint_base_url=ep.base_url,
+                        endpoint_description=ep_desc,
                         status_code=response.status_code,
                         response_time_ms=elapsed_ms,
                         is_stream=False,
@@ -341,8 +357,11 @@ async def _handle_proxy(
                     )
                     if audit_enabled:
                         await record_audit_log(
-                            request_log_id=None,
+                            request_log_id=rl_id,
                             provider_id=provider_id,
+                            endpoint_id=ep.id,
+                            endpoint_base_url=ep.base_url,
+                            endpoint_description=ep_desc,
                             model_id=model_id,
                             request_method=method,
                             request_url=upstream_url,
@@ -364,11 +383,12 @@ async def _handle_proxy(
                         :500
                     ]
 
-                await log_request(
+                rl_id = await log_request(
                     model_id=model_id,
                     provider_type=provider_type,
                     endpoint_id=ep.id,
                     endpoint_base_url=ep.base_url,
+                    endpoint_description=ep_desc,
                     status_code=response.status_code,
                     response_time_ms=elapsed_ms,
                     is_stream=False,
@@ -378,8 +398,11 @@ async def _handle_proxy(
                 )
                 if audit_enabled:
                     await record_audit_log(
-                        request_log_id=None,
+                        request_log_id=rl_id,
                         provider_id=provider_id,
+                        endpoint_id=ep.id,
+                        endpoint_base_url=ep.base_url,
+                        endpoint_description=ep_desc,
                         model_id=model_id,
                         request_method=method,
                         request_url=upstream_url,
@@ -403,11 +426,12 @@ async def _handle_proxy(
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"Connection error: {e}"
             logger.warning(f"Endpoint {ep.id} connection failed: {e}")
-            await log_request(
+            rl_id = await log_request(
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
                 endpoint_base_url=ep.base_url,
+                endpoint_description=ep_desc,
                 status_code=0,
                 response_time_ms=elapsed_ms,
                 is_stream=is_streaming,
@@ -416,8 +440,11 @@ async def _handle_proxy(
             )
             if audit_enabled:
                 await record_audit_log(
-                    request_log_id=None,
+                    request_log_id=rl_id,
                     provider_id=provider_id,
+                    endpoint_id=ep.id,
+                    endpoint_base_url=ep.base_url,
+                    endpoint_description=ep_desc,
                     model_id=model_id,
                     request_method=method,
                     request_url=upstream_url,
@@ -435,11 +462,12 @@ async def _handle_proxy(
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             last_error = f"Timeout: {e}"
             logger.warning(f"Endpoint {ep.id} timed out: {e}")
-            await log_request(
+            rl_id = await log_request(
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
                 endpoint_base_url=ep.base_url,
+                endpoint_description=ep_desc,
                 status_code=0,
                 response_time_ms=elapsed_ms,
                 is_stream=is_streaming,
@@ -448,8 +476,11 @@ async def _handle_proxy(
             )
             if audit_enabled:
                 await record_audit_log(
-                    request_log_id=None,
+                    request_log_id=rl_id,
                     provider_id=provider_id,
+                    endpoint_id=ep.id,
+                    endpoint_base_url=ep.base_url,
+                    endpoint_description=ep_desc,
                     model_id=model_id,
                     request_method=method,
                     request_url=upstream_url,
@@ -468,11 +499,12 @@ async def _handle_proxy(
             last_error = f"HTTP error: {e}"
             logger.warning(f"Endpoint {ep.id} HTTP error: {e}")
             resp_status = e.response.status_code if e.response else 0
-            await log_request(
+            rl_id = await log_request(
                 model_id=model_id,
                 provider_type=provider_type,
                 endpoint_id=ep.id,
                 endpoint_base_url=ep.base_url,
+                endpoint_description=ep_desc,
                 status_code=resp_status,
                 response_time_ms=elapsed_ms,
                 is_stream=is_streaming,
@@ -481,8 +513,11 @@ async def _handle_proxy(
             )
             if audit_enabled:
                 await record_audit_log(
-                    request_log_id=None,
+                    request_log_id=rl_id,
                     provider_id=provider_id,
+                    endpoint_id=ep.id,
+                    endpoint_base_url=ep.base_url,
+                    endpoint_description=ep_desc,
                     model_id=model_id,
                     request_method=method,
                     request_url=upstream_url,

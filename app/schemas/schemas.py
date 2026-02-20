@@ -177,6 +177,7 @@ class RequestLogResponse(BaseModel):
     total_tokens: int | None
     request_path: str
     error_detail: str | None
+    endpoint_description: str | None = None
     created_at: datetime
 
 
@@ -279,6 +280,9 @@ class AuditLogListItem(BaseModel):
     request_log_id: int | None
     provider_id: int
     model_id: str
+    endpoint_id: int | None = None
+    endpoint_base_url: str | None = None
+    endpoint_description: str | None = None
     request_method: str
     request_url: str
     request_headers: str
@@ -296,6 +300,9 @@ class AuditLogDetail(BaseModel):
     request_log_id: int | None
     provider_id: int
     model_id: str
+    endpoint_id: int | None = None
+    endpoint_base_url: str | None = None
+    endpoint_description: str | None = None
     request_method: str
     request_url: str
     request_headers: str

@@ -61,6 +61,9 @@ async def record_audit_log(
     is_stream: bool,
     duration_ms: int,
     capture_bodies: bool,
+    endpoint_id: int | None = None,
+    endpoint_base_url: str | None = None,
+    endpoint_description: str | None = None,
 ) -> None:
     from app.core.database import AsyncSessionLocal
 
@@ -86,6 +89,9 @@ async def record_audit_log(
             request_log_id=request_log_id,
             provider_id=provider_id,
             model_id=model_id,
+            endpoint_id=endpoint_id,
+            endpoint_base_url=endpoint_base_url,
+            endpoint_description=endpoint_description,
             request_method=request_method,
             request_url=request_url,
             request_headers=json.dumps(redacted_req_headers),

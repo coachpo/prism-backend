@@ -535,3 +535,88 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert ep.custom_headers == {"X-Org": "my-org"}
         assert ep.auth_type == "openai"
         assert ep.priority == 0
+
+
+class TestDEF007_EndpointIdentityInLogs:
+    """DEF-007 (P1): log_request returns ID and stores endpoint_description; audit_service accepts endpoint metadata."""
+
+    @pytest.mark.asyncio
+    async def test_log_request_returns_id_and_stores_description(self):
+        mock_entry = MagicMock()
+        mock_entry.id = 42
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        mock_session.refresh = AsyncMock()
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+
+            async def fake_refresh(entry):
+                entry.id = 42
+
+            mock_session.refresh = AsyncMock(side_effect=fake_refresh)
+
+            result = await log_request(
+                model_id="test-model",
+                provider_type="openai",
+                endpoint_id=1,
+                endpoint_base_url="http://example.com",
+                status_code=200,
+                response_time_ms=100,
+                is_stream=False,
+                request_path="/v1/chat/completions",
+                endpoint_description="Primary endpoint",
+            )
+
+        assert result == 42
+        mock_session.add.assert_called_once()
+        added_entry = mock_session.add.call_args[0][0]
+        assert added_entry.endpoint_description == "Primary endpoint"
+
+    @pytest.mark.asyncio
+    async def test_log_request_returns_none_on_failure(self):
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(side_effect=Exception("DB error"))
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            result = await log_request(
+                model_id="test-model",
+                provider_type="openai",
+                endpoint_id=1,
+                endpoint_base_url="http://example.com",
+                status_code=200,
+                response_time_ms=100,
+                is_stream=False,
+                request_path="/v1/chat/completions",
+            )
+
+        assert result is None
+
+    def test_audit_log_schema_includes_endpoint_fields(self):
+        from app.schemas.schemas import AuditLogListItem, AuditLogDetail
+
+        list_fields = set(AuditLogListItem.model_fields.keys())
+        detail_fields = set(AuditLogDetail.model_fields.keys())
+
+        for schema_fields in [list_fields, detail_fields]:
+            assert "endpoint_id" in schema_fields
+            assert "endpoint_base_url" in schema_fields
+            assert "endpoint_description" in schema_fields
+
+    def test_request_log_schema_includes_endpoint_description(self):
+        from app.schemas.schemas import RequestLogResponse
+
+        fields = set(RequestLogResponse.model_fields.keys())
+        assert "endpoint_description" in fields
