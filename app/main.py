@@ -26,9 +26,9 @@ DEFAULT_PROVIDERS = [
         "description": "Anthropic API (Claude models)",
     },
     {
-        "name": "Google Gemini",
+        "name": "Gemini",
         "provider_type": "gemini",
-        "description": "Google Gemini API",
+        "description": "Gemini API (Google)",
     },
 ]
 
