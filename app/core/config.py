@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite+aiosqlite:///./gateway.db"
+    database_url: str = "sqlite+aiosqlite:///./data/gateway.db"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
