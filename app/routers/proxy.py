@@ -6,7 +6,11 @@ from typing import Annotated, AsyncGenerator
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_db
+from app.models.models import HeaderBlocklistRule
 
 from app.dependencies import get_db
 from app.services.loadbalancer import (
@@ -107,6 +111,18 @@ async def _handle_proxy(
     client_headers = _get_client_headers(request)
     method = request.method
 
+    blocklist_rules = (
+        (
+            await db.execute(
+                select(HeaderBlocklistRule).where(
+                    HeaderBlocklistRule.enabled == True  # noqa: E712
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     upstream_model_id = model_config.model_id
     if raw_body and upstream_model_id != model_id:
         raw_body = rewrite_model_in_body(raw_body, upstream_model_id)
@@ -136,7 +152,9 @@ async def _handle_proxy(
         upstream_url = build_upstream_url(ep, effective_request_path)
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
-        headers = build_upstream_headers(ep, provider_type, client_headers)
+        headers = build_upstream_headers(
+            ep, provider_type, client_headers, blocklist_rules
+        )
         ep_desc = ep.description
 
         start_time = time.monotonic()

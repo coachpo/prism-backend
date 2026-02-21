@@ -6,7 +6,7 @@ from typing import AsyncGenerator
 
 import httpx
 
-from app.models.models import Endpoint
+from app.models.models import Endpoint, HeaderBlocklistRule
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,7 @@ def build_upstream_headers(
     endpoint: Endpoint,
     provider_type: str,
     client_headers: dict[str, str] | None = None,
+    blocklist_rules: list[HeaderBlocklistRule] | None = None,
 ) -> dict[str, str]:
     """Build headers for the upstream request.
 
@@ -129,6 +130,7 @@ def build_upstream_headers(
     2. Provider auth headers
     3. Provider extra headers (e.g., anthropic-version)
     4. Endpoint custom_headers — applied LAST, overwrites same-name
+    5. Blocklist sanitization applied twice: on client headers and on final merged result
     """
     auth_key = endpoint.auth_type or provider_type
     config = PROVIDER_AUTH.get(auth_key, PROVIDER_AUTH["openai"])
@@ -152,6 +154,9 @@ def build_upstream_headers(
             ):
                 headers[key] = value
 
+    if blocklist_rules:
+        headers = sanitize_headers(headers, blocklist_rules)
+
     headers[config["auth_header"]] = f"{config['auth_prefix']}{endpoint.api_key}"
     headers.update(config["extra_headers"])
 
@@ -163,7 +168,46 @@ def build_upstream_headers(
         except (json.JSONDecodeError, TypeError):
             pass
 
+    if blocklist_rules:
+        auth_header_lower = config["auth_header"].lower()
+        extra_lower = {k.lower() for k in config["extra_headers"]}
+        protected = {auth_header_lower} | extra_lower
+
+        sanitized = {}
+        for key, value in headers.items():
+            if key.lower() in protected:
+                sanitized[key] = value
+            elif not header_is_blocked(key, blocklist_rules):
+                sanitized[key] = value
+            else:
+                logger.debug("Blocked header (post-merge): %s", key)
+        headers = sanitized
+
     return headers
+
+
+def header_is_blocked(name: str, rules: list[HeaderBlocklistRule]) -> bool:
+    name_lower = name.lower()
+    for rule in rules:
+        if not rule.enabled:
+            continue
+        if rule.match_type == "exact" and name_lower == rule.pattern:
+            return True
+        if rule.match_type == "prefix" and name_lower.startswith(rule.pattern):
+            return True
+    return False
+
+
+def sanitize_headers(
+    headers: dict[str, str], rules: list[HeaderBlocklistRule]
+) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for key, value in headers.items():
+        if header_is_blocked(key, rules):
+            logger.debug("Blocked header: %s", key)
+        else:
+            result[key] = value
+    return result
 
 
 def filter_response_headers(response_headers: httpx.Headers) -> dict[str, str]:

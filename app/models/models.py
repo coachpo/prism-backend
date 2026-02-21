@@ -1,6 +1,15 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Boolean, Integer, DateTime, Text
+from sqlalchemy import (
+    ForeignKey,
+    String,
+    Boolean,
+    Integer,
+    DateTime,
+    Text,
+    UniqueConstraint,
+    Index,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -107,6 +116,29 @@ class RequestLog(Base):
     endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+class HeaderBlocklistRule(Base):
+    __tablename__ = "header_blocklist_rules"
+    __table_args__ = (
+        UniqueConstraint("match_type", "pattern", name="uq_match_type_pattern"),
+        Index("idx_hbr_enabled", "enabled"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    match_type: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )  # "exact" or "prefix"
+    pattern: Mapped[str] = mapped_column(
+        String(200), nullable=False
+    )  # normalized lowercase
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
 

@@ -8,7 +8,7 @@ from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.models.models import Provider
+from app.models.models import Provider, HeaderBlocklistRule
 from app.routers import providers, models, endpoints, proxy, stats, config, audit
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,46 @@ DEFAULT_PROVIDERS = [
     },
 ]
 
+SYSTEM_BLOCKLIST_DEFAULTS: list[dict] = [
+    {"name": "Cloudflare headers", "match_type": "prefix", "pattern": "cf-"},
+    {"name": "Cloudflare extended headers", "match_type": "prefix", "pattern": "x-cf-"},
+    {
+        "name": "Cloudflare Access headers",
+        "match_type": "prefix",
+        "pattern": "cf-access-",
+    },
+    {"name": "B3 tracing headers", "match_type": "prefix", "pattern": "x-b3-"},
+    {
+        "name": "Datadog tracing headers",
+        "match_type": "prefix",
+        "pattern": "x-datadog-",
+    },
+    {"name": "CDN loop detection", "match_type": "exact", "pattern": "cdn-loop"},
+    {"name": "Forwarded header", "match_type": "exact", "pattern": "forwarded"},
+    {"name": "Via header", "match_type": "exact", "pattern": "via"},
+    {"name": "X-Forwarded-For", "match_type": "exact", "pattern": "x-forwarded-for"},
+    {"name": "X-Forwarded-Host", "match_type": "exact", "pattern": "x-forwarded-host"},
+    {"name": "X-Forwarded-Port", "match_type": "exact", "pattern": "x-forwarded-port"},
+    {
+        "name": "X-Forwarded-Proto",
+        "match_type": "exact",
+        "pattern": "x-forwarded-proto",
+    },
+    {"name": "X-Real-IP", "match_type": "exact", "pattern": "x-real-ip"},
+    {"name": "True-Client-IP", "match_type": "exact", "pattern": "true-client-ip"},
+    {"name": "W3C Traceparent", "match_type": "exact", "pattern": "traceparent"},
+    {"name": "W3C Tracestate", "match_type": "exact", "pattern": "tracestate"},
+    {"name": "W3C Baggage", "match_type": "exact", "pattern": "baggage"},
+    {"name": "X-Request-ID", "match_type": "exact", "pattern": "x-request-id"},
+    {"name": "X-Correlation-ID", "match_type": "exact", "pattern": "x-correlation-id"},
+    {"name": "AWS X-Ray trace", "match_type": "exact", "pattern": "x-amzn-trace-id"},
+    {
+        "name": "GCP Cloud Trace",
+        "match_type": "exact",
+        "pattern": "x-cloud-trace-context",
+    },
+]
+
 
 async def seed_providers():
     """Seed default providers if they don't exist."""
@@ -45,6 +85,34 @@ async def seed_providers():
                 session.add(Provider(**p))
             await session.commit()
             logger.info("Seeded default providers")
+
+
+async def seed_header_blocklist_rules():
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        for d in SYSTEM_BLOCKLIST_DEFAULTS:
+            existing = (
+                await session.execute(
+                    select(HeaderBlocklistRule).where(
+                        HeaderBlocklistRule.match_type == d["match_type"],
+                        HeaderBlocklistRule.pattern == d["pattern"],
+                        HeaderBlocklistRule.is_system == True,  # noqa: E712
+                    )
+                )
+            ).scalar_one_or_none()
+            if not existing:
+                session.add(
+                    HeaderBlocklistRule(
+                        name=d["name"],
+                        match_type=d["match_type"],
+                        pattern=d["pattern"],
+                        enabled=True,
+                        is_system=True,
+                    )
+                )
+        await session.commit()
+        logger.info("Seeded system header blocklist rules")
 
 
 async def _add_missing_columns(conn):
@@ -146,6 +214,7 @@ async def lifespan(app: FastAPI):
         await _add_missing_columns(conn)
 
     await seed_providers()
+    await seed_header_blocklist_rules()
 
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(

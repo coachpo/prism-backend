@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
-from app.models.models import Endpoint, ModelConfig
+from app.models.models import Endpoint, ModelConfig, HeaderBlocklistRule
 from app.schemas.schemas import (
     EndpointCreate,
     EndpointUpdate,
@@ -167,7 +167,21 @@ async def health_check_endpoint(
         }
 
     upstream_url = build_upstream_url(endpoint, request_path)
-    headers = build_upstream_headers(endpoint, provider_type)
+
+    blocklist_rules = (
+        (
+            await db.execute(
+                select(HeaderBlocklistRule).where(
+                    HeaderBlocklistRule.enabled == True  # noqa: E712
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    headers = build_upstream_headers(
+        endpoint, provider_type, blocklist_rules=blocklist_rules
+    )
 
     checked_at = datetime.utcnow()
     health_status = "unhealthy"

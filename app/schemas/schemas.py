@@ -1,6 +1,9 @@
+import re
 from datetime import datetime
 from pydantic import BaseModel, ConfigDict, field_validator
 import json
+
+_HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 
 
 # --- Provider Schemas ---
@@ -263,6 +266,7 @@ class ConfigExportResponse(BaseModel):
     exported_at: datetime
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
+    header_blocklist_rules: list["HeaderBlocklistRuleExport"] = []
 
 
 class ConfigImportRequest(BaseModel):
@@ -270,6 +274,7 @@ class ConfigImportRequest(BaseModel):
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
+    header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
 
 
 class ConfigImportResponse(BaseModel):
@@ -339,3 +344,91 @@ class AuditLogDeleteResponse(BaseModel):
 
 class BatchDeleteResponse(BaseModel):
     deleted_count: int
+
+
+# --- Header Blocklist Rule Schemas ---
+
+
+class HeaderBlocklistRuleCreate(BaseModel):
+    name: str
+    match_type: str
+    pattern: str
+    enabled: bool = True
+
+    @field_validator("match_type")
+    @classmethod
+    def validate_match_type(cls, v: str) -> str:
+        if v not in ("exact", "prefix"):
+            raise ValueError("match_type must be 'exact' or 'prefix'")
+        return v
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_pattern(cls, v: str, info) -> str:
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("pattern must not be empty")
+        if not _HEADER_TOKEN_RE.match(v):
+            raise ValueError(
+                "pattern must contain only lowercase alphanumeric characters and hyphens, "
+                "and must start with an alphanumeric character"
+            )
+        return v
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_prefix_ends_with_dash(cls, v: str, info) -> str:
+        match_type = info.data.get("match_type")
+        if match_type == "prefix" and not v.endswith("-"):
+            raise ValueError("prefix pattern must end with '-'")
+        return v
+
+
+class HeaderBlocklistRuleUpdate(BaseModel):
+    name: str | None = None
+    match_type: str | None = None
+    pattern: str | None = None
+    enabled: bool | None = None
+
+    @field_validator("match_type")
+    @classmethod
+    def validate_match_type(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("exact", "prefix"):
+            raise ValueError("match_type must be 'exact' or 'prefix'")
+        return v
+
+    @field_validator("pattern")
+    @classmethod
+    def validate_pattern(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if not v:
+            raise ValueError("pattern must not be empty")
+        if not _HEADER_TOKEN_RE.match(v):
+            raise ValueError(
+                "pattern must contain only lowercase alphanumeric characters and hyphens, "
+                "and must start with an alphanumeric character"
+            )
+        return v
+
+
+class HeaderBlocklistRuleResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    match_type: str
+    pattern: str
+    enabled: bool
+    is_system: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class HeaderBlocklistRuleExport(BaseModel):
+    name: str
+    match_type: str
+    pattern: str
+    enabled: bool
+    is_system: bool
