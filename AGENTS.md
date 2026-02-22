@@ -78,15 +78,19 @@ app/
 ```bash
 ./venv/bin/python -m pytest tests/ -v
 ```
-
 - Framework: pytest + pytest-asyncio (installed in venv, not in requirements.txt)
-- Tests: `tests/test_smoke_defect_regressions.py` — 6 test classes:
+- Tests: `tests/test_smoke_defect_regressions.py` — 11 test classes (1097 lines):
   - `TestDEF001_LogsSurviveFailoverRollback` — streaming session isolation
   - `TestDEF002_ModelIdRewriting` — proxy alias model field rewrite
   - `TestDEF003_AuthHeaderPerEndpoint` — per-endpoint auth_type override
   - `TestDEF004_FrontendDeleteErrorHandling` — API error propagation
   - `TestDEF005_GeminiPathModelRewrite` — Gemini model-in-path rewriting
+  - `TestDEF006_ConfigExportImportFieldCoverage` — config export/import field preservation
+  - `TestDEF007_EndpointIdentityInLogs` — log_request returns ID and stores endpoint_description
   - `TestBatchDeleteValidation` — stats + audit batch delete modes
+  - `TestFailoverRecoveryFieldValidation` — failover recovery field validation
+  - `TestEndpointOwnerRoute` — endpoint owner route
+  - `TestHeaderBlocklist` — header blocklist feature
 - Pattern: async tests with `@pytest.mark.asyncio`, mock DB sessions and HTTP clients
-- `conftest.py`: sets `DATABASE_URL` to in-memory SQLite, provides session-scoped event loop
+- `conftest.py`: sets `DATABASE_URL` to in-memory SQLite, provides session-scoped event loop, sys.path injection
 - No integration or e2e tests — manual smoke testing via `docs/SMOKE_TEST_PLAN.md`
