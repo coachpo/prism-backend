@@ -205,6 +205,34 @@ async def _add_missing_columns(conn):
         )
     )
 
+    # --- model_configs: add failover recovery columns + migrate round_robin ---
+    result = await conn.execute(text("PRAGMA table_info(model_configs)"))
+    mc_columns = {row[1] for row in result.fetchall()}
+    if "failover_recovery_enabled" not in mc_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE model_configs ADD COLUMN failover_recovery_enabled BOOLEAN NOT NULL DEFAULT 1"
+            )
+        )
+        logger.info(
+            "Migrated: added failover_recovery_enabled column to model_configs table"
+        )
+    if "failover_recovery_cooldown_seconds" not in mc_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE model_configs ADD COLUMN failover_recovery_cooldown_seconds INTEGER NOT NULL DEFAULT 60"
+            )
+        )
+        logger.info(
+            "Migrated: added failover_recovery_cooldown_seconds column to model_configs table"
+        )
+    # Migrate any leftover round_robin strategies to failover
+    await conn.execute(
+        text(
+            "UPDATE model_configs SET lb_strategy = 'failover' WHERE lb_strategy = 'round_robin'"
+        )
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

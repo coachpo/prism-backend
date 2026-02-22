@@ -487,7 +487,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=1,
+            version=2,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -506,6 +506,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     model_type="native",
                     lb_strategy="failover",
                     is_enabled=True,
+                    failover_recovery_enabled=True,
+                    failover_recovery_cooldown_seconds=60,
                     endpoints=[
                         ConfigEndpointExport(
                             base_url="https://api.openai.com/v1",
@@ -530,6 +532,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         m = reimported.models[0]
         assert m.model_id == "gpt-4o"
         assert m.lb_strategy == "failover"
+        assert m.failover_recovery_enabled is True
+        assert m.failover_recovery_cooldown_seconds == 60
         assert len(m.endpoints) == 1
         ep = m.endpoints[0]
         assert ep.custom_headers == {"X-Org": "my-org"}
@@ -537,6 +541,217 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert ep.priority == 0
 
 
+
+
+class TestFailoverRecoveryFieldValidation:
+    """Validate failover recovery field validation and config version 2."""
+
+    def test_recovery_cooldown_validates_lower_bound(self):
+        """Recovery cooldown must be >= 1."""
+        from app.schemas.schemas import ModelConfigBase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigBase(
+                provider_id=1,
+                model_id="gpt-4",
+                display_name="GPT-4",
+                model_type="native",
+                lb_strategy="failover",
+                failover_recovery_cooldown_seconds=0,
+            )
+        assert "must be between 1 and 3600" in str(exc_info.value)
+
+    def test_recovery_cooldown_validates_upper_bound(self):
+        """Recovery cooldown must be <= 3600."""
+        from app.schemas.schemas import ModelConfigBase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigBase(
+                provider_id=1,
+                model_id="gpt-4",
+                display_name="GPT-4",
+                model_type="native",
+                lb_strategy="failover",
+                failover_recovery_cooldown_seconds=3601,
+            )
+        assert "must be between 1 and 3600" in str(exc_info.value)
+
+    def test_recovery_cooldown_accepts_valid_values(self):
+        """Recovery cooldown accepts values in range [1, 3600]."""
+        from app.schemas.schemas import ModelConfigBase
+
+        # Lower bound
+        config = ModelConfigBase(
+            provider_id=1,
+            model_id="gpt-4",
+            display_name="GPT-4",
+            model_type="native",
+            lb_strategy="failover",
+            failover_recovery_cooldown_seconds=1,
+        )
+        assert config.failover_recovery_cooldown_seconds == 1
+
+        # Upper bound
+        config = ModelConfigBase(
+            provider_id=1,
+            model_id="gpt-4",
+            display_name="GPT-4",
+            model_type="native",
+            lb_strategy="failover",
+            failover_recovery_cooldown_seconds=3600,
+        )
+        assert config.failover_recovery_cooldown_seconds == 3600
+
+        # Mid-range
+        config = ModelConfigBase(
+            provider_id=1,
+            model_id="gpt-4",
+            display_name="GPT-4",
+            model_type="native",
+            lb_strategy="failover",
+            failover_recovery_cooldown_seconds=120,
+        )
+        assert config.failover_recovery_cooldown_seconds == 120
+
+    def test_lb_strategy_rejects_round_robin(self):
+        """lb_strategy field rejects round_robin value."""
+        from app.schemas.schemas import ModelConfigBase
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigBase(
+                provider_id=1,
+                model_id="gpt-4",
+                display_name="GPT-4",
+                model_type="native",
+                lb_strategy="round_robin",
+            )
+        assert "Input should be 'single' or 'failover'" in str(exc_info.value)
+
+    def test_config_export_includes_recovery_fields(self):
+        """ConfigModelExport includes recovery fields."""
+        from app.schemas.schemas import ConfigModelExport, ConfigEndpointExport
+
+        model = ConfigModelExport(
+            provider_type="openai",
+            model_id="gpt-4",
+            display_name="GPT-4",
+            model_type="native",
+            lb_strategy="failover",
+            is_enabled=True,
+            failover_recovery_enabled=False,
+            failover_recovery_cooldown_seconds=300,
+            endpoints=[
+                ConfigEndpointExport(
+                    base_url="https://api.openai.com/v1",
+                    api_key="sk-test",
+                )
+            ],
+        )
+        exported = model.model_dump(mode="json")
+        assert exported["failover_recovery_enabled"] is False
+        assert exported["failover_recovery_cooldown_seconds"] == 300
+
+    def test_config_import_rejects_version_1(self):
+        """ConfigImportRequest rejects version != 2."""
+        from app.schemas.schemas import ConfigImportRequest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            ConfigImportRequest(
+                version=1,
+                providers=[],
+                models=[],
+            )
+        assert "Input should be 2" in str(exc_info.value)
+
+    def test_config_import_rejects_round_robin_in_models(self):
+        """ConfigImportRequest rejects models with lb_strategy=round_robin."""
+        from app.schemas.schemas import (
+            ConfigImportRequest,
+            ConfigModelExport,
+            ConfigEndpointExport,
+        )
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            ConfigImportRequest(
+                version=2,
+                providers=[],
+                models=[
+                    ConfigModelExport(
+                        provider_type="openai",
+                        model_id="gpt-4",
+                        display_name="GPT-4",
+                        model_type="native",
+                        lb_strategy="round_robin",
+                        is_enabled=True,
+                        endpoints=[
+                            ConfigEndpointExport(
+                                base_url="https://api.openai.com/v1",
+                                api_key="sk-test",
+                            )
+                        ],
+                    )
+                ],
+            )
+        assert "Input should be 'single' or 'failover'" in str(exc_info.value)
+
+    def test_config_version_2_roundtrip(self):
+        """Config export/import roundtrip with version 2 and recovery fields."""
+        from app.schemas.schemas import (
+            ConfigExportResponse,
+            ConfigImportRequest,
+            ConfigProviderExport,
+            ConfigModelExport,
+            ConfigEndpointExport,
+        )
+        from datetime import datetime, timezone
+
+        config = ConfigExportResponse(
+            version=2,
+            exported_at=datetime.now(timezone.utc),
+            providers=[
+                ConfigProviderExport(
+                    name="OpenAI",
+                    provider_type="openai",
+                    description="Main provider",
+                    audit_enabled=True,
+                    audit_capture_bodies=False,
+                )
+            ],
+            models=[
+                ConfigModelExport(
+                    provider_type="openai",
+                    model_id="gpt-4o",
+                    display_name="GPT-4o",
+                    model_type="native",
+                    lb_strategy="failover",
+                    is_enabled=True,
+                    failover_recovery_enabled=False,
+                    failover_recovery_cooldown_seconds=180,
+                    endpoints=[
+                        ConfigEndpointExport(
+                            base_url="https://api.openai.com/v1",
+                            api_key="sk-test",
+                            is_active=True,
+                            priority=0,
+                        )
+                    ],
+                )
+            ],
+        )
+        exported = config.model_dump(mode="json")
+        reimported = ConfigImportRequest(**exported)
+
+        assert reimported.version == 2
+        assert len(reimported.models) == 1
+        m = reimported.models[0]
+        assert m.lb_strategy == "failover"
+        assert m.failover_recovery_enabled is False
+        assert m.failover_recovery_cooldown_seconds == 180
 class TestDEF007_EndpointIdentityInLogs:
     """DEF-007 (P1): log_request returns ID and stores endpoint_description; audit_service accepts endpoint metadata."""
 
@@ -863,7 +1078,7 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=1,
+            version=2,
             exported_at=datetime.now(timezone.utc),
             providers=[],
             models=[],

@@ -11,12 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.models.models import HeaderBlocklistRule
-
-from app.dependencies import get_db
 from app.services.loadbalancer import (
     get_model_config_with_endpoints,
-    select_endpoint,
-    get_failover_candidates,
+    build_attempt_plan,
+    mark_endpoint_failed,
+    mark_endpoint_recovered,
 )
 from app.services.proxy_service import (
     build_upstream_url,
@@ -139,14 +138,19 @@ async def _handle_proxy(
     if is_streaming and raw_body:
         raw_body = inject_stream_options(raw_body, provider_type)
 
-    endpoint = select_endpoint(model_config)
-    if not endpoint:
+    now_mono = time.monotonic()
+    endpoints_to_try = build_attempt_plan(model_config, now_mono)
+
+    if not endpoints_to_try:
         raise HTTPException(
-            status_code=503, detail=f"No active endpoints for model '{model_id}'"
+            status_code=503,
+            detail=f"No active endpoints available for model '{model_id}'. All endpoints may be in cooldown.",
         )
 
-    endpoints_to_try = [endpoint] + get_failover_candidates(model_config, endpoint.id)
-
+    recovery_active = (
+        model_config.lb_strategy == "failover"
+        and model_config.failover_recovery_enabled
+    )
     last_error = None
     for ep in endpoints_to_try:
         upstream_url = build_upstream_url(ep, effective_request_path)
@@ -211,6 +215,12 @@ async def _handle_proxy(
                                 duration_ms=elapsed_ms,
                                 capture_bodies=audit_capture_bodies,
                             )
+                        if recovery_active:
+                            mark_endpoint_failed(
+                                ep.id,
+                                model_config.failover_recovery_cooldown_seconds,
+                                time.monotonic(),
+                            )
                         continue
 
                     tokens = extract_token_usage(body)
@@ -247,12 +257,17 @@ async def _handle_proxy(
                             capture_bodies=audit_capture_bodies,
                         )
 
+                    if recovery_active:
+                        mark_endpoint_recovered(ep.id)
                     return Response(
                         content=body,
                         status_code=upstream_resp.status_code,
                         headers=resp_headers_filtered,
                     )
 
+                # Success case - mark endpoint as recovered
+                if recovery_active:
+                    mark_endpoint_recovered(ep.id)
                 _log_model_id = model_id
                 _log_provider_type = provider_type
                 _log_endpoint_id = ep.id
@@ -392,6 +407,12 @@ async def _handle_proxy(
                             duration_ms=elapsed_ms,
                             capture_bodies=audit_capture_bodies,
                         )
+                    if recovery_active:
+                        mark_endpoint_failed(
+                            ep.id,
+                            model_config.failover_recovery_cooldown_seconds,
+                            time.monotonic(),
+                        )
                     continue
 
                 tokens = extract_token_usage(response.content)
@@ -434,6 +455,9 @@ async def _handle_proxy(
                         capture_bodies=audit_capture_bodies,
                     )
 
+                # Success or non-failover error - mark as recovered if in failover mode
+                if recovery_active:
+                    mark_endpoint_recovered(ep.id)
                 return Response(
                     content=response.content,
                     status_code=response.status_code,
@@ -475,6 +499,12 @@ async def _handle_proxy(
                     duration_ms=elapsed_ms,
                     capture_bodies=audit_capture_bodies,
                 )
+            if recovery_active:
+                mark_endpoint_failed(
+                    ep.id,
+                    model_config.failover_recovery_cooldown_seconds,
+                    time.monotonic(),
+                )
             continue
         except httpx.TimeoutException as e:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -510,6 +540,12 @@ async def _handle_proxy(
                     is_stream=is_streaming,
                     duration_ms=elapsed_ms,
                     capture_bodies=audit_capture_bodies,
+                )
+            if recovery_active:
+                mark_endpoint_failed(
+                    ep.id,
+                    model_config.failover_recovery_cooldown_seconds,
+                    time.monotonic(),
                 )
             continue
         except httpx.HTTPStatusError as e:

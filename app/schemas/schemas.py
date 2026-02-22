@@ -1,5 +1,6 @@
 import re
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, ConfigDict, field_validator
 import json
 
@@ -114,7 +115,15 @@ class ModelConfigBase(BaseModel):
     display_name: str | None = None
     model_type: str = "native"
     redirect_to: str | None = None
-    lb_strategy: str = "single"
+    lb_strategy: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = True
+    failover_recovery_cooldown_seconds: int = 60
+    @field_validator("failover_recovery_cooldown_seconds")
+    @classmethod
+    def validate_cooldown(cls, v: int) -> int:
+        if v < 1 or v > 3600:
+            raise ValueError("failover_recovery_cooldown_seconds must be between 1 and 3600")
+        return v
     is_enabled: bool = True
 
 
@@ -128,7 +137,9 @@ class ModelConfigUpdate(BaseModel):
     display_name: str | None = None
     model_type: str | None = None
     redirect_to: str | None = None
-    lb_strategy: str | None = None
+    lb_strategy: Literal["single", "failover"] | None = None
+    failover_recovery_enabled: bool | None = None
+    failover_recovery_cooldown_seconds: int | None = None
     is_enabled: bool | None = None
 
 
@@ -142,7 +153,9 @@ class ModelConfigResponse(BaseModel):
     display_name: str | None
     model_type: str
     redirect_to: str | None
-    lb_strategy: str
+    lb_strategy: Literal["single", "failover"]
+    failover_recovery_enabled: bool
+    failover_recovery_cooldown_seconds: int
     is_enabled: bool
     endpoints: list[EndpointResponse]
     created_at: datetime
@@ -159,7 +172,9 @@ class ModelConfigListResponse(BaseModel):
     display_name: str | None
     model_type: str
     redirect_to: str | None
-    lb_strategy: str
+    lb_strategy: Literal["single", "failover"]
+    failover_recovery_enabled: bool
+    failover_recovery_cooldown_seconds: int
     is_enabled: bool
     endpoint_count: int
     active_endpoint_count: int
@@ -248,7 +263,9 @@ class ConfigModelExport(BaseModel):
     display_name: str | None = None
     model_type: str = "native"
     redirect_to: str | None = None
-    lb_strategy: str = "single"
+    lb_strategy: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = True
+    failover_recovery_cooldown_seconds: int = 60
     is_enabled: bool = True
     endpoints: list[ConfigEndpointExport] = []
 
@@ -262,7 +279,7 @@ class ConfigProviderExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: int = 1
+    version: Literal[2] = 2
     exported_at: datetime
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
@@ -270,7 +287,7 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    version: int
+    version: Literal[2]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]

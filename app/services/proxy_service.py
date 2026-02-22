@@ -30,7 +30,7 @@ PROVIDER_AUTH = {
     },
 }
 
-FAILOVER_STATUS_CODES = {429, 500, 502, 503, 529}
+FAILOVER_STATUS_CODES = {403, 429, 500, 502, 503, 529}
 
 # Hop-by-hop headers that MUST NOT be forwarded (RFC 2616 §13.5.1)
 HOP_BY_HOP_HEADERS = frozenset(

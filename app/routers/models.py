@@ -88,6 +88,8 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
                 model_type=config.model_type,
                 redirect_to=config.redirect_to,
                 lb_strategy=config.lb_strategy,
+                failover_recovery_enabled=config.failover_recovery_enabled,
+                failover_recovery_cooldown_seconds=config.failover_recovery_cooldown_seconds,
                 is_enabled=config.is_enabled,
                 endpoint_count=len(config.endpoints),
                 active_endpoint_count=sum(1 for ep in config.endpoints if ep.is_active),
@@ -145,7 +147,9 @@ async def create_model(
         display_name=body.display_name,
         model_type=model_type,
         redirect_to=body.redirect_to if model_type == "proxy" else None,
-        lb_strategy=body.lb_strategy if model_type == "native" else "single",
+        lb_strategy="single" if model_type == "proxy" else body.lb_strategy,
+        failover_recovery_enabled=True if model_type == "proxy" else body.failover_recovery_enabled,
+        failover_recovery_cooldown_seconds=60 if model_type == "proxy" else body.failover_recovery_cooldown_seconds,
         is_enabled=body.is_enabled,
     )
     db.add(config)

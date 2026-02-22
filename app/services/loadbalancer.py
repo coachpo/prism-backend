@@ -8,7 +8,8 @@ from app.models.models import ModelConfig, Endpoint
 
 logger = logging.getLogger(__name__)
 
-_rr_counters: dict[int, int] = {}
+# Recovery state: endpoint_id -> (blocked_until_mono, cooldown_seconds)
+_recovery_state: dict[int, tuple[float, float]] = {}
 
 
 async def get_model_config_with_endpoints(
@@ -57,32 +58,59 @@ def get_active_endpoints(model_config: ModelConfig) -> list[Endpoint]:
     )
 
 
-def select_endpoint(model_config: ModelConfig) -> Endpoint | None:
+def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Endpoint]:
+    """Build ordered list of endpoints to try.
+
+    For 'single' strategy: returns only the highest-priority active endpoint.
+    For 'failover' strategy: returns healthy endpoints first (priority order),
+    then probe-eligible endpoints (cooldown expired) at the end.
+    """
     active = get_active_endpoints(model_config)
     if not active:
-        return None
+        return []
 
-    strategy = model_config.lb_strategy
+    if model_config.lb_strategy == "single":
+        return [active[0]]
 
-    if strategy == "single":
-        return active[0]
+    # failover without recovery should always try all active endpoints.
+    if not model_config.failover_recovery_enabled:
+        return active
 
-    elif strategy == "round_robin":
-        config_id = model_config.id
-        if config_id not in _rr_counters:
-            _rr_counters[config_id] = 0
-        idx = _rr_counters[config_id] % len(active)
-        _rr_counters[config_id] += 1
-        return active[idx]
+    # failover strategy with recovery enabled
+    healthy: list[Endpoint] = []
+    probe_eligible: list[Endpoint] = []
 
-    elif strategy == "failover":
-        return active[0]
+    for ep in active:
+        state = _recovery_state.get(ep.id)
+        if state is None:
+            # Not in recovery — healthy
+            healthy.append(ep)
+        else:
+            blocked_until, _ = state
+            if now_mono >= blocked_until:
+                # Cooldown expired — eligible for half-open probe
+                probe_eligible.append(ep)
+            # else: still cooling down — skip entirely
 
-    return active[0]
+    return healthy + probe_eligible
 
 
-def get_failover_candidates(
-    model_config: ModelConfig, failed_endpoint_id: int
-) -> list[Endpoint]:
-    active = get_active_endpoints(model_config)
-    return [ep for ep in active if ep.id != failed_endpoint_id]
+def mark_endpoint_failed(
+    endpoint_id: int, cooldown_seconds: float, now_mono: float
+) -> None:
+    """Record an endpoint failure with cooldown period."""
+    blocked_until = now_mono + cooldown_seconds
+    _recovery_state[endpoint_id] = (blocked_until, cooldown_seconds)
+    logger.info(
+        "Endpoint %d marked failed, cooldown %.0fs, blocked until mono=%.1f",
+        endpoint_id,
+        cooldown_seconds,
+        blocked_until,
+    )
+
+
+def mark_endpoint_recovered(endpoint_id: int) -> None:
+    """Clear failure state for an endpoint after a successful probe."""
+    if endpoint_id in _recovery_state:
+        del _recovery_state[endpoint_id]
+        logger.info("Endpoint %d recovered, removed from recovery state", endpoint_id)

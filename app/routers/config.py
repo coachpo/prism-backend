@@ -58,6 +58,8 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
             model_type=mc.model_type,
             redirect_to=mc.redirect_to,
             lb_strategy=mc.lb_strategy,
+            failover_recovery_enabled=mc.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=mc.failover_recovery_cooldown_seconds,
             is_enabled=mc.is_enabled,
             endpoints=[
                 ConfigEndpointExport(
@@ -78,7 +80,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
     ]
 
     data = ConfigExportResponse(
-        version=1,
+        version=2,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         models=exported_models,
@@ -113,10 +115,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version != 1:
+    if data.version != 2:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 1",
+            detail=f"Unsupported config version: {data.version}. Expected: 2",
         )
 
     if not data.providers:
@@ -179,6 +181,11 @@ def _validate_import(data: ConfigImportRequest) -> None:
                     status_code=400,
                     detail=f"Model '{m.model_id}' cannot redirect cross-provider to '{m.redirect_to}'",
                 )
+        if m.lb_strategy == "round_robin":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model '{m.model_id}' uses unsupported lb_strategy 'round_robin'. Use 'single' or 'failover'.",
+            )
 
 
 @router.post("/import", response_model=ConfigImportResponse)
@@ -219,6 +226,8 @@ async def import_config(
             model_type=m.model_type,
             redirect_to=m.redirect_to,
             lb_strategy=m.lb_strategy,
+            failover_recovery_enabled=m.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=m.failover_recovery_cooldown_seconds,
             is_enabled=m.is_enabled,
         )
         db.add(mc)
@@ -248,6 +257,8 @@ async def import_config(
             model_type=m.model_type,
             redirect_to=m.redirect_to,
             lb_strategy=m.lb_strategy,
+            failover_recovery_enabled=m.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=m.failover_recovery_cooldown_seconds,
             is_enabled=m.is_enabled,
         )
         db.add(mc)

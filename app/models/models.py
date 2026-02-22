@@ -53,7 +53,9 @@ class ModelConfig(Base):
     )  # target model_id for redirect models
     lb_strategy: Mapped[str] = mapped_column(
         String(50), default="single", nullable=False
-    )  # single, round_robin, failover
+    )  # single, failover
+    failover_recovery_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    failover_recovery_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
