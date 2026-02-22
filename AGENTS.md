@@ -13,18 +13,18 @@ app/
 ├── core/
 │   ├── config.py        # pydantic-settings: timeouts, DB URL, LB config (reads .env)
 │   └── database.py      # Async engine + session factory + Base
-├── models/models.py     # 5 ORM models: Provider, ModelConfig, Endpoint, RequestLog, AuditLog (142 lines)
-├── schemas/schemas.py   # Pydantic request/response schemas (341 lines, mirrors models/)
-├── routers/             # 7 API route handlers (1605 lines total)
+├── models/models.py     # 6 ORM models: Provider, ModelConfig, Endpoint, RequestLog, AuditLog, HeaderBlocklistRule (174 lines)
+├── schemas/schemas.py   # Pydantic request/response schemas (434 lines, mirrors models/)
+├── routers/             # 7 API route handlers (1854 lines total)
 │   ├── providers.py     # CRUD /api/providers (list, get, update audit settings) — 47 lines
 │   ├── models.py        # CRUD /api/models (list with health stats, get, create, update, delete) — 256 lines
-│   ├── endpoints.py     # CRUD /api/models/{id}/endpoints + health check — 270 lines
+│   ├── endpoints.py     # CRUD /api/models/{id}/endpoints + health check — 284 lines
 │   ├── stats.py         # /api/stats/* — request logs, summary, endpoint success rates, batch delete — 111 lines
 │   ├── audit.py         # /api/audit/* — audit log list, detail, batch delete — 126 lines
-│   ├── config.py        # /api/config/* — full config export/import with validation — 235 lines
-│   └── proxy.py         # /v1/{path} + /v1beta/{path} catch-all — core proxy logic — 560 lines
-├── services/            # Business logic (887 lines total)
-│   ├── proxy_service.py # URL building, auth headers, streaming, body parsing — 268 lines
+│   ├── config.py        # /api/config/* — full config export/import with validation — 452 lines
+│   └── proxy.py         # /v1/{path} + /v1beta/{path} catch-all — core proxy logic — 578 lines
+├── services/            # Business logic (931 lines total)
+│   ├── proxy_service.py # URL building, auth headers, streaming, body parsing — 312 lines
 │   ├── loadbalancer.py  # Strategy selection, proxy→native resolution, failover — 88 lines
 │   ├── stats_service.py # Request logging, token extraction (SSE + JSON), aggregation queries — 420 lines
 │   └── audit_service.py # Audit log recording, header redaction, body capture/truncation — 111 lines
@@ -32,7 +32,7 @@ app/
 │   └── gateway.db       # SQLite database (auto-created on first run)
 └── tests/
     ├── conftest.py      # In-memory SQLite, session-scoped event loop
-    └── test_smoke_defect_regressions.py  # Defect-driven regression tests (679 lines)
+    └── test_smoke_defect_regressions.py  # Defect-driven regression tests (882 lines)
 ```
 
 ## WHERE TO LOOK
