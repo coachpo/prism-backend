@@ -8,8 +8,17 @@ from sqlalchemy import select, text
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.models.models import Provider, HeaderBlocklistRule
-from app.routers import providers, models, endpoints, proxy, stats, config, audit
+from app.models.models import Provider, HeaderBlocklistRule, UserSetting
+from app.routers import (
+    providers,
+    models,
+    endpoints,
+    proxy,
+    stats,
+    config,
+    audit,
+    settings as settings_router,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +124,23 @@ async def seed_header_blocklist_rules():
         logger.info("Seeded system header blocklist rules")
 
 
+async def seed_user_settings():
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        existing = (
+            await session.execute(
+                select(UserSetting).order_by(UserSetting.id.asc()).limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(
+                UserSetting(report_currency_code="USD", report_currency_symbol="$")
+            )
+            await session.commit()
+            logger.info("Seeded default user settings")
+
+
 async def _add_missing_columns(conn):
     """Add columns introduced after initial schema to existing SQLite tables."""
     result = await conn.execute(text("PRAGMA table_info(endpoints)"))
@@ -127,6 +153,59 @@ async def _add_missing_columns(conn):
     if "custom_headers" not in ep_columns:
         await conn.execute(text("ALTER TABLE endpoints ADD COLUMN custom_headers TEXT"))
         logger.info("Migrated: added custom_headers column to endpoints table")
+    if "pricing_enabled" not in ep_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE endpoints ADD COLUMN pricing_enabled BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        logger.info("Migrated: added pricing_enabled column to endpoints table")
+    if "pricing_unit" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN pricing_unit VARCHAR(10)")
+        )
+        logger.info("Migrated: added pricing_unit column to endpoints table")
+    if "pricing_currency_code" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN pricing_currency_code VARCHAR(3)")
+        )
+        logger.info("Migrated: added pricing_currency_code column to endpoints table")
+    if "input_price" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN input_price VARCHAR(20)")
+        )
+        logger.info("Migrated: added input_price column to endpoints table")
+    if "output_price" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN output_price VARCHAR(20)")
+        )
+        logger.info("Migrated: added output_price column to endpoints table")
+    if "cached_input_price" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN cached_input_price VARCHAR(20)")
+        )
+        logger.info("Migrated: added cached_input_price column to endpoints table")
+    if "reasoning_price" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN reasoning_price VARCHAR(20)")
+        )
+        logger.info("Migrated: added reasoning_price column to endpoints table")
+    if "missing_special_token_policy" not in ep_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE endpoints ADD COLUMN missing_special_token_policy VARCHAR(20) NOT NULL DEFAULT 'MAP_TO_OUTPUT'"
+            )
+        )
+        logger.info(
+            "Migrated: added missing_special_token_policy column to endpoints table"
+        )
+    if "pricing_config_version" not in ep_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE endpoints ADD COLUMN pricing_config_version INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+        logger.info("Migrated: added pricing_config_version column to endpoints table")
 
     result = await conn.execute(text("PRAGMA table_info(providers)"))
     prov_columns = {row[1] for row in result.fetchall()}
@@ -152,6 +231,174 @@ async def _add_missing_columns(conn):
             text("ALTER TABLE request_logs ADD COLUMN endpoint_description TEXT")
         )
         logger.info("Migrated: added endpoint_description column to request_logs table")
+    if "success_flag" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN success_flag BOOLEAN")
+        )
+        logger.info("Migrated: added success_flag column to request_logs table")
+    if "billable_flag" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN billable_flag BOOLEAN")
+        )
+        logger.info("Migrated: added billable_flag column to request_logs table")
+    if "priced_flag" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN priced_flag BOOLEAN")
+        )
+        logger.info("Migrated: added priced_flag column to request_logs table")
+    if "unpriced_reason" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN unpriced_reason VARCHAR(50)")
+        )
+        logger.info("Migrated: added unpriced_reason column to request_logs table")
+    if "cached_input_tokens" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN cached_input_tokens INTEGER")
+        )
+        logger.info("Migrated: added cached_input_tokens column to request_logs table")
+    if "reasoning_tokens" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER")
+        )
+        logger.info("Migrated: added reasoning_tokens column to request_logs table")
+    if "input_cost_micros" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN input_cost_micros BIGINT")
+        )
+        logger.info("Migrated: added input_cost_micros column to request_logs table")
+    if "output_cost_micros" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN output_cost_micros BIGINT")
+        )
+        logger.info("Migrated: added output_cost_micros column to request_logs table")
+    if "cached_input_cost_micros" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN cached_input_cost_micros BIGINT")
+        )
+        logger.info(
+            "Migrated: added cached_input_cost_micros column to request_logs table"
+        )
+    if "reasoning_cost_micros" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN reasoning_cost_micros BIGINT")
+        )
+        logger.info(
+            "Migrated: added reasoning_cost_micros column to request_logs table"
+        )
+    if "total_cost_original_micros" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN total_cost_original_micros BIGINT"
+            )
+        )
+        logger.info(
+            "Migrated: added total_cost_original_micros column to request_logs table"
+        )
+    if "total_cost_user_currency_micros" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN total_cost_user_currency_micros BIGINT"
+            )
+        )
+        logger.info(
+            "Migrated: added total_cost_user_currency_micros column to request_logs table"
+        )
+    if "currency_code_original" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN currency_code_original VARCHAR(3)"
+            )
+        )
+        logger.info(
+            "Migrated: added currency_code_original column to request_logs table"
+        )
+    if "report_currency_code" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN report_currency_code VARCHAR(3)")
+        )
+        logger.info("Migrated: added report_currency_code column to request_logs table")
+    if "report_currency_symbol" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN report_currency_symbol VARCHAR(5)"
+            )
+        )
+        logger.info(
+            "Migrated: added report_currency_symbol column to request_logs table"
+        )
+    if "fx_rate_used" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN fx_rate_used VARCHAR(20)")
+        )
+        logger.info("Migrated: added fx_rate_used column to request_logs table")
+    if "fx_rate_source" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN fx_rate_source VARCHAR(30)")
+        )
+        logger.info("Migrated: added fx_rate_source column to request_logs table")
+    if "pricing_snapshot_unit" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_unit VARCHAR(10)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_unit column to request_logs table"
+        )
+    if "pricing_snapshot_input" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_input VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_input column to request_logs table"
+        )
+    if "pricing_snapshot_output" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_output VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_output column to request_logs table"
+        )
+    if "pricing_snapshot_cached_input" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_cached_input VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_cached_input column to request_logs table"
+        )
+    if "pricing_snapshot_reasoning" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_reasoning VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_reasoning column to request_logs table"
+        )
+    if "pricing_snapshot_policy" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_policy VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_policy column to request_logs table"
+        )
+    if "pricing_config_version_used" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_config_version_used INTEGER"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_config_version_used column to request_logs table"
+        )
 
     result = await conn.execute(text("PRAGMA table_info(audit_logs)"))
     al_columns = {row[1] for row in result.fetchall()}
@@ -174,6 +421,21 @@ async def _add_missing_columns(conn):
     await conn.execute(
         text(
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_endpoint_id ON audit_logs(endpoint_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_billable_flag ON request_logs(billable_flag)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_priced_flag ON request_logs(priced_flag)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoint_fx_rate_settings_mapping ON endpoint_fx_rate_settings(model_id, endpoint_id)"
         )
     )
 
@@ -233,6 +495,31 @@ async def _add_missing_columns(conn):
         )
     )
 
+    await conn.execute(
+        text(
+            """
+            UPDATE request_logs
+            SET success_flag = CASE
+                WHEN status_code BETWEEN 200 AND 299 THEN 1
+                ELSE 0
+            END
+            WHERE success_flag IS NULL
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE request_logs
+            SET billable_flag = CASE
+                WHEN status_code BETWEEN 200 AND 299 THEN 1
+                ELSE 0
+            END
+            WHERE billable_flag IS NULL
+            """
+        )
+    )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -242,6 +529,7 @@ async def lifespan(app: FastAPI):
         await _add_missing_columns(conn)
 
     await seed_providers()
+    await seed_user_settings()
     await seed_header_blocklist_rules()
 
     app.state.http_client = httpx.AsyncClient(
@@ -288,6 +576,7 @@ app.include_router(endpoints.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
 app.include_router(config.router)
+app.include_router(settings_router.router)
 app.include_router(proxy.router)
 
 

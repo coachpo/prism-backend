@@ -30,6 +30,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["endpoints"])
 
+PRICING_FIELDS = {
+    "pricing_enabled",
+    "pricing_unit",
+    "pricing_currency_code",
+    "input_price",
+    "output_price",
+    "cached_input_price",
+    "reasoning_price",
+    "missing_special_token_policy",
+}
+
 
 @router.get(
     "/api/models/{model_config_id}/endpoints", response_model=list[EndpointResponse]
@@ -83,6 +94,15 @@ async def create_endpoint(
         description=body.description,
         auth_type=body.auth_type,
         custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
+        pricing_enabled=body.pricing_enabled,
+        pricing_unit=body.pricing_unit,
+        pricing_currency_code=body.pricing_currency_code,
+        input_price=body.input_price,
+        output_price=body.output_price,
+        cached_input_price=body.cached_input_price,
+        reasoning_price=body.reasoning_price,
+        missing_special_token_policy=body.missing_special_token_policy,
+        pricing_config_version=1 if body.pricing_enabled else 0,
     )
     db.add(endpoint)
     await db.flush()
@@ -109,8 +129,19 @@ async def update_endpoint(
     if "custom_headers" in update_data:
         ch = update_data["custom_headers"]
         update_data["custom_headers"] = json.dumps(ch) if ch else None
+
+    pricing_changed = False
+    for field_name in PRICING_FIELDS:
+        if field_name in update_data and update_data[field_name] != getattr(
+            endpoint, field_name
+        ):
+            pricing_changed = True
+            break
+
     for key, value in update_data.items():
         setattr(endpoint, key, value)
+    if pricing_changed:
+        endpoint.pricing_config_version = (endpoint.pricing_config_version or 0) + 1
     endpoint.updated_at = datetime.utcnow()
     await db.flush()
     await db.refresh(endpoint)
@@ -168,7 +199,7 @@ async def health_check_endpoint(
 
     upstream_url = build_upstream_url(endpoint, request_path)
 
-    blocklist_rules = (
+    blocklist_rows = (
         (
             await db.execute(
                 select(HeaderBlocklistRule).where(
@@ -179,6 +210,7 @@ async def health_check_endpoint(
         .scalars()
         .all()
     )
+    blocklist_rules: list[HeaderBlocklistRule] = list(blocklist_rows)
     headers = build_upstream_headers(
         endpoint, provider_type, blocklist_rules=blocklist_rules
     )

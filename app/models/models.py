@@ -5,6 +5,7 @@ from sqlalchemy import (
     String,
     Boolean,
     Integer,
+    BigInteger,
     DateTime,
     Text,
     UniqueConstraint,
@@ -54,8 +55,12 @@ class ModelConfig(Base):
     lb_strategy: Mapped[str] = mapped_column(
         String(50), default="single", nullable=False
     )  # single, failover
-    failover_recovery_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    failover_recovery_cooldown_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    failover_recovery_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
+    failover_recovery_cooldown_seconds: Mapped[int] = mapped_column(
+        Integer, default=60, nullable=False
+    )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
@@ -91,6 +96,21 @@ class Endpoint(Base):
     )  # unknown, healthy, unhealthy
     health_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_health_check: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    pricing_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    pricing_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    pricing_currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    output_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cached_input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reasoning_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    missing_special_token_policy: Mapped[str] = mapped_column(
+        String(20), default="MAP_TO_OUTPUT", nullable=False
+    )
+    pricing_config_version: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -113,11 +133,88 @@ class RequestLog(Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    success_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    billable_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    priced_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    unpriced_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cached_input_cost_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    reasoning_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_cost_original_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    total_cost_user_currency_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    currency_code_original: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    report_currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    report_currency_symbol: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    fx_rate_used: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    fx_rate_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    pricing_snapshot_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    pricing_snapshot_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_output: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_cached_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_reasoning: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_policy: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_config_version_used: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     request_path: Mapped[str] = mapped_column(String(500), nullable=False)
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
+    )
+
+
+class UserSetting(Base):
+    __tablename__ = "user_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    report_currency_code: Mapped[str] = mapped_column(
+        String(3), default="USD", nullable=False
+    )
+    report_currency_symbol: Mapped[str] = mapped_column(
+        String(5), default="$", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class EndpointFxRateSetting(Base):
+    __tablename__ = "endpoint_fx_rate_settings"
+    __table_args__ = (
+        UniqueConstraint("model_id", "endpoint_id", name="uq_fx_model_endpoint"),
+        Index("idx_fx_endpoint_id", "endpoint_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False)
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
+    )
+    fx_rate: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
 

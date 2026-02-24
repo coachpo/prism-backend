@@ -1,10 +1,24 @@
 import re
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import json
 
 _HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
+_CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
+
+
+def _validate_decimal_non_negative(value: str | None, field_name: str) -> str | None:
+    if value is None or value == "":
+        return value
+    try:
+        parsed = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a valid decimal") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return f"{parsed}"
 
 
 # --- Provider Schemas ---
@@ -46,6 +60,54 @@ class EndpointBase(BaseModel):
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
+    pricing_enabled: bool = False
+    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
+    pricing_currency_code: str | None = None
+    input_price: str | None = None
+    output_price: str | None = None
+    cached_input_price: str | None = None
+    reasoning_price: str | None = None
+    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
+        "MAP_TO_OUTPUT"
+    )
+
+    @field_validator(
+        "input_price",
+        "output_price",
+        "cached_input_price",
+        "reasoning_price",
+        mode="before",
+    )
+    @classmethod
+    def validate_prices(cls, v: str | int | float | Decimal | None, info) -> str | None:
+        if v is None:
+            return None
+        return _validate_decimal_non_negative(str(v), info.field_name)
+
+    @field_validator("pricing_currency_code")
+    @classmethod
+    def validate_currency_code(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        code = v.strip().upper()
+        if not _CURRENCY_CODE_RE.match(code):
+            raise ValueError(
+                "pricing_currency_code must be a 3-letter uppercase ISO code"
+            )
+        return code
+
+    @model_validator(mode="after")
+    def validate_pricing_config(self):
+        if self.pricing_enabled:
+            if not self.pricing_currency_code:
+                raise ValueError(
+                    "pricing_currency_code is required when pricing_enabled is true"
+                )
+            if not self.pricing_unit:
+                raise ValueError(
+                    "pricing_unit is required when pricing_enabled is true"
+                )
+        return self
 
 
 class EndpointCreate(EndpointBase):
@@ -60,6 +122,51 @@ class EndpointUpdate(BaseModel):
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
+    pricing_enabled: bool | None = None
+    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
+    pricing_currency_code: str | None = None
+    input_price: str | None = None
+    output_price: str | None = None
+    cached_input_price: str | None = None
+    reasoning_price: str | None = None
+    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
+
+    @field_validator(
+        "input_price",
+        "output_price",
+        "cached_input_price",
+        "reasoning_price",
+        mode="before",
+    )
+    @classmethod
+    def validate_update_prices(
+        cls, v: str | int | float | Decimal | None, info
+    ) -> str | None:
+        if v is None:
+            return None
+        return _validate_decimal_non_negative(str(v), info.field_name)
+
+    @field_validator("pricing_currency_code")
+    @classmethod
+    def validate_update_currency_code(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        code = v.strip().upper()
+        if not _CURRENCY_CODE_RE.match(code):
+            raise ValueError(
+                "pricing_currency_code must be a 3-letter uppercase ISO code"
+            )
+        return code
+
+    @model_validator(mode="after")
+    def validate_update_pricing_config(self):
+        if self.pricing_enabled is True and not self.pricing_currency_code:
+            raise ValueError(
+                "pricing_currency_code is required when pricing_enabled is true"
+            )
+        if self.pricing_enabled is True and not self.pricing_unit:
+            raise ValueError("pricing_unit is required when pricing_enabled is true")
+        return self
 
 
 class EndpointResponse(BaseModel):
@@ -74,6 +181,15 @@ class EndpointResponse(BaseModel):
     description: str | None
     auth_type: str | None
     custom_headers: dict[str, str] | None
+    pricing_enabled: bool
+    pricing_unit: Literal["PER_1K", "PER_1M"] | None
+    pricing_currency_code: str | None
+    input_price: str | None
+    output_price: str | None
+    cached_input_price: str | None
+    reasoning_price: str | None
+    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
+    pricing_config_version: int
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
@@ -118,12 +234,16 @@ class ModelConfigBase(BaseModel):
     lb_strategy: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
+
     @field_validator("failover_recovery_cooldown_seconds")
     @classmethod
     def validate_cooldown(cls, v: int) -> int:
         if v < 1 or v > 3600:
-            raise ValueError("failover_recovery_cooldown_seconds must be between 1 and 3600")
+            raise ValueError(
+                "failover_recovery_cooldown_seconds must be between 1 and 3600"
+            )
         return v
+
     is_enabled: bool = True
 
 
@@ -201,6 +321,30 @@ class RequestLogResponse(BaseModel):
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
+    success_flag: bool | None = None
+    billable_flag: bool | None = None
+    priced_flag: bool | None = None
+    unpriced_reason: str | None = None
+    cached_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    input_cost_micros: int | None = None
+    output_cost_micros: int | None = None
+    cached_input_cost_micros: int | None = None
+    reasoning_cost_micros: int | None = None
+    total_cost_original_micros: int | None = None
+    total_cost_user_currency_micros: int | None = None
+    currency_code_original: str | None = None
+    report_currency_code: str | None = None
+    report_currency_symbol: str | None = None
+    fx_rate_used: str | None = None
+    fx_rate_source: str | None = None
+    pricing_snapshot_unit: str | None = None
+    pricing_snapshot_input: str | None = None
+    pricing_snapshot_output: str | None = None
+    pricing_snapshot_cached_input: str | None = None
+    pricing_snapshot_reasoning: str | None = None
+    pricing_snapshot_policy: str | None = None
+    pricing_config_version_used: int | None = None
     request_path: str
     error_detail: str | None
     endpoint_description: str | None = None
@@ -244,10 +388,116 @@ class EndpointSuccessRateResponse(BaseModel):
     success_rate: float | None
 
 
+class EndpointFxMapping(BaseModel):
+    model_id: str
+    endpoint_id: int
+    fx_rate: str
+
+    @field_validator("fx_rate", mode="before")
+    @classmethod
+    def validate_fx_rate(cls, v: str | Decimal | float | int) -> str:
+        try:
+            parsed = Decimal(str(v))
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError("fx_rate must be a valid decimal") from exc
+        if parsed <= 0:
+            raise ValueError("fx_rate must be > 0")
+        return f"{parsed}"
+
+
+class CostingSettingsResponse(BaseModel):
+    report_currency_code: str
+    report_currency_symbol: str
+    endpoint_fx_mappings: list[EndpointFxMapping]
+
+
+class CostingSettingsUpdate(BaseModel):
+    report_currency_code: str
+    report_currency_symbol: str
+    endpoint_fx_mappings: list[EndpointFxMapping] = []
+
+    @field_validator("report_currency_code")
+    @classmethod
+    def validate_report_currency_code(cls, v: str) -> str:
+        code = v.strip().upper()
+        if not _CURRENCY_CODE_RE.match(code):
+            raise ValueError(
+                "report_currency_code must be a 3-letter uppercase ISO code"
+            )
+        return code
+
+    @field_validator("report_currency_symbol")
+    @classmethod
+    def validate_report_currency_symbol(cls, v: str) -> str:
+        symbol = v.strip()
+        if not symbol:
+            raise ValueError("report_currency_symbol must not be empty")
+        if len(symbol) > 5:
+            raise ValueError("report_currency_symbol must be at most 5 characters")
+        return symbol
+
+    @model_validator(mode="after")
+    def validate_unique_mappings(self):
+        seen: set[tuple[str, int]] = set()
+        for mapping in self.endpoint_fx_mappings:
+            key = (mapping.model_id, mapping.endpoint_id)
+            if key in seen:
+                raise ValueError(
+                    f"Duplicate endpoint_fx_mapping for model_id={mapping.model_id}, endpoint_id={mapping.endpoint_id}"
+                )
+            seen.add(key)
+        return self
+
+
+class SpendingSummaryResponse(BaseModel):
+    total_cost_micros: int
+    successful_request_count: int
+    priced_request_count: int
+    unpriced_request_count: int
+    total_input_tokens: int
+    total_output_tokens: int
+    total_cached_input_tokens: int
+    total_reasoning_tokens: int
+    total_tokens: int
+    avg_cost_per_successful_request_micros: int
+
+
+class SpendingGroupRow(BaseModel):
+    key: str
+    total_cost_micros: int
+    total_requests: int
+    priced_requests: int
+    unpriced_requests: int
+    total_tokens: int
+
+
+class SpendingTopModel(BaseModel):
+    model_id: str
+    total_cost_micros: int
+
+
+class SpendingTopEndpoint(BaseModel):
+    endpoint_id: int | None
+    endpoint_label: str
+    total_cost_micros: int
+
+
+class SpendingReportResponse(BaseModel):
+    summary: SpendingSummaryResponse
+    groups: list[SpendingGroupRow]
+    groups_total: int
+    top_spending_models: list[SpendingTopModel]
+    top_spending_endpoints: list[SpendingTopEndpoint]
+    unpriced_breakdown: dict[str, int]
+    report_currency_code: str
+    report_currency_symbol: str
+
+
 # --- Config Export/Import Schemas ---
 
 
 class ConfigEndpointExport(BaseModel):
+    endpoint_id: int | None = None
     base_url: str
     api_key: str
     is_active: bool = True
@@ -255,6 +505,17 @@ class ConfigEndpointExport(BaseModel):
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
+    pricing_enabled: bool = False
+    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
+    pricing_currency_code: str | None = None
+    input_price: str | None = None
+    output_price: str | None = None
+    cached_input_price: str | None = None
+    reasoning_price: str | None = None
+    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
+        "MAP_TO_OUTPUT"
+    )
+    pricing_config_version: int = 0
 
 
 class ConfigModelExport(BaseModel):
@@ -278,19 +539,33 @@ class ConfigProviderExport(BaseModel):
     audit_capture_bodies: bool = True
 
 
+class ConfigEndpointFxRateExport(BaseModel):
+    model_id: str
+    endpoint_id: int
+    fx_rate: str
+
+
+class ConfigUserSettingsExport(BaseModel):
+    report_currency_code: str = "USD"
+    report_currency_symbol: str = "$"
+    endpoint_fx_mappings: list[ConfigEndpointFxRateExport] = []
+
+
 class ConfigExportResponse(BaseModel):
-    version: Literal[2] = 2
+    version: Literal[2, 3] = 3
     exported_at: datetime
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
+    user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = []
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[2]
+    version: Literal[2, 3]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
+    user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
 
 

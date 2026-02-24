@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal, cast
 import json
 import logging
 
@@ -10,12 +10,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
-from app.models.models import Provider, ModelConfig, Endpoint, HeaderBlocklistRule
+from app.models.models import (
+    Provider,
+    ModelConfig,
+    Endpoint,
+    HeaderBlocklistRule,
+    UserSetting,
+    EndpointFxRateSetting,
+)
 from app.schemas.schemas import (
     ConfigExportResponse,
     ConfigProviderExport,
     ConfigModelExport,
     ConfigEndpointExport,
+    ConfigUserSettingsExport,
+    ConfigEndpointFxRateExport,
     ConfigImportRequest,
     ConfigImportResponse,
     HeaderBlocklistRuleCreate,
@@ -57,12 +66,13 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
             display_name=mc.display_name,
             model_type=mc.model_type,
             redirect_to=mc.redirect_to,
-            lb_strategy=mc.lb_strategy,
+            lb_strategy="failover" if mc.lb_strategy == "failover" else "single",
             failover_recovery_enabled=mc.failover_recovery_enabled,
             failover_recovery_cooldown_seconds=mc.failover_recovery_cooldown_seconds,
             is_enabled=mc.is_enabled,
             endpoints=[
                 ConfigEndpointExport(
+                    endpoint_id=ep.id,
                     base_url=ep.base_url,
                     api_key=ep.api_key,
                     is_active=ep.is_active,
@@ -72,6 +82,25 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     custom_headers=json.loads(ep.custom_headers)
                     if ep.custom_headers is not None
                     else None,
+                    pricing_enabled=ep.pricing_enabled,
+                    pricing_unit=cast(
+                        Literal["PER_1K", "PER_1M"] | None,
+                        ep.pricing_unit
+                        if ep.pricing_unit in ("PER_1K", "PER_1M")
+                        else None,
+                    ),
+                    pricing_currency_code=ep.pricing_currency_code,
+                    input_price=ep.input_price,
+                    output_price=ep.output_price,
+                    cached_input_price=ep.cached_input_price,
+                    reasoning_price=ep.reasoning_price,
+                    missing_special_token_policy=cast(
+                        Literal["MAP_TO_OUTPUT", "ZERO_COST"],
+                        "ZERO_COST"
+                        if ep.missing_special_token_policy == "ZERO_COST"
+                        else "MAP_TO_OUTPUT",
+                    ),
+                    pricing_config_version=ep.pricing_config_version,
                 )
                 for ep in mc.endpoints
             ],
@@ -79,11 +108,47 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
         for mc in model_configs
     ]
 
+    user_settings = (
+        await db.execute(select(UserSetting).order_by(UserSetting.id.asc()).limit(1))
+    ).scalar_one_or_none()
+    fx_mappings = (
+        (
+            await db.execute(
+                select(EndpointFxRateSetting).order_by(
+                    EndpointFxRateSetting.model_id.asc(),
+                    EndpointFxRateSetting.endpoint_id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     data = ConfigExportResponse(
-        version=2,
+        version=3,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         models=exported_models,
+        user_settings=ConfigUserSettingsExport(
+            report_currency_code=(
+                user_settings.report_currency_code
+                if user_settings is not None
+                else "USD"
+            ),
+            report_currency_symbol=(
+                user_settings.report_currency_symbol
+                if user_settings is not None
+                else "$"
+            ),
+            endpoint_fx_mappings=[
+                ConfigEndpointFxRateExport(
+                    model_id=row.model_id,
+                    endpoint_id=row.endpoint_id,
+                    fx_rate=row.fx_rate,
+                )
+                for row in fx_mappings
+            ],
+        ),
         header_blocklist_rules=[
             HeaderBlocklistRuleExport(
                 name=r.name,
@@ -115,10 +180,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version != 2:
+    if data.version not in (2, 3):
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 2",
+            detail=f"Unsupported config version: {data.version}. Expected: 2 or 3",
         )
 
     if not data.providers:
@@ -169,6 +234,25 @@ def _validate_import(data: ConfigImportRequest) -> None:
                     detail=f"Proxy model '{m.model_id}' must not have endpoints",
                 )
 
+        for endpoint in m.endpoints:
+            if endpoint.pricing_enabled:
+                if endpoint.pricing_unit is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Endpoint for model '{m.model_id}' has pricing_enabled=true "
+                            "but pricing_unit is missing"
+                        ),
+                    )
+                if endpoint.pricing_currency_code is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Endpoint for model '{m.model_id}' has pricing_enabled=true "
+                            "but pricing_currency_code is missing"
+                        ),
+                    )
+
     for m in data.models:
         if m.model_type == "proxy":
             if not m.redirect_to or m.redirect_to not in native_models:
@@ -187,6 +271,20 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 detail=f"Model '{m.model_id}' uses unsupported lb_strategy 'round_robin'. Use 'single' or 'failover'.",
             )
 
+    if data.version == 3 and data.user_settings is not None:
+        seen_fx: set[tuple[str, int]] = set()
+        for mapping in data.user_settings.endpoint_fx_mappings:
+            key = (mapping.model_id, mapping.endpoint_id)
+            if key in seen_fx:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Duplicate FX mapping in import for "
+                        f"model_id='{mapping.model_id}', endpoint_id={mapping.endpoint_id}"
+                    ),
+                )
+            seen_fx.add(key)
+
 
 @router.post("/import", response_model=ConfigImportResponse)
 async def import_config(
@@ -195,6 +293,7 @@ async def import_config(
 ):
     _validate_import(data)
 
+    await db.execute(delete(EndpointFxRateSetting))
     await db.execute(delete(Endpoint))
     await db.execute(delete(ModelConfig))
     await db.execute(delete(Provider))
@@ -235,6 +334,7 @@ async def import_config(
 
         for ep_data in m.endpoints:
             ep = Endpoint(
+                id=ep_data.endpoint_id,
                 model_config_id=mc.id,
                 base_url=ep_data.base_url,
                 api_key=ep_data.api_key,
@@ -245,6 +345,15 @@ async def import_config(
                 custom_headers=json.dumps(ep_data.custom_headers)
                 if ep_data.custom_headers is not None
                 else None,
+                pricing_enabled=ep_data.pricing_enabled,
+                pricing_unit=ep_data.pricing_unit,
+                pricing_currency_code=ep_data.pricing_currency_code,
+                input_price=ep_data.input_price,
+                output_price=ep_data.output_price,
+                cached_input_price=ep_data.cached_input_price,
+                reasoning_price=ep_data.reasoning_price,
+                missing_special_token_policy=ep_data.missing_special_token_policy,
+                pricing_config_version=ep_data.pricing_config_version,
             )
             db.add(ep)
             endpoints_count += 1
@@ -264,6 +373,60 @@ async def import_config(
         db.add(mc)
 
     await db.flush()
+
+    user_settings = (
+        await db.execute(select(UserSetting).order_by(UserSetting.id.asc()).limit(1))
+    ).scalar_one_or_none()
+    if user_settings is None:
+        user_settings = UserSetting(
+            report_currency_code="USD", report_currency_symbol="$"
+        )
+        db.add(user_settings)
+
+    if data.version == 3 and data.user_settings is not None:
+        user_settings.report_currency_code = data.user_settings.report_currency_code
+        user_settings.report_currency_symbol = data.user_settings.report_currency_symbol
+
+        endpoint_rows = (
+            (
+                await db.execute(
+                    select(Endpoint)
+                    .options(selectinload(Endpoint.model_config_rel))
+                    .where(
+                        Endpoint.id.in_(
+                            [
+                                m.endpoint_id
+                                for m in data.user_settings.endpoint_fx_mappings
+                            ]
+                        )
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        endpoint_model_map = {
+            ep.id: ep.model_config_rel.model_id
+            for ep in endpoint_rows
+            if ep.model_config_rel is not None
+        }
+
+        for mapping in data.user_settings.endpoint_fx_mappings:
+            endpoint_model_id = endpoint_model_map.get(mapping.endpoint_id)
+            if endpoint_model_id is None:
+                continue
+            if endpoint_model_id != mapping.model_id:
+                continue
+            db.add(
+                EndpointFxRateSetting(
+                    model_id=mapping.model_id,
+                    endpoint_id=mapping.endpoint_id,
+                    fx_rate=mapping.fx_rate,
+                )
+            )
+    else:
+        user_settings.report_currency_code = "USD"
+        user_settings.report_currency_symbol = "$"
 
     if data.header_blocklist_rules is not None:
         from app.main import SYSTEM_BLOCKLIST_DEFAULTS

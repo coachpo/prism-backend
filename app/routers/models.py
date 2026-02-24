@@ -1,13 +1,13 @@
-from typing import Annotated
+from typing import Annotated, Literal, cast
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
-from app.models.models import ModelConfig, Provider
+from app.models.models import EndpointFxRateSetting, ModelConfig, Provider
 from app.schemas.schemas import (
     ModelConfigCreate,
     ModelConfigUpdate,
@@ -87,7 +87,10 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
                 display_name=config.display_name,
                 model_type=config.model_type,
                 redirect_to=config.redirect_to,
-                lb_strategy=config.lb_strategy,
+                lb_strategy=cast(
+                    Literal["single", "failover"],
+                    "failover" if config.lb_strategy == "failover" else "single",
+                ),
                 failover_recovery_enabled=config.failover_recovery_enabled,
                 failover_recovery_cooldown_seconds=config.failover_recovery_cooldown_seconds,
                 is_enabled=config.is_enabled,
@@ -148,8 +151,12 @@ async def create_model(
         model_type=model_type,
         redirect_to=body.redirect_to if model_type == "proxy" else None,
         lb_strategy="single" if model_type == "proxy" else body.lb_strategy,
-        failover_recovery_enabled=True if model_type == "proxy" else body.failover_recovery_enabled,
-        failover_recovery_cooldown_seconds=60 if model_type == "proxy" else body.failover_recovery_cooldown_seconds,
+        failover_recovery_enabled=True
+        if model_type == "proxy"
+        else body.failover_recovery_enabled,
+        failover_recovery_cooldown_seconds=60
+        if model_type == "proxy"
+        else body.failover_recovery_cooldown_seconds,
         is_enabled=body.is_enabled,
     )
     db.add(config)
@@ -182,6 +189,7 @@ async def update_model(
     if not config:
         raise HTTPException(status_code=404, detail="Model configuration not found")
 
+    original_model_id = config.model_id
     update_data = body.model_dump(exclude_unset=True)
 
     if "provider_id" in update_data:
@@ -221,6 +229,14 @@ async def update_model(
 
     for key, value in update_data.items():
         setattr(config, key, value)
+
+    if "model_id" in update_data and update_data["model_id"] != original_model_id:
+        await db.execute(
+            update(EndpointFxRateSetting)
+            .where(EndpointFxRateSetting.model_id == original_model_id)
+            .values(model_id=update_data["model_id"])
+        )
+
     config.updated_at = datetime.utcnow()
     await db.flush()
 

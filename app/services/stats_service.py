@@ -1,11 +1,11 @@
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, func, case, and_, literal
+from sqlalchemy import select, func, case, and_, literal, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import RequestLog
+from app.models.models import RequestLog, UserSetting
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,30 @@ async def log_request(
     input_tokens: int | None = None,
     output_tokens: int | None = None,
     total_tokens: int | None = None,
+    success_flag: bool | None = None,
+    billable_flag: bool | None = None,
+    priced_flag: bool | None = None,
+    unpriced_reason: str | None = None,
+    cached_input_tokens: int | None = None,
+    reasoning_tokens: int | None = None,
+    input_cost_micros: int | None = None,
+    output_cost_micros: int | None = None,
+    cached_input_cost_micros: int | None = None,
+    reasoning_cost_micros: int | None = None,
+    total_cost_original_micros: int | None = None,
+    total_cost_user_currency_micros: int | None = None,
+    currency_code_original: str | None = None,
+    report_currency_code: str | None = None,
+    report_currency_symbol: str | None = None,
+    fx_rate_used: str | None = None,
+    fx_rate_source: str | None = None,
+    pricing_snapshot_unit: str | None = None,
+    pricing_snapshot_input: str | None = None,
+    pricing_snapshot_output: str | None = None,
+    pricing_snapshot_cached_input: str | None = None,
+    pricing_snapshot_reasoning: str | None = None,
+    pricing_snapshot_policy: str | None = None,
+    pricing_config_version_used: int | None = None,
     error_detail: str | None = None,
     endpoint_description: str | None = None,
 ) -> int | None:
@@ -41,6 +65,30 @@ async def log_request(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
+            success_flag=success_flag,
+            billable_flag=billable_flag,
+            priced_flag=priced_flag,
+            unpriced_reason=unpriced_reason,
+            cached_input_tokens=cached_input_tokens,
+            reasoning_tokens=reasoning_tokens,
+            input_cost_micros=input_cost_micros,
+            output_cost_micros=output_cost_micros,
+            cached_input_cost_micros=cached_input_cost_micros,
+            reasoning_cost_micros=reasoning_cost_micros,
+            total_cost_original_micros=total_cost_original_micros,
+            total_cost_user_currency_micros=total_cost_user_currency_micros,
+            currency_code_original=currency_code_original,
+            report_currency_code=report_currency_code,
+            report_currency_symbol=report_currency_symbol,
+            fx_rate_used=fx_rate_used,
+            fx_rate_source=fx_rate_source,
+            pricing_snapshot_unit=pricing_snapshot_unit,
+            pricing_snapshot_input=pricing_snapshot_input,
+            pricing_snapshot_output=pricing_snapshot_output,
+            pricing_snapshot_cached_input=pricing_snapshot_cached_input,
+            pricing_snapshot_reasoning=pricing_snapshot_reasoning,
+            pricing_snapshot_policy=pricing_snapshot_policy,
+            pricing_config_version_used=pricing_config_version_used,
             error_detail=error_detail,
             endpoint_description=endpoint_description,
         )
@@ -70,49 +118,132 @@ def _parse_sse_events(raw: bytes) -> list[dict]:
     return events
 
 
+def _empty_usage() -> dict[str, int | None]:
+    return {
+        "input_tokens": None,
+        "output_tokens": None,
+        "total_tokens": None,
+        "cached_input_tokens": None,
+        "reasoning_tokens": None,
+    }
+
+
+def _as_int(value) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick_int(*values) -> int | None:
+    for value in values:
+        parsed = _as_int(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _extract_special_usage(usage: dict) -> tuple[int | None, int | None]:
+    prompt_details = usage.get("prompt_tokens_details") or usage.get(
+        "input_token_details"
+    )
+    completion_details = usage.get("completion_tokens_details") or usage.get(
+        "output_token_details"
+    )
+
+    cached_input_tokens = None
+    reasoning_tokens = None
+
+    if isinstance(prompt_details, dict):
+        cached_input_tokens = _pick_int(
+            prompt_details.get("cached_tokens"),
+            prompt_details.get("cache_read_input_tokens"),
+            prompt_details.get("cached_input_tokens"),
+            prompt_details.get("cachedContentTokenCount"),
+        )
+
+    if isinstance(completion_details, dict):
+        reasoning_tokens = _pick_int(
+            completion_details.get("reasoning_tokens"),
+            completion_details.get("reasoningTokenCount"),
+        )
+
+    if cached_input_tokens is None:
+        cached_input_tokens = _pick_int(
+            usage.get("cached_input_tokens"),
+            usage.get("cachedContentTokenCount"),
+        )
+    if reasoning_tokens is None:
+        reasoning_tokens = _pick_int(usage.get("reasoning_tokens"))
+
+    return cached_input_tokens, reasoning_tokens
+
+
 def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
     events = _parse_sse_events(raw)
     if not events:
-        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+        return _empty_usage()
 
     input_tokens = None
     output_tokens = None
     total_tokens = None
+    cached_input_tokens = None
+    reasoning_tokens = None
 
     for event in events:
         usage = event.get("usage")
         if usage and isinstance(usage, dict):
-            input_tokens = (
-                usage.get("prompt_tokens") or usage.get("input_tokens") or input_tokens
+            input_tokens = _pick_int(
+                usage.get("prompt_tokens"),
+                usage.get("input_tokens"),
+                input_tokens,
             )
-            output_tokens = (
-                usage.get("completion_tokens")
-                or usage.get("output_tokens")
-                or output_tokens
+            output_tokens = _pick_int(
+                usage.get("completion_tokens"),
+                usage.get("output_tokens"),
+                output_tokens,
             )
-            total_tokens = usage.get("total_tokens") or total_tokens
+            total_tokens = _pick_int(usage.get("total_tokens"), total_tokens)
+            cached_found, reasoning_found = _extract_special_usage(usage)
+            cached_input_tokens = _pick_int(cached_found, cached_input_tokens)
+            reasoning_tokens = _pick_int(reasoning_found, reasoning_tokens)
 
         if event.get("type") == "message_start":
             msg_usage = event.get("message", {}).get("usage", {})
             if msg_usage.get("input_tokens") is not None:
-                input_tokens = msg_usage["input_tokens"]
+                input_tokens = _pick_int(msg_usage.get("input_tokens"), input_tokens)
 
         if event.get("type") == "message_delta":
             delta_usage = event.get("usage", {})
             if delta_usage.get("output_tokens") is not None:
-                output_tokens = delta_usage["output_tokens"]
+                output_tokens = _pick_int(
+                    delta_usage.get("output_tokens"), output_tokens
+                )
 
         gemini_usage = event.get("usageMetadata")
         if gemini_usage and isinstance(gemini_usage, dict):
-            pt = gemini_usage.get("promptTokenCount")
-            ct = gemini_usage.get("candidatesTokenCount")
-            tt = gemini_usage.get("totalTokenCount")
-            if pt is not None:
-                input_tokens = pt
-            if ct is not None:
-                output_tokens = ct
-            if tt is not None:
-                total_tokens = tt
+            input_tokens = _pick_int(
+                gemini_usage.get("promptTokenCount"),
+                input_tokens,
+            )
+            output_tokens = _pick_int(
+                gemini_usage.get("candidatesTokenCount"),
+                output_tokens,
+            )
+            total_tokens = _pick_int(
+                gemini_usage.get("totalTokenCount"),
+                total_tokens,
+            )
+            cached_input_tokens = _pick_int(
+                gemini_usage.get("cachedContentTokenCount"),
+                cached_input_tokens,
+            )
 
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = (input_tokens or 0) + (output_tokens or 0)
@@ -121,12 +252,14 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "reasoning_tokens": reasoning_tokens,
     }
 
 
 def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
     if not body:
-        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+        return _empty_usage()
 
     try:
         text_preview = body[:100].decode("utf-8", errors="replace")
@@ -139,40 +272,50 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
         data = json.loads(body)
         usage = data.get("usage", {})
         if usage:
-            input_t = usage.get("prompt_tokens") or usage.get("input_tokens")
-            output_t = usage.get("completion_tokens") or usage.get("output_tokens")
-            total_t = usage.get("total_tokens")
+            input_t = _pick_int(usage.get("prompt_tokens"), usage.get("input_tokens"))
+            output_t = _pick_int(
+                usage.get("completion_tokens"), usage.get("output_tokens")
+            )
+            total_t = _pick_int(usage.get("total_tokens"))
+            cached_input_tokens, reasoning_tokens = _extract_special_usage(usage)
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
                 "input_tokens": input_t,
                 "output_tokens": output_t,
                 "total_tokens": total_t,
+                "cached_input_tokens": cached_input_tokens,
+                "reasoning_tokens": reasoning_tokens,
             }
 
         gemini_usage = data.get("usageMetadata")
         if gemini_usage and isinstance(gemini_usage, dict):
-            input_t = gemini_usage.get("promptTokenCount")
-            output_t = gemini_usage.get("candidatesTokenCount")
-            total_t = gemini_usage.get("totalTokenCount")
+            input_t = _pick_int(gemini_usage.get("promptTokenCount"))
+            output_t = _pick_int(gemini_usage.get("candidatesTokenCount"))
+            total_t = _pick_int(gemini_usage.get("totalTokenCount"))
+            cached_input_tokens = _pick_int(gemini_usage.get("cachedContentTokenCount"))
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
                 "input_tokens": input_t,
                 "output_tokens": output_t,
                 "total_tokens": total_t,
+                "cached_input_tokens": cached_input_tokens,
+                "reasoning_tokens": None,
             }
 
         if "input_tokens" in data and "usage" not in data:
             return {
-                "input_tokens": data["input_tokens"],
+                "input_tokens": _pick_int(data.get("input_tokens")),
                 "output_tokens": None,
                 "total_tokens": None,
+                "cached_input_tokens": None,
+                "reasoning_tokens": None,
             }
 
-        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+        return _empty_usage()
     except (json.JSONDecodeError, UnicodeDecodeError, AttributeError):
-        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
+        return _empty_usage()
 
 
 async def get_request_logs(
@@ -418,3 +561,314 @@ async def get_model_health_stats(
             "health_total_requests": total,
         }
     return result
+
+
+def resolve_time_preset(
+    preset: str | None,
+    from_time: datetime | None,
+    to_time: datetime | None,
+) -> tuple[datetime | None, datetime | None]:
+    if preset in (None, "", "custom"):
+        return from_time, to_time
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if preset == "today":
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return today_start, to_time
+    if preset == "24h":
+        return now - timedelta(days=1), to_time
+    if preset in ("last_7_days", "7d"):
+        return now - timedelta(days=7), to_time
+    if preset in ("last_30_days", "30d"):
+        return now - timedelta(days=30), to_time
+    if preset == "all":
+        return None, to_time
+    return from_time, to_time
+
+
+async def get_spending_report(
+    db: AsyncSession,
+    *,
+    preset: str | None = None,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    provider_type: str | None = None,
+    model_id: str | None = None,
+    endpoint_id: int | None = None,
+    group_by: str = "none",
+    limit: int = 50,
+    offset: int = 0,
+    top_n: int = 5,
+) -> dict:
+    from_time, to_time = resolve_time_preset(preset, from_time, to_time)
+
+    filters = []
+    if from_time is not None:
+        filters.append(RequestLog.created_at >= from_time)
+    if to_time is not None:
+        filters.append(RequestLog.created_at <= to_time)
+    if provider_type:
+        filters.append(RequestLog.provider_type == provider_type)
+    if model_id:
+        filters.append(RequestLog.model_id == model_id)
+    if endpoint_id is not None:
+        filters.append(RequestLog.endpoint_id == endpoint_id)
+    where = and_(*filters) if filters else literal(True)
+    success_where = and_(where, RequestLog.success_flag == True)  # noqa: E712
+
+    spend_case = case(
+        (
+            RequestLog.billable_flag == True,  # noqa: E712
+            func.coalesce(RequestLog.total_cost_user_currency_micros, 0),
+        ),
+        else_=0,
+    )
+    priced_case = case(
+        (
+            and_(
+                RequestLog.success_flag == True,  # noqa: E712
+                RequestLog.priced_flag == True,  # noqa: E712
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    unpriced_case = case(
+        (
+            and_(
+                RequestLog.success_flag == True,  # noqa: E712
+                or_(
+                    RequestLog.priced_flag == False,  # noqa: E712
+                    RequestLog.priced_flag.is_(None),
+                ),
+            ),
+            1,
+        ),
+        else_=0,
+    )
+    summary_row = (
+        await db.execute(
+            select(
+                func.coalesce(func.sum(spend_case), 0).label("total_cost_micros"),
+                func.count().label("successful_request_count"),
+                func.coalesce(func.sum(priced_case), 0).label("priced_request_count"),
+                func.coalesce(func.sum(unpriced_case), 0).label(
+                    "unpriced_request_count"
+                ),
+                func.coalesce(
+                    func.sum(func.coalesce(RequestLog.input_tokens, 0)), 0
+                ).label("total_input_tokens"),
+                func.coalesce(
+                    func.sum(func.coalesce(RequestLog.output_tokens, 0)), 0
+                ).label("total_output_tokens"),
+                func.coalesce(
+                    func.sum(func.coalesce(RequestLog.cached_input_tokens, 0)), 0
+                ).label("total_cached_input_tokens"),
+                func.coalesce(
+                    func.sum(func.coalesce(RequestLog.reasoning_tokens, 0)), 0
+                ).label("total_reasoning_tokens"),
+                func.coalesce(
+                    func.sum(func.coalesce(RequestLog.total_tokens, 0)), 0
+                ).label("total_tokens"),
+            ).where(success_where)
+        )
+    ).one()
+
+    successful_request_count = int(summary_row.successful_request_count or 0)
+    total_cost_micros = int(summary_row.total_cost_micros or 0)
+    avg_cost_per_success = (
+        int(total_cost_micros / successful_request_count)
+        if successful_request_count > 0
+        else 0
+    )
+
+    group_expr = None
+    if group_by == "day":
+        group_expr = func.strftime("%Y-%m-%d", RequestLog.created_at)
+    elif group_by == "week":
+        group_expr = func.strftime("%Y-W%W", RequestLog.created_at)
+    elif group_by == "month":
+        group_expr = func.strftime("%Y-%m", RequestLog.created_at)
+    elif group_by == "provider":
+        group_expr = RequestLog.provider_type
+    elif group_by == "model":
+        group_expr = RequestLog.model_id
+    elif group_by == "endpoint":
+        group_expr = func.coalesce(
+            RequestLog.endpoint_description,
+            RequestLog.endpoint_base_url,
+            literal("unknown_endpoint"),
+        )
+    elif group_by == "model_endpoint":
+        group_expr = func.printf(
+            "%s#%s",
+            RequestLog.model_id,
+            func.coalesce(RequestLog.endpoint_id, literal(-1)),
+        )
+
+    groups: list[dict] = []
+    groups_total = 0
+    if group_expr is not None:
+        groups_total = (
+            await db.execute(
+                select(func.count()).select_from(
+                    select(group_expr.label("group_key"))
+                    .where(success_where)
+                    .group_by(group_expr)
+                    .subquery()
+                )
+            )
+        ).scalar_one()
+
+        grouped_rows = (
+            await db.execute(
+                select(
+                    group_expr.label("key"),
+                    func.count().label("total_requests"),
+                    func.coalesce(func.sum(priced_case), 0).label("priced_requests"),
+                    func.coalesce(func.sum(unpriced_case), 0).label(
+                        "unpriced_requests"
+                    ),
+                    func.coalesce(
+                        func.sum(func.coalesce(RequestLog.total_tokens, 0)), 0
+                    ).label("total_tokens"),
+                    func.coalesce(func.sum(spend_case), 0).label("total_cost_micros"),
+                )
+                .where(success_where)
+                .group_by(group_expr)
+                .order_by(desc(func.coalesce(func.sum(spend_case), 0)))
+                .limit(limit)
+                .offset(offset)
+            )
+        ).all()
+
+        groups = [
+            {
+                "key": row.key or "unknown",
+                "total_cost_micros": int(row.total_cost_micros or 0),
+                "total_requests": int(row.total_requests or 0),
+                "priced_requests": int(row.priced_requests or 0),
+                "unpriced_requests": int(row.unpriced_requests or 0),
+                "total_tokens": int(row.total_tokens or 0),
+            }
+            for row in grouped_rows
+        ]
+    else:
+        groups = [
+            {
+                "key": "all",
+                "total_cost_micros": total_cost_micros,
+                "total_requests": successful_request_count,
+                "priced_requests": int(summary_row.priced_request_count or 0),
+                "unpriced_requests": int(summary_row.unpriced_request_count or 0),
+                "total_tokens": int(summary_row.total_tokens or 0),
+            }
+        ]
+        groups_total = 1
+
+    top_model_rows = (
+        await db.execute(
+            select(
+                RequestLog.model_id,
+                func.coalesce(func.sum(spend_case), 0).label("total_cost_micros"),
+            )
+            .where(success_where)
+            .group_by(RequestLog.model_id)
+            .having(func.coalesce(func.sum(spend_case), 0) > 0)
+            .order_by(desc(func.coalesce(func.sum(spend_case), 0)))
+            .limit(top_n)
+        )
+    ).all()
+
+    endpoint_label_expr = func.coalesce(
+        RequestLog.endpoint_description,
+        RequestLog.endpoint_base_url,
+        literal("unknown_endpoint"),
+    )
+    top_endpoint_rows = (
+        await db.execute(
+            select(
+                RequestLog.endpoint_id,
+                endpoint_label_expr.label("endpoint_label"),
+                func.coalesce(func.sum(spend_case), 0).label("total_cost_micros"),
+            )
+            .where(success_where)
+            .group_by(RequestLog.endpoint_id, endpoint_label_expr)
+            .having(func.coalesce(func.sum(spend_case), 0) > 0)
+            .order_by(desc(func.coalesce(func.sum(spend_case), 0)))
+            .limit(top_n)
+        )
+    ).all()
+
+    unpriced_reason_rows = (
+        await db.execute(
+            select(
+                func.coalesce(
+                    RequestLog.unpriced_reason,
+                    literal("LEGACY_NO_COST_DATA"),
+                ).label("reason"),
+                func.count().label("reason_count"),
+            )
+            .where(
+                success_where,
+                or_(
+                    RequestLog.priced_flag == False,  # noqa: E712
+                    RequestLog.priced_flag.is_(None),
+                ),
+            )
+            .group_by("reason")
+            .order_by(desc(func.count()))
+        )
+    ).all()
+
+    settings_row = (
+        await db.execute(select(UserSetting).order_by(UserSetting.id.asc()).limit(1))
+    ).scalar_one_or_none()
+
+    report_currency_code = settings_row.report_currency_code if settings_row else "USD"
+    report_currency_symbol = (
+        settings_row.report_currency_symbol if settings_row else "$"
+    )
+
+    unpriced_breakdown: dict[str, int] = {}
+    for row in unpriced_reason_rows:
+        reason = row[0]
+        reason_count = row[1]
+        unpriced_breakdown[str(reason)] = int(reason_count or 0)
+
+    return {
+        "summary": {
+            "total_cost_micros": total_cost_micros,
+            "successful_request_count": successful_request_count,
+            "priced_request_count": int(summary_row.priced_request_count or 0),
+            "unpriced_request_count": int(summary_row.unpriced_request_count or 0),
+            "total_input_tokens": int(summary_row.total_input_tokens or 0),
+            "total_output_tokens": int(summary_row.total_output_tokens or 0),
+            "total_cached_input_tokens": int(
+                summary_row.total_cached_input_tokens or 0
+            ),
+            "total_reasoning_tokens": int(summary_row.total_reasoning_tokens or 0),
+            "total_tokens": int(summary_row.total_tokens or 0),
+            "avg_cost_per_successful_request_micros": avg_cost_per_success,
+        },
+        "groups": groups,
+        "groups_total": int(groups_total or 0),
+        "top_spending_models": [
+            {
+                "model_id": row.model_id,
+                "total_cost_micros": int(row.total_cost_micros or 0),
+            }
+            for row in top_model_rows
+        ],
+        "top_spending_endpoints": [
+            {
+                "endpoint_id": row.endpoint_id,
+                "endpoint_label": row.endpoint_label,
+                "total_cost_micros": int(row.total_cost_micros or 0),
+            }
+            for row in top_endpoint_rows
+        ],
+        "unpriced_breakdown": unpriced_breakdown,
+        "report_currency_code": report_currency_code,
+        "report_currency_symbol": report_currency_symbol,
+    }
