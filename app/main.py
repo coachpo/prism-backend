@@ -185,6 +185,11 @@ async def _add_missing_columns(conn):
             text("ALTER TABLE endpoints ADD COLUMN cached_input_price VARCHAR(20)")
         )
         logger.info("Migrated: added cached_input_price column to endpoints table")
+    if "cache_creation_price" not in ep_columns:
+        await conn.execute(
+            text("ALTER TABLE endpoints ADD COLUMN cache_creation_price VARCHAR(20)")
+        )
+        logger.info("Migrated: added cache_creation_price column to endpoints table")
     if "reasoning_price" not in ep_columns:
         await conn.execute(
             text("ALTER TABLE endpoints ADD COLUMN reasoning_price VARCHAR(20)")
@@ -256,6 +261,13 @@ async def _add_missing_columns(conn):
             text("ALTER TABLE request_logs ADD COLUMN cached_input_tokens INTEGER")
         )
         logger.info("Migrated: added cached_input_tokens column to request_logs table")
+    if "cache_creation_tokens" not in rl_columns:
+        await conn.execute(
+            text("ALTER TABLE request_logs ADD COLUMN cache_creation_tokens INTEGER")
+        )
+        logger.info(
+            "Migrated: added cache_creation_tokens column to request_logs table"
+        )
     if "reasoning_tokens" not in rl_columns:
         await conn.execute(
             text("ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER")
@@ -277,6 +289,15 @@ async def _add_missing_columns(conn):
         )
         logger.info(
             "Migrated: added cached_input_cost_micros column to request_logs table"
+        )
+    if "cache_creation_cost_micros" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN cache_creation_cost_micros BIGINT"
+            )
+        )
+        logger.info(
+            "Migrated: added cache_creation_cost_micros column to request_logs table"
         )
     if "reasoning_cost_micros" not in rl_columns:
         await conn.execute(
@@ -371,6 +392,15 @@ async def _add_missing_columns(conn):
         )
         logger.info(
             "Migrated: added pricing_snapshot_cached_input column to request_logs table"
+        )
+    if "pricing_snapshot_cache_creation" not in rl_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_cache_creation VARCHAR(20)"
+            )
+        )
+        logger.info(
+            "Migrated: added pricing_snapshot_cache_creation column to request_logs table"
         )
     if "pricing_snapshot_reasoning" not in rl_columns:
         await conn.execute(

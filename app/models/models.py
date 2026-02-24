@@ -104,6 +104,7 @@ class Endpoint(Base):
     input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
     output_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
     cached_input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cache_creation_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
     reasoning_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
     missing_special_token_policy: Mapped[str] = mapped_column(
         String(20), default="MAP_TO_OUTPUT", nullable=False
@@ -138,10 +139,14 @@ class RequestLog(Base):
     priced_flag: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     unpriced_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cached_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     input_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     output_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     cached_input_cost_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    cache_creation_cost_micros: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
     reasoning_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -164,6 +169,9 @@ class RequestLog(Base):
         String(20), nullable=True
     )
     pricing_snapshot_cached_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_cache_creation: Mapped[str | None] = mapped_column(
         String(20), nullable=True
     )
     pricing_snapshot_reasoning: Mapped[str | None] = mapped_column(

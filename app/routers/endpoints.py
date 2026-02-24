@@ -37,6 +37,7 @@ PRICING_FIELDS = {
     "input_price",
     "output_price",
     "cached_input_price",
+    "cache_creation_price",
     "reasoning_price",
     "missing_special_token_policy",
 }
@@ -100,6 +101,7 @@ async def create_endpoint(
         input_price=body.input_price,
         output_price=body.output_price,
         cached_input_price=body.cached_input_price,
+        cache_creation_price=body.cache_creation_price,
         reasoning_price=body.reasoning_price,
         missing_special_token_policy=body.missing_special_token_policy,
         pricing_config_version=1 if body.pricing_enabled else 0,

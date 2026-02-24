@@ -66,6 +66,7 @@ class EndpointBase(BaseModel):
     input_price: str | None = None
     output_price: str | None = None
     cached_input_price: str | None = None
+    cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
@@ -75,6 +76,7 @@ class EndpointBase(BaseModel):
         "input_price",
         "output_price",
         "cached_input_price",
+        "cache_creation_price",
         "reasoning_price",
         mode="before",
     )
@@ -128,6 +130,7 @@ class EndpointUpdate(BaseModel):
     input_price: str | None = None
     output_price: str | None = None
     cached_input_price: str | None = None
+    cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
 
@@ -135,6 +138,7 @@ class EndpointUpdate(BaseModel):
         "input_price",
         "output_price",
         "cached_input_price",
+        "cache_creation_price",
         "reasoning_price",
         mode="before",
     )
@@ -187,6 +191,7 @@ class EndpointResponse(BaseModel):
     input_price: str | None
     output_price: str | None
     cached_input_price: str | None
+    cache_creation_price: str | None
     reasoning_price: str | None
     missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
     pricing_config_version: int
@@ -326,10 +331,12 @@ class RequestLogResponse(BaseModel):
     priced_flag: bool | None = None
     unpriced_reason: str | None = None
     cached_input_tokens: int | None = None
+    cache_creation_tokens: int | None = None
     reasoning_tokens: int | None = None
     input_cost_micros: int | None = None
     output_cost_micros: int | None = None
     cached_input_cost_micros: int | None = None
+    cache_creation_cost_micros: int | None = None
     reasoning_cost_micros: int | None = None
     total_cost_original_micros: int | None = None
     total_cost_user_currency_micros: int | None = None
@@ -342,6 +349,7 @@ class RequestLogResponse(BaseModel):
     pricing_snapshot_input: str | None = None
     pricing_snapshot_output: str | None = None
     pricing_snapshot_cached_input: str | None = None
+    pricing_snapshot_cache_creation: str | None = None
     pricing_snapshot_reasoning: str | None = None
     pricing_snapshot_policy: str | None = None
     pricing_config_version_used: int | None = None
@@ -457,6 +465,7 @@ class SpendingSummaryResponse(BaseModel):
     total_input_tokens: int
     total_output_tokens: int
     total_cached_input_tokens: int
+    total_cache_creation_tokens: int
     total_reasoning_tokens: int
     total_tokens: int
     avg_cost_per_successful_request_micros: int
@@ -511,6 +520,7 @@ class ConfigEndpointExport(BaseModel):
     input_price: str | None = None
     output_price: str | None = None
     cached_input_price: str | None = None
+    cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"

@@ -30,10 +30,12 @@ class CostFieldPayload(TypedDict):
     priced_flag: bool
     unpriced_reason: str | None
     cached_input_tokens: int | None
+    cache_creation_tokens: int | None
     reasoning_tokens: int | None
     input_cost_micros: int
     output_cost_micros: int
     cached_input_cost_micros: int
+    cache_creation_cost_micros: int
     reasoning_cost_micros: int
     total_cost_original_micros: int
     total_cost_user_currency_micros: int
@@ -46,6 +48,7 @@ class CostFieldPayload(TypedDict):
     pricing_snapshot_input: str | None
     pricing_snapshot_output: str | None
     pricing_snapshot_cached_input: str | None
+    pricing_snapshot_cache_creation: str | None
     pricing_snapshot_reasoning: str | None
     pricing_snapshot_policy: str | None
     pricing_config_version_used: int | None
@@ -134,6 +137,7 @@ def compute_cost_fields(
     input_tokens: int | None,
     output_tokens: int | None,
     cached_input_tokens: int | None,
+    cache_creation_tokens: int | None,
     reasoning_tokens: int | None,
     settings: CostingSettingsSnapshot,
 ) -> CostFieldPayload:
@@ -146,10 +150,12 @@ def compute_cost_fields(
         "priced_flag": False,
         "unpriced_reason": None,
         "cached_input_tokens": cached_input_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
         "reasoning_tokens": reasoning_tokens,
         "input_cost_micros": 0,
         "output_cost_micros": 0,
         "cached_input_cost_micros": 0,
+        "cache_creation_cost_micros": 0,
         "reasoning_cost_micros": 0,
         "total_cost_original_micros": 0,
         "total_cost_user_currency_micros": 0,
@@ -162,6 +168,7 @@ def compute_cost_fields(
         "pricing_snapshot_input": None,
         "pricing_snapshot_output": None,
         "pricing_snapshot_cached_input": None,
+        "pricing_snapshot_cache_creation": None,
         "pricing_snapshot_reasoning": None,
         "pricing_snapshot_policy": None,
         "pricing_config_version_used": None,
@@ -212,6 +219,7 @@ def compute_cost_fields(
         input_price = _parse_non_negative(endpoint.input_price)
         output_price = _parse_non_negative(endpoint.output_price)
         cached_input_price = _parse_non_negative(endpoint.cached_input_price)
+        cache_creation_price = _parse_non_negative(endpoint.cache_creation_price)
         reasoning_price = _parse_non_negative(endpoint.reasoning_price)
     except ValueError:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
@@ -221,6 +229,7 @@ def compute_cost_fields(
         input_tokens is None
         and output_tokens is None
         and cached_input_tokens is None
+        and cache_creation_tokens is None
         and reasoning_tokens is None
     ):
         result["unpriced_reason"] = "MISSING_TOKEN_USAGE"
@@ -235,6 +244,11 @@ def compute_cost_fields(
     else:
         cached_count = max(cached_input_tokens, 0)
 
+    if cache_creation_tokens is None:
+        cache_creation_count = output_count if policy == "MAP_TO_OUTPUT" else 0
+    else:
+        cache_creation_count = max(cache_creation_tokens, 0)
+
     if reasoning_tokens is None:
         reasoning_count = output_count if policy == "MAP_TO_OUTPUT" else 0
     else:
@@ -244,9 +258,14 @@ def compute_cost_fields(
     input_cost = (Decimal(input_count) / factor) * input_price
     output_cost = (Decimal(output_count) / factor) * output_price
     cached_cost = (Decimal(cached_count) / factor) * cached_input_price
+    cache_creation_cost = (
+        Decimal(cache_creation_count) / factor
+    ) * cache_creation_price
     reasoning_cost = (Decimal(reasoning_count) / factor) * reasoning_price
 
-    total_original = input_cost + output_cost + cached_cost + reasoning_cost
+    total_original = (
+        input_cost + output_cost + cached_cost + cache_creation_cost + reasoning_cost
+    )
     total_user_currency = total_original * fx_rate
 
     result.update(
@@ -254,10 +273,12 @@ def compute_cost_fields(
             "priced_flag": True,
             "unpriced_reason": None,
             "cached_input_tokens": cached_count,
+            "cache_creation_tokens": cache_creation_count,
             "reasoning_tokens": reasoning_count,
             "input_cost_micros": decimal_to_micros(input_cost),
             "output_cost_micros": decimal_to_micros(output_cost),
             "cached_input_cost_micros": decimal_to_micros(cached_cost),
+            "cache_creation_cost_micros": decimal_to_micros(cache_creation_cost),
             "reasoning_cost_micros": decimal_to_micros(reasoning_cost),
             "total_cost_original_micros": decimal_to_micros(total_original),
             "total_cost_user_currency_micros": decimal_to_micros(total_user_currency),
@@ -267,6 +288,9 @@ def compute_cost_fields(
             "pricing_snapshot_output": _normalize_decimal_string(output_price),
             "pricing_snapshot_cached_input": _normalize_decimal_string(
                 cached_input_price
+            ),
+            "pricing_snapshot_cache_creation": _normalize_decimal_string(
+                cache_creation_price
             ),
             "pricing_snapshot_reasoning": _normalize_decimal_string(reasoning_price),
             "pricing_snapshot_policy": policy,

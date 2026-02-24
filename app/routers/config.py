@@ -93,6 +93,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     input_price=ep.input_price,
                     output_price=ep.output_price,
                     cached_input_price=ep.cached_input_price,
+                    cache_creation_price=ep.cache_creation_price,
                     reasoning_price=ep.reasoning_price,
                     missing_special_token_policy=cast(
                         Literal["MAP_TO_OUTPUT", "ZERO_COST"],
@@ -351,6 +352,7 @@ async def import_config(
                 input_price=ep_data.input_price,
                 output_price=ep_data.output_price,
                 cached_input_price=ep_data.cached_input_price,
+                cache_creation_price=ep_data.cache_creation_price,
                 reasoning_price=ep_data.reasoning_price,
                 missing_special_token_policy=ep_data.missing_special_token_policy,
                 pricing_config_version=ep_data.pricing_config_version,

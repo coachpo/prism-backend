@@ -29,7 +29,11 @@ from app.services.proxy_service import (
     inject_stream_options,
 )
 from app.services.stats_service import log_request, extract_token_usage
-from app.services.costing_service import load_costing_settings, compute_cost_fields
+from app.services.costing_service import (
+    CostFieldPayload,
+    load_costing_settings,
+    compute_cost_fields,
+)
 from app.services.audit_service import record_audit_log
 
 logger = logging.getLogger(__name__)
@@ -111,16 +115,18 @@ async def _handle_proxy(
     client_headers = _get_client_headers(request)
     method = request.method
 
-    blocklist_rules = (
+    blocklist_rules: list[HeaderBlocklistRule] = list(
         (
-            await db.execute(
-                select(HeaderBlocklistRule).where(
-                    HeaderBlocklistRule.enabled == True  # noqa: E712
+            (
+                await db.execute(
+                    select(HeaderBlocklistRule).where(
+                        HeaderBlocklistRule.enabled == True  # noqa: E712
+                    )
                 )
             )
+            .scalars()
+            .all()
         )
-        .scalars()
-        .all()
     )
 
     upstream_model_id = model_config.model_id
@@ -158,7 +164,7 @@ async def _handle_proxy(
         endpoint,
         status_code: int,
         tokens: dict[str, int | None] | None = None,
-    ) -> dict[str, object | None]:
+    ) -> CostFieldPayload:
         token_values = tokens or {}
         return compute_cost_fields(
             endpoint=endpoint,
@@ -167,6 +173,7 @@ async def _handle_proxy(
             input_tokens=token_values.get("input_tokens"),
             output_tokens=token_values.get("output_tokens"),
             cached_input_tokens=token_values.get("cached_input_tokens"),
+            cache_creation_tokens=token_values.get("cache_creation_tokens"),
             reasoning_tokens=token_values.get("reasoning_tokens"),
             settings=costing_settings,
         )

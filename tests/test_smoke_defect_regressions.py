@@ -1,16 +1,13 @@
 import json
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-import httpx
 from fastapi import HTTPException
 
 from app.services.proxy_service import (
     rewrite_model_in_body,
     extract_model_from_body,
     build_upstream_headers,
-    PROVIDER_AUTH,
 )
 from app.services.stats_service import log_request
 
@@ -87,6 +84,7 @@ class TestDEF002_ModelIdRewriting:
             }
         ).encode()
         result = rewrite_model_in_body(body, "claude-sonnet-4-20250514")
+        assert result is not None
         parsed = json.loads(result)
         assert parsed["model"] == "claude-sonnet-4-20250514"
         assert parsed["messages"] == [{"role": "user", "content": "hi"}]
@@ -95,6 +93,7 @@ class TestDEF002_ModelIdRewriting:
         body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
         assert extract_model_from_body(body) is None
         result = rewrite_model_in_body(body, "gemini-2.5-flash")
+        assert result is not None
         parsed = json.loads(result)
         assert parsed["model"] == "gemini-2.5-flash"
 
@@ -109,6 +108,7 @@ class TestDEF002_ModelIdRewriting:
             }
         ).encode()
         result = rewrite_model_in_body(body, "real-model-id")
+        assert result is not None
         parsed = json.loads(result)
         assert parsed["model"] == "real-model-id"
         assert parsed["temperature"] == 0.7
@@ -541,6 +541,135 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert ep.priority == 0
 
 
+class TestDEF008_CacheCreationPricing:
+    """DEF-008 (P1): cache creation pricing is tracked separately from cached input."""
+
+    @staticmethod
+    def _build_endpoint(
+        *,
+        pricing_unit: str,
+        input_price: str,
+        output_price: str,
+        cached_input_price: str,
+        cache_creation_price: str,
+        reasoning_price: str,
+        missing_special_token_policy: str,
+    ):
+        from app.models.models import Endpoint
+
+        endpoint = Endpoint(
+            model_config_id=1,
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            pricing_enabled=True,
+            pricing_unit=pricing_unit,
+            pricing_currency_code="USD",
+            input_price=input_price,
+            output_price=output_price,
+            cached_input_price=cached_input_price,
+            cache_creation_price=cache_creation_price,
+            reasoning_price=reasoning_price,
+            missing_special_token_policy=missing_special_token_policy,
+            pricing_config_version=9,
+        )
+        endpoint.id = 1
+        return endpoint
+
+    def test_extract_token_usage_parses_cache_creation_tokens(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 1200,
+                    "completion_tokens": 400,
+                    "total_tokens": 1600,
+                    "prompt_tokens_details": {
+                        "cache_read_input_tokens": 200,
+                        "cache_creation_input_tokens": 300,
+                    },
+                    "completion_tokens_details": {"reasoning_tokens": 50},
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["cached_input_tokens"] == 200
+        assert usage["cache_creation_tokens"] == 300
+        assert usage["reasoning_tokens"] == 50
+
+    def test_compute_cost_fields_includes_cache_creation_cost(self):
+        from app.services.costing_service import (
+            CostingSettingsSnapshot,
+            compute_cost_fields,
+        )
+
+        endpoint = self._build_endpoint(
+            pricing_unit="PER_1M",
+            input_price="2",
+            output_price="4",
+            cached_input_price="1",
+            cache_creation_price="3",
+            reasoning_price="5",
+            missing_special_token_policy="ZERO_COST",
+        )
+
+        result = compute_cost_fields(
+            endpoint=endpoint,
+            model_id="claude-sonnet",
+            status_code=200,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cached_input_tokens=100_000,
+            cache_creation_tokens=200_000,
+            reasoning_tokens=300_000,
+            settings=CostingSettingsSnapshot(
+                report_currency_code="USD",
+                report_currency_symbol="$",
+                endpoint_fx_map={},
+            ),
+        )
+
+        assert result["cache_creation_tokens"] == 200_000
+        assert result["cache_creation_cost_micros"] == 600_000
+        assert result["total_cost_original_micros"] == 8_200_000
+        assert result["pricing_snapshot_cache_creation"] == "3.000000"
+
+    def test_compute_cost_fields_maps_missing_cache_creation_by_policy(self):
+        from app.services.costing_service import (
+            CostingSettingsSnapshot,
+            compute_cost_fields,
+        )
+
+        endpoint = self._build_endpoint(
+            pricing_unit="PER_1K",
+            input_price="0",
+            output_price="0",
+            cached_input_price="0",
+            cache_creation_price="2",
+            reasoning_price="0",
+            missing_special_token_policy="MAP_TO_OUTPUT",
+        )
+
+        result = compute_cost_fields(
+            endpoint=endpoint,
+            model_id="claude-sonnet",
+            status_code=200,
+            input_tokens=0,
+            output_tokens=1_000,
+            cached_input_tokens=None,
+            cache_creation_tokens=None,
+            reasoning_tokens=None,
+            settings=CostingSettingsSnapshot(
+                report_currency_code="USD",
+                report_currency_symbol="$",
+                endpoint_fx_map={},
+            ),
+        )
+
+        assert result["cache_creation_tokens"] == 1_000
+        assert result["cache_creation_cost_micros"] == 2_000_000
+        assert result["total_cost_original_micros"] == 2_000_000
 
 
 class TestFailoverRecoveryFieldValidation:
@@ -621,12 +750,14 @@ class TestFailoverRecoveryFieldValidation:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            ModelConfigBase(
-                provider_id=1,
-                model_id="gpt-4",
-                display_name="GPT-4",
-                model_type="native",
-                lb_strategy="round_robin",
+            ModelConfigBase.model_validate(
+                {
+                    "provider_id": 1,
+                    "model_id": "gpt-4",
+                    "display_name": "GPT-4",
+                    "model_type": "native",
+                    "lb_strategy": "round_robin",
+                }
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
 
@@ -660,42 +791,42 @@ class TestFailoverRecoveryFieldValidation:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            ConfigImportRequest(
-                version=1,
-                providers=[],
-                models=[],
+            ConfigImportRequest.model_validate(
+                {
+                    "version": 1,
+                    "providers": [],
+                    "models": [],
+                }
             )
         assert "Input should be 2" in str(exc_info.value)
 
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
-        from app.schemas.schemas import (
-            ConfigImportRequest,
-            ConfigModelExport,
-            ConfigEndpointExport,
-        )
+        from app.schemas.schemas import ConfigImportRequest
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            ConfigImportRequest(
-                version=2,
-                providers=[],
-                models=[
-                    ConfigModelExport(
-                        provider_type="openai",
-                        model_id="gpt-4",
-                        display_name="GPT-4",
-                        model_type="native",
-                        lb_strategy="round_robin",
-                        is_enabled=True,
-                        endpoints=[
-                            ConfigEndpointExport(
-                                base_url="https://api.openai.com/v1",
-                                api_key="sk-test",
-                            )
-                        ],
-                    )
-                ],
+            ConfigImportRequest.model_validate(
+                {
+                    "version": 2,
+                    "providers": [],
+                    "models": [
+                        {
+                            "provider_type": "openai",
+                            "model_id": "gpt-4",
+                            "display_name": "GPT-4",
+                            "model_type": "native",
+                            "lb_strategy": "round_robin",
+                            "is_enabled": True,
+                            "endpoints": [
+                                {
+                                    "base_url": "https://api.openai.com/v1",
+                                    "api_key": "sk-test",
+                                }
+                            ],
+                        }
+                    ],
+                }
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
 
@@ -752,6 +883,8 @@ class TestFailoverRecoveryFieldValidation:
         assert m.lb_strategy == "failover"
         assert m.failover_recovery_enabled is False
         assert m.failover_recovery_cooldown_seconds == 180
+
+
 class TestDEF007_EndpointIdentityInLogs:
     """DEF-007 (P1): log_request returns ID and stores endpoint_description; audit_service accepts endpoint metadata."""
 

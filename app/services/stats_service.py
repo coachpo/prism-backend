@@ -28,10 +28,12 @@ async def log_request(
     priced_flag: bool | None = None,
     unpriced_reason: str | None = None,
     cached_input_tokens: int | None = None,
+    cache_creation_tokens: int | None = None,
     reasoning_tokens: int | None = None,
     input_cost_micros: int | None = None,
     output_cost_micros: int | None = None,
     cached_input_cost_micros: int | None = None,
+    cache_creation_cost_micros: int | None = None,
     reasoning_cost_micros: int | None = None,
     total_cost_original_micros: int | None = None,
     total_cost_user_currency_micros: int | None = None,
@@ -44,6 +46,7 @@ async def log_request(
     pricing_snapshot_input: str | None = None,
     pricing_snapshot_output: str | None = None,
     pricing_snapshot_cached_input: str | None = None,
+    pricing_snapshot_cache_creation: str | None = None,
     pricing_snapshot_reasoning: str | None = None,
     pricing_snapshot_policy: str | None = None,
     pricing_config_version_used: int | None = None,
@@ -70,10 +73,12 @@ async def log_request(
             priced_flag=priced_flag,
             unpriced_reason=unpriced_reason,
             cached_input_tokens=cached_input_tokens,
+            cache_creation_tokens=cache_creation_tokens,
             reasoning_tokens=reasoning_tokens,
             input_cost_micros=input_cost_micros,
             output_cost_micros=output_cost_micros,
             cached_input_cost_micros=cached_input_cost_micros,
+            cache_creation_cost_micros=cache_creation_cost_micros,
             reasoning_cost_micros=reasoning_cost_micros,
             total_cost_original_micros=total_cost_original_micros,
             total_cost_user_currency_micros=total_cost_user_currency_micros,
@@ -86,6 +91,7 @@ async def log_request(
             pricing_snapshot_input=pricing_snapshot_input,
             pricing_snapshot_output=pricing_snapshot_output,
             pricing_snapshot_cached_input=pricing_snapshot_cached_input,
+            pricing_snapshot_cache_creation=pricing_snapshot_cache_creation,
             pricing_snapshot_reasoning=pricing_snapshot_reasoning,
             pricing_snapshot_policy=pricing_snapshot_policy,
             pricing_config_version_used=pricing_config_version_used,
@@ -124,6 +130,7 @@ def _empty_usage() -> dict[str, int | None]:
         "output_tokens": None,
         "total_tokens": None,
         "cached_input_tokens": None,
+        "cache_creation_tokens": None,
         "reasoning_tokens": None,
     }
 
@@ -149,7 +156,9 @@ def _pick_int(*values) -> int | None:
     return None
 
 
-def _extract_special_usage(usage: dict) -> tuple[int | None, int | None]:
+def _extract_special_usage(
+    usage: dict,
+) -> tuple[int | None, int | None, int | None]:
     prompt_details = usage.get("prompt_tokens_details") or usage.get(
         "input_token_details"
     )
@@ -158,6 +167,7 @@ def _extract_special_usage(usage: dict) -> tuple[int | None, int | None]:
     )
 
     cached_input_tokens = None
+    cache_creation_tokens = None
     reasoning_tokens = None
 
     if isinstance(prompt_details, dict):
@@ -166,6 +176,12 @@ def _extract_special_usage(usage: dict) -> tuple[int | None, int | None]:
             prompt_details.get("cache_read_input_tokens"),
             prompt_details.get("cached_input_tokens"),
             prompt_details.get("cachedContentTokenCount"),
+        )
+        cache_creation_tokens = _pick_int(
+            prompt_details.get("cache_creation_input_tokens"),
+            prompt_details.get("cache_creation_tokens"),
+            prompt_details.get("cacheCreationInputTokens"),
+            prompt_details.get("cacheCreationTokens"),
         )
 
     if isinstance(completion_details, dict):
@@ -179,10 +195,17 @@ def _extract_special_usage(usage: dict) -> tuple[int | None, int | None]:
             usage.get("cached_input_tokens"),
             usage.get("cachedContentTokenCount"),
         )
+    if cache_creation_tokens is None:
+        cache_creation_tokens = _pick_int(
+            usage.get("cache_creation_input_tokens"),
+            usage.get("cache_creation_tokens"),
+            usage.get("cacheCreationInputTokens"),
+            usage.get("cacheCreationTokens"),
+        )
     if reasoning_tokens is None:
         reasoning_tokens = _pick_int(usage.get("reasoning_tokens"))
 
-    return cached_input_tokens, reasoning_tokens
+    return cached_input_tokens, cache_creation_tokens, reasoning_tokens
 
 
 def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
@@ -194,6 +217,7 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
     output_tokens = None
     total_tokens = None
     cached_input_tokens = None
+    cache_creation_tokens = None
     reasoning_tokens = None
 
     for event in events:
@@ -210,8 +234,14 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
                 output_tokens,
             )
             total_tokens = _pick_int(usage.get("total_tokens"), total_tokens)
-            cached_found, reasoning_found = _extract_special_usage(usage)
+            cached_found, cache_creation_found, reasoning_found = (
+                _extract_special_usage(usage)
+            )
             cached_input_tokens = _pick_int(cached_found, cached_input_tokens)
+            cache_creation_tokens = _pick_int(
+                cache_creation_found,
+                cache_creation_tokens,
+            )
             reasoning_tokens = _pick_int(reasoning_found, reasoning_tokens)
 
         if event.get("type") == "message_start":
@@ -253,6 +283,7 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
         "cached_input_tokens": cached_input_tokens,
+        "cache_creation_tokens": cache_creation_tokens,
         "reasoning_tokens": reasoning_tokens,
     }
 
@@ -277,7 +308,11 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 usage.get("completion_tokens"), usage.get("output_tokens")
             )
             total_t = _pick_int(usage.get("total_tokens"))
-            cached_input_tokens, reasoning_tokens = _extract_special_usage(usage)
+            (
+                cached_input_tokens,
+                cache_creation_tokens,
+                reasoning_tokens,
+            ) = _extract_special_usage(usage)
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
@@ -285,6 +320,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "output_tokens": output_t,
                 "total_tokens": total_t,
                 "cached_input_tokens": cached_input_tokens,
+                "cache_creation_tokens": cache_creation_tokens,
                 "reasoning_tokens": reasoning_tokens,
             }
 
@@ -301,6 +337,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "output_tokens": output_t,
                 "total_tokens": total_t,
                 "cached_input_tokens": cached_input_tokens,
+                "cache_creation_tokens": None,
                 "reasoning_tokens": None,
             }
 
@@ -310,6 +347,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "output_tokens": None,
                 "total_tokens": None,
                 "cached_input_tokens": None,
+                "cache_creation_tokens": None,
                 "reasoning_tokens": None,
             }
 
@@ -665,6 +703,9 @@ async def get_spending_report(
                     func.sum(func.coalesce(RequestLog.cached_input_tokens, 0)), 0
                 ).label("total_cached_input_tokens"),
                 func.coalesce(
+                    func.sum(func.coalesce(RequestLog.cache_creation_tokens, 0)), 0
+                ).label("total_cache_creation_tokens"),
+                func.coalesce(
                     func.sum(func.coalesce(RequestLog.reasoning_tokens, 0)), 0
                 ).label("total_reasoning_tokens"),
                 func.coalesce(
@@ -846,6 +887,9 @@ async def get_spending_report(
             "total_output_tokens": int(summary_row.total_output_tokens or 0),
             "total_cached_input_tokens": int(
                 summary_row.total_cached_input_tokens or 0
+            ),
+            "total_cache_creation_tokens": int(
+                summary_row.total_cache_creation_tokens or 0
             ),
             "total_reasoning_tokens": int(summary_row.total_reasoning_tokens or 0),
             "total_tokens": int(summary_row.total_tokens or 0),
