@@ -29,6 +29,7 @@ from app.services.proxy_service import (
     inject_stream_options,
 )
 from app.services.stats_service import log_request, extract_token_usage
+from app.services.costing_service import load_costing_settings, compute_cost_fields
 from app.services.audit_service import record_audit_log
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,29 @@ async def _handle_proxy(
             detail=f"No active endpoints available for model '{model_id}'. All endpoints may be in cooldown.",
         )
 
+    costing_settings = await load_costing_settings(
+        db,
+        model_id=model_id,
+        endpoint_ids=[ep.id for ep in endpoints_to_try],
+    )
+
+    def build_cost_fields(
+        endpoint,
+        status_code: int,
+        tokens: dict[str, int | None] | None = None,
+    ) -> dict[str, object | None]:
+        token_values = tokens or {}
+        return compute_cost_fields(
+            endpoint=endpoint,
+            model_id=model_id,
+            status_code=status_code,
+            input_tokens=token_values.get("input_tokens"),
+            output_tokens=token_values.get("output_tokens"),
+            cached_input_tokens=token_values.get("cached_input_tokens"),
+            reasoning_tokens=token_values.get("reasoning_tokens"),
+            settings=costing_settings,
+        )
+
     recovery_active = (
         model_config.lb_strategy == "failover"
         and model_config.failover_recovery_enabled
@@ -195,6 +219,7 @@ async def _handle_proxy(
                             is_stream=True,
                             request_path=request_path,
                             error_detail=body.decode("utf-8", errors="replace")[:500],
+                            **build_cost_fields(ep, upstream_resp.status_code),
                         )
                         if audit_enabled:
                             await record_audit_log(
@@ -235,7 +260,10 @@ async def _handle_proxy(
                         is_stream=True,
                         request_path=request_path,
                         error_detail=body.decode("utf-8", errors="replace")[:500],
-                        **tokens,
+                        input_tokens=tokens.get("input_tokens"),
+                        output_tokens=tokens.get("output_tokens"),
+                        total_tokens=tokens.get("total_tokens"),
+                        **build_cost_fields(ep, upstream_resp.status_code, tokens),
                     )
                     if audit_enabled:
                         await record_audit_log(
@@ -273,6 +301,7 @@ async def _handle_proxy(
                 _log_endpoint_id = ep.id
                 _log_endpoint_base_url = ep.base_url
                 _log_endpoint_desc = ep_desc
+                _log_endpoint = ep
                 _log_status_code = upstream_resp.status_code
                 _log_elapsed_ms = elapsed_ms
                 _log_request_path = request_path
@@ -316,7 +345,12 @@ async def _handle_proxy(
                                 response_time_ms=_log_elapsed_ms,
                                 is_stream=True,
                                 request_path=_log_request_path,
-                                **tokens,
+                                input_tokens=tokens.get("input_tokens"),
+                                output_tokens=tokens.get("output_tokens"),
+                                total_tokens=tokens.get("total_tokens"),
+                                **build_cost_fields(
+                                    _log_endpoint, _log_status_code, tokens
+                                ),
                             )
                         except BaseException:
                             logger.exception("Failed to log streaming request")
@@ -387,6 +421,7 @@ async def _handle_proxy(
                         error_detail=response.content.decode("utf-8", errors="replace")[
                             :500
                         ],
+                        **build_cost_fields(ep, response.status_code),
                     )
                     if audit_enabled:
                         await record_audit_log(
@@ -433,7 +468,10 @@ async def _handle_proxy(
                     is_stream=False,
                     request_path=request_path,
                     error_detail=error_detail,
-                    **tokens,
+                    input_tokens=tokens.get("input_tokens"),
+                    output_tokens=tokens.get("output_tokens"),
+                    total_tokens=tokens.get("total_tokens"),
+                    **build_cost_fields(ep, response.status_code, tokens),
                 )
                 if audit_enabled:
                     await record_audit_log(
@@ -479,6 +517,7 @@ async def _handle_proxy(
                 is_stream=is_streaming,
                 request_path=request_path,
                 error_detail=str(e)[:500],
+                **build_cost_fields(ep, 0),
             )
             if audit_enabled:
                 await record_audit_log(
@@ -521,6 +560,7 @@ async def _handle_proxy(
                 is_stream=is_streaming,
                 request_path=request_path,
                 error_detail=str(e)[:500],
+                **build_cost_fields(ep, 0),
             )
             if audit_enabled:
                 await record_audit_log(
@@ -564,6 +604,7 @@ async def _handle_proxy(
                 is_stream=is_streaming,
                 request_path=request_path,
                 error_detail=str(e)[:500],
+                **build_cost_fields(ep, resp_status),
             )
             if audit_enabled:
                 await record_audit_log(
