@@ -159,11 +159,15 @@ def _pick_int(*values) -> int | None:
 def _extract_special_usage(
     usage: dict,
 ) -> tuple[int | None, int | None, int | None]:
-    prompt_details = usage.get("prompt_tokens_details") or usage.get(
-        "input_token_details"
+    prompt_details = (
+        usage.get("prompt_tokens_details")
+        or usage.get("input_tokens_details")
+        or usage.get("input_token_details")
     )
-    completion_details = usage.get("completion_tokens_details") or usage.get(
-        "output_token_details"
+    completion_details = (
+        usage.get("completion_tokens_details")
+        or usage.get("output_tokens_details")
+        or usage.get("output_token_details")
     )
 
     cached_input_tokens = None
@@ -222,6 +226,13 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
 
     for event in events:
         usage = event.get("usage")
+        if not usage:
+            response_payload = event.get("response")
+            if isinstance(response_payload, dict):
+                nested_usage = response_payload.get("usage")
+                if isinstance(nested_usage, dict):
+                    usage = nested_usage
+
         if usage and isinstance(usage, dict):
             input_tokens = _pick_int(
                 usage.get("prompt_tokens"),
@@ -273,6 +284,10 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
             cached_input_tokens = _pick_int(
                 gemini_usage.get("cachedContentTokenCount"),
                 cached_input_tokens,
+            )
+            reasoning_tokens = _pick_int(
+                gemini_usage.get("thoughtsTokenCount"),
+                reasoning_tokens,
             )
 
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
@@ -330,6 +345,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
             output_t = _pick_int(gemini_usage.get("candidatesTokenCount"))
             total_t = _pick_int(gemini_usage.get("totalTokenCount"))
             cached_input_tokens = _pick_int(gemini_usage.get("cachedContentTokenCount"))
+            reasoning_tokens = _pick_int(gemini_usage.get("thoughtsTokenCount"))
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
@@ -338,7 +354,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "total_tokens": total_t,
                 "cached_input_tokens": cached_input_tokens,
                 "cache_creation_tokens": None,
-                "reasoning_tokens": None,
+                "reasoning_tokens": reasoning_tokens,
             }
 
         if "input_tokens" in data and "usage" not in data:

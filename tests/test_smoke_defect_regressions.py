@@ -599,6 +599,80 @@ class TestDEF008_CacheCreationPricing:
         assert usage["cache_creation_tokens"] == 300
         assert usage["reasoning_tokens"] == 50
 
+    def test_extract_token_usage_parses_responses_api_usage_details(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usage": {
+                    "input_tokens": 300,
+                    "output_tokens": 100,
+                    "total_tokens": 400,
+                    "input_tokens_details": {"cached_tokens": 80},
+                    "output_tokens_details": {"reasoning_tokens": 25},
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 300
+        assert usage["output_tokens"] == 100
+        assert usage["total_tokens"] == 400
+        assert usage["cached_input_tokens"] == 80
+        assert usage["cache_creation_tokens"] is None
+        assert usage["reasoning_tokens"] == 25
+
+    def test_extract_token_usage_parses_response_completed_sse_usage(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = (
+            "event: response.completed\n"
+            'data: {"type":"response.completed","response":{"usage":{"input_tokens":75,"output_tokens":125,"total_tokens":200,"input_tokens_details":{"cached_tokens":32},"output_tokens_details":{"reasoning_tokens":64}}}}\n\n'
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 75
+        assert usage["output_tokens"] == 125
+        assert usage["total_tokens"] == 200
+        assert usage["cached_input_tokens"] == 32
+        assert usage["reasoning_tokens"] == 64
+
+    def test_extract_token_usage_parses_gemini_thoughts_tokens_json(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 41,
+                    "candidatesTokenCount": 19,
+                    "totalTokenCount": 60,
+                    "cachedContentTokenCount": 7,
+                    "thoughtsTokenCount": 11,
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 41
+        assert usage["output_tokens"] == 19
+        assert usage["total_tokens"] == 60
+        assert usage["cached_input_tokens"] == 7
+        assert usage["reasoning_tokens"] == 11
+
+    def test_extract_token_usage_parses_gemini_thoughts_tokens_sse(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = (
+            'data: {"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5,"totalTokenCount":17,"cachedContentTokenCount":3,"thoughtsTokenCount":9}}\n\n'
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 12
+        assert usage["output_tokens"] == 5
+        assert usage["total_tokens"] == 17
+        assert usage["cached_input_tokens"] == 3
+        assert usage["reasoning_tokens"] == 9
+
     def test_compute_cost_fields_includes_cache_creation_cost(self):
         from app.services.costing_service import (
             CostingSettingsSnapshot,
