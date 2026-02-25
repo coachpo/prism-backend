@@ -1273,6 +1273,42 @@ class TestDEF009_StreamOptionsCompatibility:
         result = inject_stream_options(body, "anthropic", "https://api.anthropic.com")
         assert result == body
 
+    def test_inject_stream_options_for_azure_openai_host(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "stream_options": {"custom_flag": "preserve-me"},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(
+            body,
+            "openai",
+            "https://myresource.openai.azure.com/openai/deployments/gpt-4o-mini",
+        )
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["stream_options"]["include_usage"] is True
+        assert parsed["stream_options"]["custom_flag"] == "preserve-me"
+
+    def test_inject_stream_options_keeps_additional_keys_on_openai(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "stream_options": {"include_usage": False, "trace_id": "abc123"},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", "https://api.openai.com/v1")
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["stream_options"]["include_usage"] is True
+        assert parsed["stream_options"]["trace_id"] == "abc123"
+
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
     def _make_endpoint(self, endpoint_id: int):
@@ -1362,3 +1398,180 @@ class TestDEF011_RuntimeEndpointActivityCheck:
 
         is_active = await _endpoint_is_active_now(mock_db, 999)
         assert is_active is False
+
+
+class TestDEF012_RuntimeEndpointToggleFailoverE2E:
+    @pytest.mark.asyncio
+    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(
+        self, tmp_path
+    ):
+        import sqlite3
+
+        import httpx
+        from fastapi import FastAPI
+        from sqlalchemy import select
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
+        from starlette.requests import Request
+
+        from app.core.database import Base
+        from app.models.models import Endpoint, ModelConfig, Provider
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer import (
+            _recovery_state,
+            build_attempt_plan as real_build_attempt_plan,
+        )
+
+        db_file = tmp_path / "def012_runtime_toggle.db"
+        engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+        session_factory = async_sessionmaker(
+            engine, expire_on_commit=False, class_=AsyncSession
+        )
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.sent_urls: list[str] = []
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                self.sent_urls.append(str(request.url))
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=json.dumps(
+                        {
+                            "id": "chatcmpl-ok",
+                            "usage": {
+                                "prompt_tokens": 1,
+                                "completion_tokens": 1,
+                                "total_tokens": 2,
+                            },
+                        }
+                    ).encode("utf-8"),
+                )
+
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+
+            async with session_factory() as seed_db:
+                provider = Provider(
+                    name="OpenAI DEF012",
+                    provider_type="openai",
+                    audit_enabled=False,
+                    audit_capture_bodies=False,
+                )
+                model = ModelConfig(
+                    provider=provider,
+                    model_id="gpt-4o-mini-def012",
+                    display_name="GPT-4o Mini DEF012",
+                    model_type="native",
+                    lb_strategy="failover",
+                    failover_recovery_enabled=True,
+                    failover_recovery_cooldown_seconds=60,
+                    is_enabled=True,
+                )
+                primary = Endpoint(
+                    model_config_rel=model,
+                    base_url="https://primary.example.com/v1",
+                    api_key="sk-primary",
+                    is_active=True,
+                    priority=0,
+                    description="primary",
+                )
+                secondary = Endpoint(
+                    model_config_rel=model,
+                    base_url="https://secondary.example.com/v1",
+                    api_key="sk-secondary",
+                    is_active=True,
+                    priority=1,
+                    description="secondary",
+                )
+                seed_db.add_all([provider, model, primary, secondary])
+                await seed_db.commit()
+                await seed_db.refresh(primary)
+                await seed_db.refresh(secondary)
+                primary_id = primary.id
+                secondary_id = secondary.id
+
+            async with session_factory() as db:
+                client = DummyHttpClient()
+                app = FastAPI()
+                app.state.http_client = client
+                request = Request(
+                    {
+                        "type": "http",
+                        "http_version": "1.1",
+                        "method": "POST",
+                        "path": "/v1/chat/completions",
+                        "raw_path": b"/v1/chat/completions",
+                        "query_string": b"",
+                        "headers": [
+                            (b"host", b"testserver"),
+                            (b"content-type", b"application/json"),
+                        ],
+                        "client": ("testclient", 50000),
+                        "server": ("testserver", 80),
+                        "scheme": "http",
+                        "app": app,
+                    }
+                )
+
+                raw_body = json.dumps(
+                    {
+                        "model": "gpt-4o-mini-def012",
+                        "messages": [{"role": "user", "content": "hi"}],
+                    }
+                ).encode("utf-8")
+
+                def build_plan_and_disable_primary(model_config, now_mono):
+                    plan = real_build_attempt_plan(model_config, now_mono)
+                    assert [ep.id for ep in plan] == [primary_id, secondary_id]
+                    with sqlite3.connect(db_file) as conn:
+                        conn.execute(
+                            "UPDATE endpoints SET is_active = 0 WHERE id = ?",
+                            (primary_id,),
+                        )
+                        conn.commit()
+                    return plan
+
+                with (
+                    patch(
+                        "app.routers.proxy.build_attempt_plan",
+                        side_effect=build_plan_and_disable_primary,
+                    ),
+                    patch("app.routers.proxy.log_request", AsyncMock(return_value=123)),
+                ):
+                    response = await _handle_proxy(
+                        request=request,
+                        db=db,
+                        raw_body=raw_body,
+                        request_path="/v1/chat/completions",
+                    )
+
+                assert response.status_code == 200
+                assert len(client.sent_urls) == 1
+                assert "secondary.example.com" in client.sent_urls[0]
+
+                primary_row = await db.execute(
+                    select(Endpoint.is_active).where(Endpoint.id == primary_id)
+                )
+                secondary_row = await db.execute(
+                    select(Endpoint.is_active).where(Endpoint.id == secondary_id)
+                )
+                assert primary_row.scalar_one() is False
+                assert secondary_row.scalar_one() is True
+        finally:
+            _recovery_state.clear()
+            await engine.dispose()
