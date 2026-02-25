@@ -1,4 +1,7 @@
+import asyncio
 import json
+import logging
+from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1027,6 +1030,57 @@ class TestDEF007_EndpointIdentityInLogs:
 
         assert result is None
 
+    @pytest.mark.asyncio
+    async def test_log_request_returns_none_on_cancelled_error(self):
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            result = await log_request(
+                model_id="test-model",
+                provider_type="openai",
+                endpoint_id=1,
+                endpoint_base_url="http://example.com",
+                status_code=200,
+                response_time_ms=100,
+                is_stream=True,
+                request_path="/v1/responses",
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_record_audit_log_ignores_cancelled_error(self):
+        from app.services.audit_service import record_audit_log
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            await record_audit_log(
+                request_log_id=1,
+                provider_id=1,
+                model_id="gpt-4o-mini",
+                request_method="POST",
+                request_url="https://api.openai.com/v1/responses",
+                request_headers={"authorization": "Bearer sk-test"},
+                request_body=b'{"model":"gpt-4o-mini"}',
+                response_status=200,
+                response_headers={"content-type": "text/event-stream"},
+                response_body=None,
+                is_stream=True,
+                duration_ms=15,
+                capture_bodies=False,
+            )
+
     def test_audit_log_schema_includes_endpoint_fields(self):
         from app.schemas.schemas import AuditLogListItem, AuditLogDetail
 
@@ -1971,3 +2025,276 @@ class TestDEF020_FrontendBuildTypeCheck:
         pricing_snapshot_missing_special_token_price_policy compiles.
         """
         pass
+
+
+class TestDEF021_StreamingCancellationResilience:
+    @staticmethod
+    def _build_request(app, raw_body: bytes):
+        from starlette.requests import Request
+
+        async def receive_message():
+            return {
+                "type": "http.request",
+                "body": raw_body,
+                "more_body": False,
+            }
+
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/responses",
+                "raw_path": b"/v1/responses",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50001),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            },
+            receive=receive_message,
+        )
+        return request
+
+    @staticmethod
+    def _build_model_config_and_endpoint():
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = True
+        provider.audit_capture_bodies = False
+        provider.id = 11
+
+        endpoint = MagicMock()
+        endpoint.id = 101
+        endpoint.base_url = "https://api.openai.com/v1"
+        endpoint.api_key = "sk-test"
+        endpoint.auth_type = None
+        endpoint.description = "primary"
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.lb_strategy = "single"
+        model_config.failover_recovery_enabled = False
+        model_config.failover_recovery_cooldown_seconds = 60
+
+        return model_config, endpoint
+
+    @staticmethod
+    def _build_db_mock():
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        return mock_db
+
+    @staticmethod
+    async def _wait_for_asyncmock_calls(
+        mock_obj: AsyncMock, expected_min_calls: int = 1
+    ):
+        for _ in range(40):
+            if mock_obj.await_count >= expected_min_calls:
+                return
+            await asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_cancel_keeps_success_and_finalizes_logging(self, caplog):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        class CancelMidStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                raise asyncio.CancelledError()
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CancelMidStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_endpoints",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy.log_request", AsyncMock(return_value=501)
+            ) as log_mock,
+            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+            )
+
+            assert response.status_code == 200
+            assert isinstance(response, StreamingResponse)
+            stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+            first = await stream.__anext__()
+            assert first.startswith(b"data: ")
+
+            with pytest.raises(asyncio.CancelledError):
+                await stream.__anext__()
+
+            await self._wait_for_asyncmock_calls(log_mock)
+            await self._wait_for_asyncmock_calls(audit_mock)
+
+            assert upstream_resp.closed is True
+            log_mock.assert_awaited_once()
+            audit_mock.assert_awaited_once()
+            assert "Failed to log streaming request" not in caplog.text
+            assert "Failed to record streaming audit log" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_stream_generator_close_triggers_detached_finalize_without_error(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        class SlowStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                await asyncio.sleep(1)
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = SlowStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_endpoints",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy.log_request", AsyncMock(return_value=777)
+            ) as log_mock,
+            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+            )
+
+            assert response.status_code == 200
+            assert isinstance(response, StreamingResponse)
+            stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+            first = await stream.__anext__()
+            assert first.startswith(b"data: ")
+            await stream.aclose()
+
+            await self._wait_for_asyncmock_calls(log_mock)
+            await self._wait_for_asyncmock_calls(audit_mock)
+
+            assert upstream_resp.closed is True
+            log_mock.assert_awaited_once()
+            audit_mock.assert_awaited_once()
+            assert "Failed to log streaming request" not in caplog.text
+            assert "Failed to record streaming audit log" not in caplog.text

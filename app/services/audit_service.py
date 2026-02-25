@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -107,5 +108,7 @@ async def record_audit_log(
         async with AsyncSessionLocal() as session:
             session.add(entry)
             await session.commit()
+    except asyncio.CancelledError:
+        logger.debug("Audit logging cancelled")
     except Exception:
         logger.exception("Failed to record audit log")

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import re
 import time
@@ -41,6 +42,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["proxy"])
 
 MODEL_ID_HEADER = "x-model-id"
+
+
+def _track_detached_task(task: asyncio.Task[None], *, name: str) -> None:
+    def _on_done(done_task: asyncio.Task[None]) -> None:
+        try:
+            done_task.result()
+        except asyncio.CancelledError:
+            logger.debug("%s cancelled before completion", name)
+        except Exception:
+            logger.exception("%s failed", name)
+
+    task.add_done_callback(_on_done)
+
 
 # Gemini URL pattern: /v1beta/models/{model_id}:{action}
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
@@ -206,9 +220,7 @@ async def _handle_proxy(
         ep_desc = ep.description
         endpoint_body = raw_body
         if is_streaming and endpoint_body:
-            endpoint_body = inject_stream_options(
-                endpoint_body, provider_type
-            )
+            endpoint_body = inject_stream_options(endpoint_body, provider_type)
 
         start_time = time.monotonic()
 
@@ -342,65 +354,112 @@ async def _handle_proxy(
                 async def _iter_and_log(
                     resp: httpx.Response,
                 ) -> AsyncGenerator[bytes, None]:
-                    rl_id = None
                     accumulated = bytearray()
+                    stream_cancelled = False
                     try:
                         async for chunk in resp.aiter_bytes():
                             if chunk:
                                 accumulated.extend(chunk)
                                 yield chunk
                     except GeneratorExit:
+                        stream_cancelled = True
                         return
-                    except BaseException as e:
-                        logger.error(f"Stream error: {e}")
+                    except asyncio.CancelledError:
+                        stream_cancelled = True
+                        logger.debug("Streaming response cancelled by client")
+                        raise
+                    except Exception as exc:
+                        logger.warning("Stream iteration failed: %s", exc)
                     finally:
                         try:
-                            await resp.aclose()
+                            await asyncio.shield(resp.aclose())
                         except BaseException:
                             pass
-                        try:
-                            tokens = extract_token_usage(bytes(accumulated))
-                            rl_id = await log_request(
-                                model_id=_log_model_id,
-                                provider_type=_log_provider_type,
-                                endpoint_id=_log_endpoint_id,
-                                endpoint_base_url=_log_endpoint_base_url,
-                                endpoint_description=_log_endpoint_desc,
-                                status_code=_log_status_code,
-                                response_time_ms=_log_elapsed_ms,
-                                is_stream=True,
-                                request_path=_log_request_path,
-                                input_tokens=tokens.get("input_tokens"),
-                                output_tokens=tokens.get("output_tokens"),
-                                total_tokens=tokens.get("total_tokens"),
-                                **build_cost_fields(
-                                    _log_endpoint, _log_status_code, tokens
-                                ),
-                            )
-                        except BaseException:
-                            logger.exception("Failed to log streaming request")
-                        if _audit_enabled:
+
+                        payload = bytes(accumulated)
+
+                        async def _finalize_stream() -> None:
+                            rl_id = None
                             try:
-                                await record_audit_log(
-                                    request_log_id=rl_id,
-                                    provider_id=_audit_provider_id,
+                                tokens = extract_token_usage(payload)
+                                rl_id = await log_request(
+                                    model_id=_log_model_id,
+                                    provider_type=_log_provider_type,
                                     endpoint_id=_log_endpoint_id,
                                     endpoint_base_url=_log_endpoint_base_url,
                                     endpoint_description=_log_endpoint_desc,
-                                    model_id=_log_model_id,
-                                    request_method=_audit_method,
-                                    request_url=_audit_upstream_url,
-                                    request_headers=_audit_headers,
-                                    request_body=_audit_raw_body,
-                                    response_status=_log_status_code,
-                                    response_headers=_audit_resp_headers,
-                                    response_body=None,
+                                    status_code=_log_status_code,
+                                    response_time_ms=_log_elapsed_ms,
                                     is_stream=True,
-                                    duration_ms=_log_elapsed_ms,
-                                    capture_bodies=_audit_capture_bodies,
+                                    request_path=_log_request_path,
+                                    input_tokens=tokens.get("input_tokens"),
+                                    output_tokens=tokens.get("output_tokens"),
+                                    total_tokens=tokens.get("total_tokens"),
+                                    **build_cost_fields(
+                                        _log_endpoint, _log_status_code, tokens
+                                    ),
                                 )
-                            except BaseException:
-                                logger.exception("Failed to record streaming audit log")
+                            except asyncio.CancelledError:
+                                logger.debug(
+                                    "Streaming request logging cancelled before completion"
+                                )
+                                return
+                            except Exception:
+                                logger.exception("Failed to log streaming request")
+
+                            if _audit_enabled:
+                                try:
+                                    await record_audit_log(
+                                        request_log_id=rl_id,
+                                        provider_id=_audit_provider_id,
+                                        endpoint_id=_log_endpoint_id,
+                                        endpoint_base_url=_log_endpoint_base_url,
+                                        endpoint_description=_log_endpoint_desc,
+                                        model_id=_log_model_id,
+                                        request_method=_audit_method,
+                                        request_url=_audit_upstream_url,
+                                        request_headers=_audit_headers,
+                                        request_body=_audit_raw_body,
+                                        response_status=_log_status_code,
+                                        response_headers=_audit_resp_headers,
+                                        response_body=None,
+                                        is_stream=True,
+                                        duration_ms=_log_elapsed_ms,
+                                        capture_bodies=_audit_capture_bodies,
+                                    )
+                                except asyncio.CancelledError:
+                                    logger.debug(
+                                        "Streaming audit logging cancelled before completion"
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "Failed to record streaming audit log"
+                                    )
+
+                        try:
+                            finalize_task = asyncio.create_task(
+                                _finalize_stream(),
+                                name="proxy-stream-finalize",
+                            )
+                        except RuntimeError:
+                            logger.debug(
+                                "Event loop closed before stream finalization could be scheduled"
+                            )
+                        else:
+                            if stream_cancelled:
+                                _track_detached_task(
+                                    finalize_task,
+                                    name="proxy stream finalization",
+                                )
+                            else:
+                                try:
+                                    await asyncio.shield(finalize_task)
+                                except asyncio.CancelledError:
+                                    _track_detached_task(
+                                        finalize_task,
+                                        name="proxy stream finalization",
+                                    )
+                                    raise
 
                 media_type = upstream_resp.headers.get(
                     "content-type", "text/event-stream"

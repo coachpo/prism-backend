@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -103,6 +104,9 @@ async def log_request(
             await log_db.commit()
             await log_db.refresh(entry)
             return entry.id
+    except asyncio.CancelledError:
+        logger.debug("Request logging cancelled")
+        return None
     except Exception:
         logger.exception("Failed to log request")
         return None
