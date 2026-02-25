@@ -95,10 +95,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     cached_input_price=ep.cached_input_price,
                     cache_creation_price=ep.cache_creation_price,
                     reasoning_price=ep.reasoning_price,
-                    missing_special_token_policy=cast(
+                    missing_special_token_price_policy=cast(
                         Literal["MAP_TO_OUTPUT", "ZERO_COST"],
                         "ZERO_COST"
-                        if ep.missing_special_token_policy == "ZERO_COST"
+                        if ep.missing_special_token_price_policy == "ZERO_COST"
                         else "MAP_TO_OUTPUT",
                     ),
                     pricing_config_version=ep.pricing_config_version,
@@ -126,7 +126,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
     )
 
     data = ConfigExportResponse(
-        version=3,
+        version=4,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         models=exported_models,
@@ -181,10 +181,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version not in (2, 3):
+    if data.version != 4:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 2 or 3",
+            detail=f"Unsupported config version: {data.version}. Expected: 4",
         )
 
     if not data.providers:
@@ -272,7 +272,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 detail=f"Model '{m.model_id}' uses unsupported lb_strategy 'round_robin'. Use 'single' or 'failover'.",
             )
 
-    if data.version == 3 and data.user_settings is not None:
+    if data.version == 4 and data.user_settings is not None:
         seen_fx: set[tuple[str, int]] = set()
         for mapping in data.user_settings.endpoint_fx_mappings:
             key = (mapping.model_id, mapping.endpoint_id)
@@ -354,7 +354,7 @@ async def import_config(
                 cached_input_price=ep_data.cached_input_price,
                 cache_creation_price=ep_data.cache_creation_price,
                 reasoning_price=ep_data.reasoning_price,
-                missing_special_token_policy=ep_data.missing_special_token_policy,
+                missing_special_token_price_policy=ep_data.missing_special_token_price_policy,
                 pricing_config_version=ep_data.pricing_config_version,
             )
             db.add(ep)
@@ -385,7 +385,7 @@ async def import_config(
         )
         db.add(user_settings)
 
-    if data.version == 3 and data.user_settings is not None:
+    if data.version == 4 and data.user_settings is not None:
         user_settings.report_currency_code = data.user_settings.report_currency_code
         user_settings.report_currency_symbol = data.user_settings.report_currency_symbol
 

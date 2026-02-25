@@ -68,7 +68,7 @@ class EndpointBase(BaseModel):
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
-    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
 
@@ -132,7 +132,7 @@ class EndpointUpdate(BaseModel):
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
-    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
 
     @field_validator(
         "input_price",
@@ -193,7 +193,7 @@ class EndpointResponse(BaseModel):
     cached_input_price: str | None
     cache_creation_price: str | None
     reasoning_price: str | None
-    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
     pricing_config_version: int
     health_status: str
     health_detail: str | None
@@ -330,13 +330,13 @@ class RequestLogResponse(BaseModel):
     billable_flag: bool | None = None
     priced_flag: bool | None = None
     unpriced_reason: str | None = None
-    cached_input_tokens: int | None = None
-    cache_creation_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
     reasoning_tokens: int | None = None
     input_cost_micros: int | None = None
     output_cost_micros: int | None = None
-    cached_input_cost_micros: int | None = None
-    cache_creation_cost_micros: int | None = None
+    cache_read_input_cost_micros: int | None = None
+    cache_creation_input_cost_micros: int | None = None
     reasoning_cost_micros: int | None = None
     total_cost_original_micros: int | None = None
     total_cost_user_currency_micros: int | None = None
@@ -348,10 +348,10 @@ class RequestLogResponse(BaseModel):
     pricing_snapshot_unit: str | None = None
     pricing_snapshot_input: str | None = None
     pricing_snapshot_output: str | None = None
-    pricing_snapshot_cached_input: str | None = None
-    pricing_snapshot_cache_creation: str | None = None
+    pricing_snapshot_cache_read_input: str | None = None
+    pricing_snapshot_cache_creation_input: str | None = None
     pricing_snapshot_reasoning: str | None = None
-    pricing_snapshot_policy: str | None = None
+    pricing_snapshot_missing_special_token_price_policy: str | None = None
     pricing_config_version_used: int | None = None
     request_path: str
     error_detail: str | None
@@ -464,8 +464,8 @@ class SpendingSummaryResponse(BaseModel):
     unpriced_request_count: int
     total_input_tokens: int
     total_output_tokens: int
-    total_cached_input_tokens: int
-    total_cache_creation_tokens: int
+    total_cache_read_input_tokens: int
+    total_cache_creation_input_tokens: int
     total_reasoning_tokens: int
     total_tokens: int
     avg_cost_per_successful_request_micros: int
@@ -522,7 +522,7 @@ class ConfigEndpointExport(BaseModel):
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
-    missing_special_token_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
     pricing_config_version: int = 0
@@ -562,7 +562,7 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[2, 3] = 3
+    version: Literal[4] = 4
     exported_at: datetime
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]
@@ -571,7 +571,7 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[2, 3]
+    version: Literal[4]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     models: list[ConfigModelExport]

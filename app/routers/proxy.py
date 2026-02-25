@@ -175,8 +175,8 @@ async def _handle_proxy(
             status_code=status_code,
             input_tokens=token_values.get("input_tokens"),
             output_tokens=token_values.get("output_tokens"),
-            cached_input_tokens=token_values.get("cached_input_tokens"),
-            cache_creation_tokens=token_values.get("cache_creation_tokens"),
+            cache_read_input_tokens=token_values.get("cache_read_input_tokens"),
+            cache_creation_input_tokens=token_values.get("cache_creation_input_tokens"),
             reasoning_tokens=token_values.get("reasoning_tokens"),
             settings=costing_settings,
         )
@@ -207,7 +207,7 @@ async def _handle_proxy(
         endpoint_body = raw_body
         if is_streaming and endpoint_body:
             endpoint_body = inject_stream_options(
-                endpoint_body, provider_type, ep.base_url
+                endpoint_body, provider_type
             )
 
         start_time = time.monotonic()

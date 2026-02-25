@@ -488,7 +488,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=2,
+            version=4,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -554,7 +554,7 @@ class TestDEF008_CacheCreationPricing:
         cached_input_price: str,
         cache_creation_price: str,
         reasoning_price: str,
-        missing_special_token_policy: str,
+        missing_special_token_price_policy: str,
     ):
         from app.models.models import Endpoint
 
@@ -570,7 +570,7 @@ class TestDEF008_CacheCreationPricing:
             cached_input_price=cached_input_price,
             cache_creation_price=cache_creation_price,
             reasoning_price=reasoning_price,
-            missing_special_token_policy=missing_special_token_policy,
+            missing_special_token_price_policy=missing_special_token_price_policy,
             pricing_config_version=9,
         )
         endpoint.id = 1
@@ -595,8 +595,8 @@ class TestDEF008_CacheCreationPricing:
         ).encode("utf-8")
 
         usage = extract_token_usage(body)
-        assert usage["cached_input_tokens"] == 200
-        assert usage["cache_creation_tokens"] == 300
+        assert usage["cache_read_input_tokens"] == 200
+        assert usage["cache_creation_input_tokens"] == 300
         assert usage["reasoning_tokens"] == 50
 
     def test_extract_token_usage_parses_responses_api_usage_details(self):
@@ -618,8 +618,8 @@ class TestDEF008_CacheCreationPricing:
         assert usage["input_tokens"] == 300
         assert usage["output_tokens"] == 100
         assert usage["total_tokens"] == 400
-        assert usage["cached_input_tokens"] == 80
-        assert usage["cache_creation_tokens"] is None
+        assert usage["cache_read_input_tokens"] == 80
+        assert usage["cache_creation_input_tokens"] == 0
         assert usage["reasoning_tokens"] == 25
 
     def test_extract_token_usage_parses_response_completed_sse_usage(self):
@@ -634,7 +634,7 @@ class TestDEF008_CacheCreationPricing:
         assert usage["input_tokens"] == 75
         assert usage["output_tokens"] == 125
         assert usage["total_tokens"] == 200
-        assert usage["cached_input_tokens"] == 32
+        assert usage["cache_read_input_tokens"] == 32
         assert usage["reasoning_tokens"] == 64
 
     def test_extract_token_usage_parses_gemini_thoughts_tokens_json(self):
@@ -656,7 +656,7 @@ class TestDEF008_CacheCreationPricing:
         assert usage["input_tokens"] == 41
         assert usage["output_tokens"] == 19
         assert usage["total_tokens"] == 60
-        assert usage["cached_input_tokens"] == 7
+        assert usage["cache_read_input_tokens"] == 7
         assert usage["reasoning_tokens"] == 11
 
     def test_extract_token_usage_parses_gemini_thoughts_tokens_sse(self):
@@ -670,7 +670,7 @@ class TestDEF008_CacheCreationPricing:
         assert usage["input_tokens"] == 12
         assert usage["output_tokens"] == 5
         assert usage["total_tokens"] == 17
-        assert usage["cached_input_tokens"] == 3
+        assert usage["cache_read_input_tokens"] == 3
         assert usage["reasoning_tokens"] == 9
 
     def test_compute_cost_fields_includes_cache_creation_cost(self):
@@ -686,7 +686,7 @@ class TestDEF008_CacheCreationPricing:
             cached_input_price="1",
             cache_creation_price="3",
             reasoning_price="5",
-            missing_special_token_policy="ZERO_COST",
+            missing_special_token_price_policy="ZERO_COST",
         )
 
         result = compute_cost_fields(
@@ -695,8 +695,8 @@ class TestDEF008_CacheCreationPricing:
             status_code=200,
             input_tokens=1_000_000,
             output_tokens=1_000_000,
-            cached_input_tokens=100_000,
-            cache_creation_tokens=200_000,
+            cache_read_input_tokens=100_000,
+            cache_creation_input_tokens=200_000,
             reasoning_tokens=300_000,
             settings=CostingSettingsSnapshot(
                 report_currency_code="USD",
@@ -705,10 +705,10 @@ class TestDEF008_CacheCreationPricing:
             ),
         )
 
-        assert result["cache_creation_tokens"] == 200_000
-        assert result["cache_creation_cost_micros"] == 600_000
+        assert result["cache_creation_input_tokens"] == 200_000
+        assert result["cache_creation_input_cost_micros"] == 600_000
         assert result["total_cost_original_micros"] == 8_200_000
-        assert result["pricing_snapshot_cache_creation"] == "3.000000"
+        assert result["pricing_snapshot_cache_creation_input"] == "3.000000"
 
     def test_compute_cost_fields_maps_missing_cache_creation_by_policy(self):
         from app.services.costing_service import (
@@ -723,7 +723,7 @@ class TestDEF008_CacheCreationPricing:
             cached_input_price="0",
             cache_creation_price="2",
             reasoning_price="0",
-            missing_special_token_policy="MAP_TO_OUTPUT",
+            missing_special_token_price_policy="MAP_TO_OUTPUT",
         )
 
         result = compute_cost_fields(
@@ -732,8 +732,8 @@ class TestDEF008_CacheCreationPricing:
             status_code=200,
             input_tokens=0,
             output_tokens=1_000,
-            cached_input_tokens=None,
-            cache_creation_tokens=None,
+            cache_read_input_tokens=None,
+            cache_creation_input_tokens=None,
             reasoning_tokens=None,
             settings=CostingSettingsSnapshot(
                 report_currency_code="USD",
@@ -742,9 +742,9 @@ class TestDEF008_CacheCreationPricing:
             ),
         )
 
-        assert result["cache_creation_tokens"] == 1_000
-        assert result["cache_creation_cost_micros"] == 2_000_000
-        assert result["total_cost_original_micros"] == 2_000_000
+        assert result["cache_creation_input_tokens"] is None
+        assert result["cache_creation_input_cost_micros"] == 0
+        assert result["total_cost_original_micros"] == 0
 
 
 class TestFailoverRecoveryFieldValidation:
@@ -873,7 +873,7 @@ class TestFailoverRecoveryFieldValidation:
                     "models": [],
                 }
             )
-        assert "Input should be 2" in str(exc_info.value)
+        assert "Input should be 4" in str(exc_info.value)
 
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
@@ -883,7 +883,7 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 2,
+                    "version": 4,
                     "providers": [],
                     "models": [
                         {
@@ -917,7 +917,7 @@ class TestFailoverRecoveryFieldValidation:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=2,
+            version=4,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -952,7 +952,7 @@ class TestFailoverRecoveryFieldValidation:
         exported = config.model_dump(mode="json")
         reimported = ConfigImportRequest(**exported)
 
-        assert reimported.version == 2
+        assert reimported.version == 4
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.lb_strategy == "failover"
@@ -1286,7 +1286,7 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=2,
+            version=4,
             exported_at=datetime.now(timezone.utc),
             providers=[],
             models=[],
@@ -1315,12 +1315,12 @@ class TestDEF009_StreamOptionsCompatibility:
             }
         ).encode("utf-8")
 
-        result = inject_stream_options(body, "openai", "https://api.openai.com/v1")
+        result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
         assert parsed["stream_options"]["include_usage"] is True
 
-    def test_strip_stream_options_for_openai_compatible_third_party(self):
+    def test_inject_stream_options_for_all_openai_upstreams(self):
         body = json.dumps(
             {
                 "model": "gpt-4o-mini",
@@ -1330,10 +1330,11 @@ class TestDEF009_StreamOptionsCompatibility:
             }
         ).encode("utf-8")
 
-        result = inject_stream_options(body, "openai", "https://jp.duckcoding.com/v1")
+        result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert "stream_options" not in parsed
+        # After removing hostname-gating, all OpenAI streaming requests get stream_options
+        assert parsed["stream_options"]["include_usage"] is True
 
     def test_non_openai_provider_body_is_unchanged(self):
         body = json.dumps(
@@ -1344,7 +1345,7 @@ class TestDEF009_StreamOptionsCompatibility:
             }
         ).encode("utf-8")
 
-        result = inject_stream_options(body, "anthropic", "https://api.anthropic.com")
+        result = inject_stream_options(body, "anthropic")
         assert result == body
 
     def test_inject_stream_options_for_azure_openai_host(self):
@@ -1357,11 +1358,7 @@ class TestDEF009_StreamOptionsCompatibility:
             }
         ).encode("utf-8")
 
-        result = inject_stream_options(
-            body,
-            "openai",
-            "https://myresource.openai.azure.com/openai/deployments/gpt-4o-mini",
-        )
+        result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
         assert parsed["stream_options"]["include_usage"] is True
@@ -1377,7 +1374,7 @@ class TestDEF009_StreamOptionsCompatibility:
             }
         ).encode("utf-8")
 
-        result = inject_stream_options(body, "openai", "https://api.openai.com/v1")
+        result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
         assert parsed["stream_options"]["include_usage"] is True
@@ -1649,3 +1646,328 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         finally:
             _recovery_state.clear()
             await engine.dispose()
+
+
+class TestDEF013_AnthropicTopLevelCacheReadTokens:
+    """DEF-013: Anthropic JSON usage with top-level cache_read_input_tokens parses correctly."""
+
+    def test_anthropic_top_level_cache_read(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usage": {
+                    "input_tokens": 500,
+                    "output_tokens": 200,
+                    "cache_read_input_tokens": 150,
+                    "cache_creation_input_tokens": 80,
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 500
+        assert usage["output_tokens"] == 200
+        assert usage["cache_read_input_tokens"] == 150
+        assert usage["cache_creation_input_tokens"] == 80
+
+
+class TestDEF014_MissingSpecialFieldsYieldZero:
+    """DEF-014: Usage present + missing special fields yields 0 (not None)."""
+
+    def test_json_usage_missing_special_fields_are_zero(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 100
+        assert usage["output_tokens"] == 50
+        assert usage["cache_read_input_tokens"] == 0
+        assert usage["cache_creation_input_tokens"] == 0
+        assert usage["reasoning_tokens"] == 0
+
+    def test_json_usage_empty_object_special_fields_are_zero(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps({"usage": {}}).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] is None
+        assert usage["output_tokens"] is None
+        assert usage["total_tokens"] is None
+        assert usage["cache_read_input_tokens"] == 0
+        assert usage["cache_creation_input_tokens"] == 0
+        assert usage["reasoning_tokens"] == 0
+
+    def test_sse_usage_empty_object_special_fields_are_zero(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = 'data: {"usage":{}}\n\n'.encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] is None
+        assert usage["output_tokens"] is None
+        assert usage["total_tokens"] is None
+        assert usage["cache_read_input_tokens"] == 0
+        assert usage["cache_creation_input_tokens"] == 0
+        assert usage["reasoning_tokens"] == 0
+
+    def test_gemini_usage_missing_special_fields_are_zero(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usageMetadata": {
+                    "promptTokenCount": 40,
+                    "candidatesTokenCount": 20,
+                    "totalTokenCount": 60,
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] == 40
+        assert usage["output_tokens"] == 20
+        assert usage["cache_read_input_tokens"] == 0
+        assert usage["reasoning_tokens"] == 0
+
+
+class TestDEF015_NoUsageBlockYieldsNull:
+    """DEF-015: No usage block yields None for all token fields."""
+
+    def test_no_usage_key_returns_all_none(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps({"id": "chatcmpl-123", "choices": []}).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["input_tokens"] is None
+        assert usage["output_tokens"] is None
+        assert usage["total_tokens"] is None
+        assert usage["cache_read_input_tokens"] is None
+        assert usage["cache_creation_input_tokens"] is None
+        assert usage["reasoning_tokens"] is None
+
+
+class TestDEF016_MapToOutputFallback:
+    """DEF-016: MAP_TO_OUTPUT applies output_price to missing special prices."""
+
+    @staticmethod
+    def _build_endpoint(
+        *,
+        pricing_unit: str,
+        input_price: str,
+        output_price: str,
+        cached_input_price: str | None,
+        cache_creation_price: str | None,
+        reasoning_price: str | None,
+        missing_special_token_price_policy: str,
+    ):
+        from app.models.models import Endpoint
+
+        endpoint = Endpoint(
+            model_config_id=1,
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            pricing_enabled=True,
+            pricing_unit=pricing_unit,
+            pricing_currency_code="USD",
+            input_price=input_price,
+            output_price=output_price,
+            cached_input_price=cached_input_price,
+            cache_creation_price=cache_creation_price,
+            reasoning_price=reasoning_price,
+            missing_special_token_price_policy=missing_special_token_price_policy,
+            pricing_config_version=10,
+        )
+        endpoint.id = 1
+        return endpoint
+
+    def test_map_to_output_uses_output_price_for_missing_specials(self):
+        from app.services.costing_service import (
+            CostingSettingsSnapshot,
+            compute_cost_fields,
+        )
+
+        endpoint = self._build_endpoint(
+            pricing_unit="PER_1M",
+            input_price="2",
+            output_price="4",
+            cached_input_price=None,
+            cache_creation_price=None,
+            reasoning_price=None,
+            missing_special_token_price_policy="MAP_TO_OUTPUT",
+        )
+
+        result = compute_cost_fields(
+            endpoint=endpoint,
+            model_id="test-model",
+            status_code=200,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cache_read_input_tokens=500_000,
+            cache_creation_input_tokens=500_000,
+            reasoning_tokens=500_000,
+            settings=CostingSettingsSnapshot(
+                report_currency_code="USD",
+                report_currency_symbol="$",
+                endpoint_fx_map={},
+            ),
+        )
+
+        # All three special costs should use output_price (4 per 1M)
+        assert result["cache_read_input_cost_micros"] == 2_000_000  # 500k * 4/1M * 1e6
+        assert result["cache_creation_input_cost_micros"] == 2_000_000
+        assert result["reasoning_cost_micros"] == 2_000_000
+        # Snapshot should reflect the fallback price
+        assert result["pricing_snapshot_cache_read_input"] == "4.000000"
+        assert result["pricing_snapshot_cache_creation_input"] == "4.000000"
+        assert result["pricing_snapshot_reasoning"] == "4.000000"
+
+
+class TestDEF017_ZeroCostFallback:
+    """DEF-017: ZERO_COST with missing special prices produces 0 special costs."""
+
+    @staticmethod
+    def _build_endpoint(
+        *,
+        pricing_unit: str,
+        input_price: str,
+        output_price: str,
+        cached_input_price: str | None,
+        cache_creation_price: str | None,
+        reasoning_price: str | None,
+        missing_special_token_price_policy: str,
+    ):
+        from app.models.models import Endpoint
+
+        endpoint = Endpoint(
+            model_config_id=1,
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            pricing_enabled=True,
+            pricing_unit=pricing_unit,
+            pricing_currency_code="USD",
+            input_price=input_price,
+            output_price=output_price,
+            cached_input_price=cached_input_price,
+            cache_creation_price=cache_creation_price,
+            reasoning_price=reasoning_price,
+            missing_special_token_price_policy=missing_special_token_price_policy,
+            pricing_config_version=10,
+        )
+        endpoint.id = 1
+        return endpoint
+
+    def test_zero_cost_produces_zero_for_missing_specials(self):
+        from app.services.costing_service import (
+            CostingSettingsSnapshot,
+            compute_cost_fields,
+        )
+
+        endpoint = self._build_endpoint(
+            pricing_unit="PER_1M",
+            input_price="2",
+            output_price="4",
+            cached_input_price=None,
+            cache_creation_price=None,
+            reasoning_price=None,
+            missing_special_token_price_policy="ZERO_COST",
+        )
+
+        result = compute_cost_fields(
+            endpoint=endpoint,
+            model_id="test-model",
+            status_code=200,
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cache_read_input_tokens=500_000,
+            cache_creation_input_tokens=500_000,
+            reasoning_tokens=500_000,
+            settings=CostingSettingsSnapshot(
+                report_currency_code="USD",
+                report_currency_symbol="$",
+                endpoint_fx_map={},
+            ),
+        )
+
+        # All three special costs should be zero
+        assert result["cache_read_input_cost_micros"] == 0
+        assert result["cache_creation_input_cost_micros"] == 0
+        assert result["reasoning_cost_micros"] == 0
+        # Snapshot should reflect zero price
+        assert result["pricing_snapshot_cache_read_input"] == "0.000000"
+        assert result["pricing_snapshot_cache_creation_input"] == "0.000000"
+        assert result["pricing_snapshot_reasoning"] == "0.000000"
+
+
+class TestDEF018_SpecialTokensNeverCopiedFromOutput:
+    """DEF-018: Special token counts never substituted from output_tokens."""
+
+    def test_special_fields_not_copied_from_output(self):
+        from app.services.stats_service import extract_token_usage
+
+        body = json.dumps(
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 500,
+                    "total_tokens": 600,
+                }
+            }
+        ).encode("utf-8")
+
+        usage = extract_token_usage(body)
+        assert usage["output_tokens"] == 500
+        # Special fields must be 0, NOT 500 (never copied from output)
+        assert usage["cache_read_input_tokens"] == 0
+        assert usage["cache_creation_input_tokens"] == 0
+        assert usage["reasoning_tokens"] == 0
+
+
+class TestDEF019_InjectStreamOptionsHostAgnostic:
+    """DEF-019: inject_stream_options works for any host when provider_type is openai."""
+
+    def test_inject_for_openai_provider_type(self):
+        body = json.dumps({"model": "gpt-4", "stream": True}).encode("utf-8")
+        result = inject_stream_options(body, "openai")
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["stream_options"] == {"include_usage": True}
+
+    def test_no_inject_for_anthropic_provider_type(self):
+        body = json.dumps({"model": "claude-3", "stream": True}).encode("utf-8")
+        result = inject_stream_options(body, "anthropic")
+        assert result is not None
+        parsed = json.loads(result)
+        assert "stream_options" not in parsed
+
+    def test_inject_for_third_party_openai_compatible_host(self):
+        """Third-party host using openai provider_type should still get include_usage."""
+        body = json.dumps({"model": "custom-model", "stream": True}).encode("utf-8")
+        result = inject_stream_options(body, "openai")
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["stream_options"] == {"include_usage": True}
+
+
+class TestDEF020_FrontendBuildTypeCheck:
+    """DEF-020: Frontend build confirms renamed snapshot policy field compiles."""
+
+    def test_placeholder_for_frontend_build(self):
+        """
+        This test is a placeholder. The actual verification is running:
+            cd frontend && pnpm run build
+        which validates that the renamed field
+        pricing_snapshot_missing_special_token_price_policy compiles.
+        """
+        pass

@@ -295,29 +295,10 @@ def extract_stream_flag(raw_body: bytes) -> bool:
         return False
 
 
-def _supports_stream_options(provider_type: str, base_url: str | None) -> bool:
-    if provider_type != "openai":
-        return False
-    if not base_url:
-        return False
-
-    try:
-        host = (urlparse(base_url).hostname or "").lower()
-    except ValueError:
-        return False
-
-    if not host:
-        return False
-
-    if host == "api.openai.com":
-        return True
-
-    return host.endswith(".openai.azure.com")
-
-
 def inject_stream_options(
-    raw_body: bytes | None, provider_type: str, base_url: str | None = None
+    raw_body: bytes | None, provider_type: str
 ) -> bytes | None:
+    """Inject stream_options.include_usage=true for OpenAI streaming requests."""
     if not raw_body:
         return raw_body
     if provider_type != "openai":
@@ -327,13 +308,6 @@ def inject_stream_options(
         parsed = json.loads(raw_body)
         if not parsed.get("stream"):
             return raw_body
-
-        supports_stream_options = _supports_stream_options(provider_type, base_url)
-        if not supports_stream_options:
-            if "stream_options" not in parsed:
-                return raw_body
-            parsed.pop("stream_options", None)
-            return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
 
         stream_opts = parsed.get("stream_options") or {}
         if not isinstance(stream_opts, dict):

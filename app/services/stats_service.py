@@ -27,13 +27,13 @@ async def log_request(
     billable_flag: bool | None = None,
     priced_flag: bool | None = None,
     unpriced_reason: str | None = None,
-    cached_input_tokens: int | None = None,
-    cache_creation_tokens: int | None = None,
+    cache_read_input_tokens: int | None = None,
+    cache_creation_input_tokens: int | None = None,
     reasoning_tokens: int | None = None,
     input_cost_micros: int | None = None,
     output_cost_micros: int | None = None,
-    cached_input_cost_micros: int | None = None,
-    cache_creation_cost_micros: int | None = None,
+    cache_read_input_cost_micros: int | None = None,
+    cache_creation_input_cost_micros: int | None = None,
     reasoning_cost_micros: int | None = None,
     total_cost_original_micros: int | None = None,
     total_cost_user_currency_micros: int | None = None,
@@ -45,10 +45,10 @@ async def log_request(
     pricing_snapshot_unit: str | None = None,
     pricing_snapshot_input: str | None = None,
     pricing_snapshot_output: str | None = None,
-    pricing_snapshot_cached_input: str | None = None,
-    pricing_snapshot_cache_creation: str | None = None,
+    pricing_snapshot_cache_read_input: str | None = None,
+    pricing_snapshot_cache_creation_input: str | None = None,
     pricing_snapshot_reasoning: str | None = None,
-    pricing_snapshot_policy: str | None = None,
+    pricing_snapshot_missing_special_token_price_policy: str | None = None,
     pricing_config_version_used: int | None = None,
     error_detail: str | None = None,
     endpoint_description: str | None = None,
@@ -72,13 +72,13 @@ async def log_request(
             billable_flag=billable_flag,
             priced_flag=priced_flag,
             unpriced_reason=unpriced_reason,
-            cached_input_tokens=cached_input_tokens,
-            cache_creation_tokens=cache_creation_tokens,
+            cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation_input_tokens=cache_creation_input_tokens,
             reasoning_tokens=reasoning_tokens,
             input_cost_micros=input_cost_micros,
             output_cost_micros=output_cost_micros,
-            cached_input_cost_micros=cached_input_cost_micros,
-            cache_creation_cost_micros=cache_creation_cost_micros,
+            cache_read_input_cost_micros=cache_read_input_cost_micros,
+            cache_creation_input_cost_micros=cache_creation_input_cost_micros,
             reasoning_cost_micros=reasoning_cost_micros,
             total_cost_original_micros=total_cost_original_micros,
             total_cost_user_currency_micros=total_cost_user_currency_micros,
@@ -90,10 +90,10 @@ async def log_request(
             pricing_snapshot_unit=pricing_snapshot_unit,
             pricing_snapshot_input=pricing_snapshot_input,
             pricing_snapshot_output=pricing_snapshot_output,
-            pricing_snapshot_cached_input=pricing_snapshot_cached_input,
-            pricing_snapshot_cache_creation=pricing_snapshot_cache_creation,
+            pricing_snapshot_cache_read_input=pricing_snapshot_cache_read_input,
+            pricing_snapshot_cache_creation_input=pricing_snapshot_cache_creation_input,
             pricing_snapshot_reasoning=pricing_snapshot_reasoning,
-            pricing_snapshot_policy=pricing_snapshot_policy,
+            pricing_snapshot_missing_special_token_price_policy=pricing_snapshot_missing_special_token_price_policy,
             pricing_config_version_used=pricing_config_version_used,
             error_detail=error_detail,
             endpoint_description=endpoint_description,
@@ -129,8 +129,8 @@ def _empty_usage() -> dict[str, int | None]:
         "input_tokens": None,
         "output_tokens": None,
         "total_tokens": None,
-        "cached_input_tokens": None,
-        "cache_creation_tokens": None,
+        "cache_read_input_tokens": None,
+        "cache_creation_input_tokens": None,
         "reasoning_tokens": None,
     }
 
@@ -170,18 +170,18 @@ def _extract_special_usage(
         or usage.get("output_token_details")
     )
 
-    cached_input_tokens = None
-    cache_creation_tokens = None
+    cache_read_input_tokens = None
+    cache_creation_input_tokens = None
     reasoning_tokens = None
 
     if isinstance(prompt_details, dict):
-        cached_input_tokens = _pick_int(
+        cache_read_input_tokens = _pick_int(
             prompt_details.get("cached_tokens"),
             prompt_details.get("cache_read_input_tokens"),
             prompt_details.get("cached_input_tokens"),
             prompt_details.get("cachedContentTokenCount"),
         )
-        cache_creation_tokens = _pick_int(
+        cache_creation_input_tokens = _pick_int(
             prompt_details.get("cache_creation_input_tokens"),
             prompt_details.get("cache_creation_tokens"),
             prompt_details.get("cacheCreationInputTokens"),
@@ -194,22 +194,30 @@ def _extract_special_usage(
             completion_details.get("reasoningTokenCount"),
         )
 
-    if cached_input_tokens is None:
-        cached_input_tokens = _pick_int(
+    if cache_read_input_tokens is None:
+        cache_read_input_tokens = _pick_int(
+            usage.get("cache_read_input_tokens"),
             usage.get("cached_input_tokens"),
             usage.get("cachedContentTokenCount"),
         )
-    if cache_creation_tokens is None:
-        cache_creation_tokens = _pick_int(
+    if cache_creation_input_tokens is None:
+        cache_creation_input_tokens = _pick_int(
             usage.get("cache_creation_input_tokens"),
             usage.get("cache_creation_tokens"),
             usage.get("cacheCreationInputTokens"),
             usage.get("cacheCreationTokens"),
         )
     if reasoning_tokens is None:
-        reasoning_tokens = _pick_int(usage.get("reasoning_tokens"))
+        reasoning_tokens = _pick_int(
+            usage.get("reasoning_tokens"),
+            usage.get("reasoningTokenCount"),
+        )
 
-    return cached_input_tokens, cache_creation_tokens, reasoning_tokens
+    return (
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        reasoning_tokens,
+    )
 
 
 def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
@@ -220,20 +228,22 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
     input_tokens = None
     output_tokens = None
     total_tokens = None
-    cached_input_tokens = None
-    cache_creation_tokens = None
+    cache_read_input_tokens = None
+    cache_creation_input_tokens = None
     reasoning_tokens = None
+    usage_seen = False
 
     for event in events:
         usage = event.get("usage")
-        if not usage:
+        if usage is None:
             response_payload = event.get("response")
             if isinstance(response_payload, dict):
                 nested_usage = response_payload.get("usage")
                 if isinstance(nested_usage, dict):
                     usage = nested_usage
 
-        if usage and isinstance(usage, dict):
+        if isinstance(usage, dict):
+            usage_seen = True
             input_tokens = _pick_int(
                 usage.get("prompt_tokens"),
                 usage.get("input_tokens"),
@@ -248,27 +258,58 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
             cached_found, cache_creation_found, reasoning_found = (
                 _extract_special_usage(usage)
             )
-            cached_input_tokens = _pick_int(cached_found, cached_input_tokens)
-            cache_creation_tokens = _pick_int(
+            cache_read_input_tokens = _pick_int(cached_found, cache_read_input_tokens)
+            cache_creation_input_tokens = _pick_int(
                 cache_creation_found,
-                cache_creation_tokens,
+                cache_creation_input_tokens,
             )
             reasoning_tokens = _pick_int(reasoning_found, reasoning_tokens)
 
         if event.get("type") == "message_start":
             msg_usage = event.get("message", {}).get("usage", {})
-            if msg_usage.get("input_tokens") is not None:
-                input_tokens = _pick_int(msg_usage.get("input_tokens"), input_tokens)
+            if isinstance(msg_usage, dict):
+                usage_seen = True
+                if msg_usage.get("input_tokens") is not None:
+                    input_tokens = _pick_int(
+                        msg_usage.get("input_tokens"), input_tokens
+                    )
+                cached_found, cache_creation_found, reasoning_found = (
+                    _extract_special_usage(msg_usage)
+                )
+                cache_read_input_tokens = _pick_int(
+                    cached_found,
+                    cache_read_input_tokens,
+                )
+                cache_creation_input_tokens = _pick_int(
+                    cache_creation_found,
+                    cache_creation_input_tokens,
+                )
+                reasoning_tokens = _pick_int(reasoning_found, reasoning_tokens)
 
         if event.get("type") == "message_delta":
             delta_usage = event.get("usage", {})
-            if delta_usage.get("output_tokens") is not None:
-                output_tokens = _pick_int(
-                    delta_usage.get("output_tokens"), output_tokens
+            if isinstance(delta_usage, dict):
+                usage_seen = True
+                if delta_usage.get("output_tokens") is not None:
+                    output_tokens = _pick_int(
+                        delta_usage.get("output_tokens"), output_tokens
+                    )
+                cached_found, cache_creation_found, reasoning_found = (
+                    _extract_special_usage(delta_usage)
                 )
+                cache_read_input_tokens = _pick_int(
+                    cached_found,
+                    cache_read_input_tokens,
+                )
+                cache_creation_input_tokens = _pick_int(
+                    cache_creation_found,
+                    cache_creation_input_tokens,
+                )
+                reasoning_tokens = _pick_int(reasoning_found, reasoning_tokens)
 
         gemini_usage = event.get("usageMetadata")
         if gemini_usage and isinstance(gemini_usage, dict):
+            usage_seen = True
             input_tokens = _pick_int(
                 gemini_usage.get("promptTokenCount"),
                 input_tokens,
@@ -281,9 +322,9 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
                 gemini_usage.get("totalTokenCount"),
                 total_tokens,
             )
-            cached_input_tokens = _pick_int(
+            cache_read_input_tokens = _pick_int(
                 gemini_usage.get("cachedContentTokenCount"),
-                cached_input_tokens,
+                cache_read_input_tokens,
             )
             reasoning_tokens = _pick_int(
                 gemini_usage.get("thoughtsTokenCount"),
@@ -293,12 +334,23 @@ def _extract_from_sse(raw: bytes) -> dict[str, int | None]:
     if total_tokens is None and (input_tokens is not None or output_tokens is not None):
         total_tokens = (input_tokens or 0) + (output_tokens or 0)
 
+    if usage_seen:
+        cache_read_input_tokens = (
+            cache_read_input_tokens if cache_read_input_tokens is not None else 0
+        )
+        cache_creation_input_tokens = (
+            cache_creation_input_tokens
+            if cache_creation_input_tokens is not None
+            else 0
+        )
+        reasoning_tokens = reasoning_tokens if reasoning_tokens is not None else 0
+
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
-        "cached_input_tokens": cached_input_tokens,
-        "cache_creation_tokens": cache_creation_tokens,
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
         "reasoning_tokens": reasoning_tokens,
     }
 
@@ -316,26 +368,35 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
 
     try:
         data = json.loads(body)
-        usage = data.get("usage", {})
-        if usage:
+        usage = data.get("usage")
+        if isinstance(usage, dict):
             input_t = _pick_int(usage.get("prompt_tokens"), usage.get("input_tokens"))
             output_t = _pick_int(
                 usage.get("completion_tokens"), usage.get("output_tokens")
             )
             total_t = _pick_int(usage.get("total_tokens"))
             (
-                cached_input_tokens,
-                cache_creation_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
                 reasoning_tokens,
             ) = _extract_special_usage(usage)
+            cache_read_input_tokens = (
+                cache_read_input_tokens if cache_read_input_tokens is not None else 0
+            )
+            cache_creation_input_tokens = (
+                cache_creation_input_tokens
+                if cache_creation_input_tokens is not None
+                else 0
+            )
+            reasoning_tokens = reasoning_tokens if reasoning_tokens is not None else 0
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
                 "input_tokens": input_t,
                 "output_tokens": output_t,
                 "total_tokens": total_t,
-                "cached_input_tokens": cached_input_tokens,
-                "cache_creation_tokens": cache_creation_tokens,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
                 "reasoning_tokens": reasoning_tokens,
             }
 
@@ -344,16 +405,23 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
             input_t = _pick_int(gemini_usage.get("promptTokenCount"))
             output_t = _pick_int(gemini_usage.get("candidatesTokenCount"))
             total_t = _pick_int(gemini_usage.get("totalTokenCount"))
-            cached_input_tokens = _pick_int(gemini_usage.get("cachedContentTokenCount"))
+            cache_read_input_tokens = _pick_int(
+                gemini_usage.get("cachedContentTokenCount")
+            )
             reasoning_tokens = _pick_int(gemini_usage.get("thoughtsTokenCount"))
+            cache_read_input_tokens = (
+                cache_read_input_tokens if cache_read_input_tokens is not None else 0
+            )
+            cache_creation_input_tokens = 0
+            reasoning_tokens = reasoning_tokens if reasoning_tokens is not None else 0
             if total_t is None and (input_t is not None or output_t is not None):
                 total_t = (input_t or 0) + (output_t or 0)
             return {
                 "input_tokens": input_t,
                 "output_tokens": output_t,
                 "total_tokens": total_t,
-                "cached_input_tokens": cached_input_tokens,
-                "cache_creation_tokens": None,
+                "cache_read_input_tokens": cache_read_input_tokens,
+                "cache_creation_input_tokens": cache_creation_input_tokens,
                 "reasoning_tokens": reasoning_tokens,
             }
 
@@ -362,8 +430,8 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
                 "input_tokens": _pick_int(data.get("input_tokens")),
                 "output_tokens": None,
                 "total_tokens": None,
-                "cached_input_tokens": None,
-                "cache_creation_tokens": None,
+                "cache_read_input_tokens": None,
+                "cache_creation_input_tokens": None,
                 "reasoning_tokens": None,
             }
 
@@ -716,11 +784,12 @@ async def get_spending_report(
                     func.sum(func.coalesce(RequestLog.output_tokens, 0)), 0
                 ).label("total_output_tokens"),
                 func.coalesce(
-                    func.sum(func.coalesce(RequestLog.cached_input_tokens, 0)), 0
-                ).label("total_cached_input_tokens"),
+                    func.sum(func.coalesce(RequestLog.cache_read_input_tokens, 0)), 0
+                ).label("total_cache_read_input_tokens"),
                 func.coalesce(
-                    func.sum(func.coalesce(RequestLog.cache_creation_tokens, 0)), 0
-                ).label("total_cache_creation_tokens"),
+                    func.sum(func.coalesce(RequestLog.cache_creation_input_tokens, 0)),
+                    0,
+                ).label("total_cache_creation_input_tokens"),
                 func.coalesce(
                     func.sum(func.coalesce(RequestLog.reasoning_tokens, 0)), 0
                 ).label("total_reasoning_tokens"),
@@ -901,11 +970,11 @@ async def get_spending_report(
             "unpriced_request_count": int(summary_row.unpriced_request_count or 0),
             "total_input_tokens": int(summary_row.total_input_tokens or 0),
             "total_output_tokens": int(summary_row.total_output_tokens or 0),
-            "total_cached_input_tokens": int(
-                summary_row.total_cached_input_tokens or 0
+            "total_cache_read_input_tokens": int(
+                summary_row.total_cache_read_input_tokens or 0
             ),
-            "total_cache_creation_tokens": int(
-                summary_row.total_cache_creation_tokens or 0
+            "total_cache_creation_input_tokens": int(
+                summary_row.total_cache_creation_input_tokens or 0
             ),
             "total_reasoning_tokens": int(summary_row.total_reasoning_tokens or 0),
             "total_tokens": int(summary_row.total_tokens or 0),
