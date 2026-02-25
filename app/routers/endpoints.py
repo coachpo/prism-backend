@@ -25,6 +25,7 @@ from app.services.proxy_service import (
     normalize_base_url,
     validate_base_url,
 )
+from app.services.loadbalancer import mark_endpoint_recovered
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,8 @@ async def update_endpoint(
     if not endpoint:
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
+    previous_is_active = endpoint.is_active
+
     update_data = body.model_dump(exclude_unset=True)
     if "base_url" in update_data:
         update_data["base_url"] = normalize_base_url(update_data["base_url"])
@@ -142,6 +145,13 @@ async def update_endpoint(
 
     for key, value in update_data.items():
         setattr(endpoint, key, value)
+
+    is_active_changed = (
+        "is_active" in update_data and update_data["is_active"] != previous_is_active
+    )
+    if is_active_changed:
+        mark_endpoint_recovered(endpoint.id)
+
     if pricing_changed:
         endpoint.pricing_config_version = (endpoint.pricing_config_version or 0) + 1
     endpoint.updated_at = datetime.utcnow()
@@ -157,6 +167,7 @@ async def delete_endpoint(
     endpoint = await db.get(Endpoint, endpoint_id)
     if not endpoint:
         raise HTTPException(status_code=404, detail="Endpoint not found")
+    mark_endpoint_recovered(endpoint.id)
     await db.delete(endpoint)
 
 

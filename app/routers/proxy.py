@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.models.models import HeaderBlocklistRule
+from app.models.models import Endpoint, HeaderBlocklistRule
 from app.services.loadbalancer import (
     get_model_config_with_endpoints,
     build_attempt_plan,
@@ -63,6 +63,13 @@ def _rewrite_model_in_path(
     return request_path.replace(
         f"/models/{original_model}", f"/models/{target_model}", 1
     )
+
+
+async def _endpoint_is_active_now(db: AsyncSession, endpoint_id: int) -> bool:
+    result = await db.execute(
+        select(Endpoint.is_active).where(Endpoint.id == endpoint_id)
+    )
+    return bool(result.scalar_one_or_none())
 
 
 def _resolve_model_id(
@@ -142,12 +149,8 @@ async def _handle_proxy(
             request_path, path_model, upstream_model_id
         )
 
-    if is_streaming and raw_body:
-        raw_body = inject_stream_options(raw_body, provider_type)
-
     now_mono = time.monotonic()
     endpoints_to_try = build_attempt_plan(model_config, now_mono)
-
     if not endpoints_to_try:
         raise HTTPException(
             status_code=503,
@@ -183,7 +186,17 @@ async def _handle_proxy(
         and model_config.failover_recovery_enabled
     )
     last_error = None
+    attempted_any_endpoint = False
     for ep in endpoints_to_try:
+        if not await _endpoint_is_active_now(db, ep.id):
+            mark_endpoint_recovered(ep.id)
+            logger.info(
+                "Skipping endpoint %d because it is currently disabled",
+                ep.id,
+            )
+            continue
+
+        attempted_any_endpoint = True
         upstream_url = build_upstream_url(ep, effective_request_path)
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
@@ -191,14 +204,19 @@ async def _handle_proxy(
             ep, provider_type, client_headers, blocklist_rules
         )
         ep_desc = ep.description
+        endpoint_body = raw_body
+        if is_streaming and endpoint_body:
+            endpoint_body = inject_stream_options(
+                endpoint_body, provider_type, ep.base_url
+            )
 
         start_time = time.monotonic()
 
         try:
             if is_streaming:
                 kwargs: dict = {"headers": headers}
-                if raw_body:
-                    kwargs["content"] = raw_body
+                if endpoint_body:
+                    kwargs["content"] = endpoint_body
 
                 send_req = client.build_request(method, upstream_url, **kwargs)
                 upstream_resp = await client.send(send_req, stream=True)
@@ -239,7 +257,7 @@ async def _handle_proxy(
                                 request_method=method,
                                 request_url=upstream_url,
                                 request_headers=headers,
-                                request_body=raw_body,
+                                request_body=endpoint_body,
                                 response_status=upstream_resp.status_code,
                                 response_headers=dict(upstream_resp.headers),
                                 response_body=body,
@@ -283,7 +301,7 @@ async def _handle_proxy(
                             request_method=method,
                             request_url=upstream_url,
                             request_headers=headers,
-                            request_body=raw_body,
+                            request_body=endpoint_body,
                             response_status=upstream_resp.status_code,
                             response_headers=dict(upstream_resp.headers),
                             response_body=body,
@@ -318,7 +336,7 @@ async def _handle_proxy(
                 _audit_method = method
                 _audit_upstream_url = upstream_url
                 _audit_headers = headers
-                _audit_raw_body = raw_body
+                _audit_raw_body = endpoint_body
                 _audit_resp_headers = dict(upstream_resp.headers)
 
                 async def _iter_and_log(
@@ -403,7 +421,7 @@ async def _handle_proxy(
                     method,
                     upstream_url,
                     headers,
-                    raw_body,
+                    endpoint_body,
                 )
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
                 resp_headers = filter_response_headers(response.headers)
@@ -441,7 +459,7 @@ async def _handle_proxy(
                             request_method=method,
                             request_url=upstream_url,
                             request_headers=headers,
-                            request_body=raw_body,
+                            request_body=endpoint_body,
                             response_status=response.status_code,
                             response_headers=dict(response.headers),
                             response_body=response.content,
@@ -491,7 +509,7 @@ async def _handle_proxy(
                         request_method=method,
                         request_url=upstream_url,
                         request_headers=headers,
-                        request_body=raw_body,
+                        request_body=endpoint_body,
                         response_status=response.status_code,
                         response_headers=dict(response.headers),
                         response_body=response.content,
@@ -537,7 +555,7 @@ async def _handle_proxy(
                     request_method=method,
                     request_url=upstream_url,
                     request_headers=headers,
-                    request_body=raw_body,
+                    request_body=endpoint_body,
                     response_status=0,
                     response_headers=None,
                     response_body=None,
@@ -580,7 +598,7 @@ async def _handle_proxy(
                     request_method=method,
                     request_url=upstream_url,
                     request_headers=headers,
-                    request_body=raw_body,
+                    request_body=endpoint_body,
                     response_status=0,
                     response_headers=None,
                     response_body=None,
@@ -595,6 +613,12 @@ async def _handle_proxy(
                     time.monotonic(),
                 )
             continue
+
+    if not attempted_any_endpoint:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No active endpoints available for model '{model_id}'.",
+        )
 
     raise HTTPException(
         status_code=502,

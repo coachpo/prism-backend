@@ -52,10 +52,13 @@ async def get_model_config_with_endpoints(
 
 
 def get_active_endpoints(model_config: ModelConfig) -> list[Endpoint]:
-    return sorted(
-        [ep for ep in model_config.endpoints if ep.is_active],
-        key=lambda ep: ep.priority,
+    active_eps = [ep for ep in model_config.endpoints if ep.is_active]
+    logger.debug(
+        f"get_active_endpoints for model {model_config.model_id}: "
+        f"{len(active_eps)}/{len(model_config.endpoints)} active "
+        f"(filtered out: {[ep.id for ep in model_config.endpoints if not ep.is_active]})"
     )
+    return sorted(active_eps, key=lambda ep: ep.priority)
 
 
 def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Endpoint]:
@@ -67,13 +70,22 @@ def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Endpo
     """
     active = get_active_endpoints(model_config)
     if not active:
+        logger.warning(
+            f"build_attempt_plan: No active endpoints for model {model_config.model_id}"
+        )
         return []
 
     if model_config.lb_strategy == "single":
+        logger.debug(
+            f"build_attempt_plan: single strategy, using endpoint {active[0].id}"
+        )
         return [active[0]]
 
     # failover without recovery should always try all active endpoints.
     if not model_config.failover_recovery_enabled:
+        logger.debug(
+            f"build_attempt_plan: failover without recovery, trying {len(active)} endpoints"
+        )
         return active
 
     # failover strategy with recovery enabled
@@ -92,6 +104,11 @@ def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Endpo
                 probe_eligible.append(ep)
             # else: still cooling down — skip entirely
 
+    logger.debug(
+        f"build_attempt_plan: failover with recovery, "
+        f"healthy={[ep.id for ep in healthy]}, "
+        f"probe_eligible={[ep.id for ep in probe_eligible]}"
+    )
     return healthy + probe_eligible
 
 

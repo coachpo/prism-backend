@@ -8,6 +8,7 @@ from app.services.proxy_service import (
     rewrite_model_in_body,
     extract_model_from_body,
     build_upstream_headers,
+    inject_stream_options,
 )
 from app.services.stats_service import log_request
 
@@ -1228,3 +1229,136 @@ class TestHeaderBlocklist:
 
         assert len(config.header_blocklist_rules) == 1
         assert config.header_blocklist_rules[0].pattern == "x-custom-"
+
+
+class TestDEF009_StreamOptionsCompatibility:
+    def test_inject_stream_options_for_official_openai_host(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", "https://api.openai.com/v1")
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["stream_options"]["include_usage"] is True
+
+    def test_strip_stream_options_for_openai_compatible_third_party(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", "https://jp.duckcoding.com/v1")
+        assert result is not None
+        parsed = json.loads(result)
+        assert "stream_options" not in parsed
+
+    def test_non_openai_provider_body_is_unchanged(self):
+        body = json.dumps(
+            {
+                "model": "claude-sonnet",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "anthropic", "https://api.anthropic.com")
+        assert result == body
+
+
+class TestDEF010_EndpointToggleClearsRecoveryState:
+    def _make_endpoint(self, endpoint_id: int):
+        from app.models.models import Endpoint
+
+        return Endpoint(
+            id=endpoint_id,
+            model_config_id=1,
+            base_url="https://api.example.com/v1",
+            api_key="sk-test",
+            is_active=True,
+            priority=0,
+        )
+
+    @pytest.mark.asyncio
+    async def test_update_endpoint_disable_clears_recovery_state(self):
+        from app.routers.endpoints import update_endpoint
+        from app.schemas.schemas import EndpointUpdate
+        from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
+
+        endpoint = self._make_endpoint(401)
+        mark_endpoint_failed(endpoint.id, 60, 10.0)
+        assert endpoint.id in _recovery_state
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=endpoint)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        try:
+            await update_endpoint(
+                endpoint_id=endpoint.id,
+                body=EndpointUpdate(is_active=False),
+                db=mock_db,
+            )
+            assert endpoint.is_active is False
+            assert endpoint.id not in _recovery_state
+        finally:
+            _recovery_state.pop(endpoint.id, None)
+
+    @pytest.mark.asyncio
+    async def test_delete_endpoint_clears_recovery_state(self):
+        from app.routers.endpoints import delete_endpoint
+        from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
+
+        endpoint = self._make_endpoint(402)
+        mark_endpoint_failed(endpoint.id, 60, 10.0)
+        assert endpoint.id in _recovery_state
+
+        mock_db = AsyncMock()
+        mock_db.get = AsyncMock(return_value=endpoint)
+        mock_db.delete = AsyncMock()
+
+        try:
+            await delete_endpoint(endpoint_id=endpoint.id, db=mock_db)
+            assert endpoint.id not in _recovery_state
+            mock_db.delete.assert_awaited_once_with(endpoint)
+        finally:
+            _recovery_state.pop(endpoint.id, None)
+
+
+class TestDEF011_RuntimeEndpointActivityCheck:
+    @pytest.mark.asyncio
+    async def test_endpoint_is_active_now_returns_true_for_active_row(self):
+        from app.routers.proxy import _endpoint_is_active_now
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = True
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        is_active = await _endpoint_is_active_now(mock_db, 7)
+        assert is_active is True
+
+    @pytest.mark.asyncio
+    async def test_endpoint_is_active_now_returns_false_for_disabled_or_missing_row(
+        self,
+    ):
+        from app.routers.proxy import _endpoint_is_active_now
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        is_active = await _endpoint_is_active_now(mock_db, 999)
+        assert is_active is False
