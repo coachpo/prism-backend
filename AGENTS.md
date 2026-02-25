@@ -15,7 +15,7 @@ app/
 │   └── database.py      # Async engine + session factory + Base
 ├── models/models.py     # 8 ORM models (281 lines): Provider, ModelConfig, Endpoint, RequestLog, AuditLog, HeaderBlocklistRule, UserSetting, EndpointFxRateSetting
 ├── schemas/schemas.py   # Pydantic request/response schemas (736 lines, mirrors models/)
-├── routers/             # 8 API route handlers (2341 lines total)
+├── routers/             # 8 API route handlers (2338 lines total)
 │   ├── providers.py     # CRUD /api/providers (list, get, update audit settings) — 47 lines
 │   ├── models.py        # CRUD /api/models (list with health stats, get, create, update, delete) — 276 lines
 │   ├── endpoints.py     # CRUD /api/models/{id}/endpoints + health check + owner route — 318 lines
@@ -24,7 +24,7 @@ app/
 │   ├── config.py        # /api/config/* — config export/import (v2/v3) + header blocklist CRUD — 628 lines
 │   ├── settings.py      # /api/settings/costing — currency + FX rate mappings — 125 lines
 │   └── proxy.py         # /v1/{path} + /v1beta/{path} catch-all — core proxy + costing logic — 662 lines
-├── services/            # Business logic (1757 lines total)
+├── services/            # Business logic (1826 lines total)
 │   ├── proxy_service.py # URL building, auth headers, header blocklist, streaming, body parsing — 312 lines
 │   ├── loadbalancer.py  # Strategy selection, proxy→native resolution, failover recovery — 116 lines
 │   ├── stats_service.py # Request logging, token extraction (SSE + JSON), spending reports — 918 lines
@@ -92,7 +92,7 @@ app/
 ./venv/bin/python -m pytest tests/ -v
 ```
 - Framework: pytest + pytest-asyncio (installed in venv, not in requirements.txt)
-- Tests: `tests/test_smoke_defect_regressions.py` — 12 test classes (1230 lines):
+- Tests: `tests/test_smoke_defect_regressions.py` — 12 test classes (1651 lines):
   - `TestDEF001_LogsSurviveFailoverRollback` — streaming session isolation
   - `TestDEF002_ModelIdRewriting` — proxy alias model field rewrite
   - `TestDEF003_AuthHeaderPerEndpoint` — per-endpoint auth_type override
