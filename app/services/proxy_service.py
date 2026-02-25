@@ -298,25 +298,25 @@ def extract_stream_flag(raw_body: bytes) -> bool:
 def inject_stream_options(
     raw_body: bytes | None, provider_type: str
 ) -> bytes | None:
-    """Inject stream_options.include_usage=true for OpenAI streaming requests."""
+    """Strip OpenAI SDK stream_options for cross-provider compatibility.
+
+    Some upstreams (including OpenAI-compatible hosts) reject stream_options.
+    Prism accepts OpenAI-shaped payloads, so this proxy layer removes the field
+    before forwarding regardless of provider type/streaming mode.
+    """
+    _ = provider_type
     if not raw_body:
-        return raw_body
-    if provider_type != "openai":
         return raw_body
 
     try:
         parsed = json.loads(raw_body)
-        if not parsed.get("stream"):
+        if not isinstance(parsed, dict):
             return raw_body
 
-        stream_opts = parsed.get("stream_options") or {}
-        if not isinstance(stream_opts, dict):
-            return raw_body
-        if stream_opts.get("include_usage") is True:
+        if "stream_options" not in parsed:
             return raw_body
 
-        stream_opts["include_usage"] = True
-        parsed["stream_options"] = stream_opts
+        parsed.pop("stream_options", None)
         return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return raw_body

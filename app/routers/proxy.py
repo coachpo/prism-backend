@@ -219,7 +219,7 @@ async def _handle_proxy(
         )
         ep_desc = ep.description
         endpoint_body = raw_body
-        if is_streaming and endpoint_body:
+        if endpoint_body:
             endpoint_body = inject_stream_options(endpoint_body, provider_type)
 
         start_time = time.monotonic()

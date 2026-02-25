@@ -1372,7 +1372,7 @@ class TestDEF009_StreamOptionsCompatibility:
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["stream_options"]["include_usage"] is True
+        assert "stream_options" not in parsed
 
     def test_inject_stream_options_for_all_openai_upstreams(self):
         body = json.dumps(
@@ -1387,8 +1387,7 @@ class TestDEF009_StreamOptionsCompatibility:
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        # After removing hostname-gating, all OpenAI streaming requests get stream_options
-        assert parsed["stream_options"]["include_usage"] is True
+        assert "stream_options" not in parsed
 
     def test_non_openai_provider_body_is_unchanged(self):
         body = json.dumps(
@@ -1401,6 +1400,36 @@ class TestDEF009_StreamOptionsCompatibility:
 
         result = inject_stream_options(body, "anthropic")
         assert result == body
+
+    def test_strip_stream_options_for_non_openai_provider(self):
+        body = json.dumps(
+            {
+                "model": "claude-sonnet",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "anthropic")
+        assert result is not None
+        parsed = json.loads(result)
+        assert "stream_options" not in parsed
+
+    def test_strip_stream_options_even_when_stream_is_false(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": False,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai")
+        assert result is not None
+        parsed = json.loads(result)
+        assert "stream_options" not in parsed
 
     def test_inject_stream_options_for_azure_openai_host(self):
         body = json.dumps(
@@ -1415,8 +1444,7 @@ class TestDEF009_StreamOptionsCompatibility:
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["stream_options"]["include_usage"] is True
-        assert parsed["stream_options"]["custom_flag"] == "preserve-me"
+        assert "stream_options" not in parsed
 
     def test_inject_stream_options_keeps_additional_keys_on_openai(self):
         body = json.dumps(
@@ -1431,8 +1459,7 @@ class TestDEF009_StreamOptionsCompatibility:
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["stream_options"]["include_usage"] is True
-        assert parsed["stream_options"]["trace_id"] == "abc123"
+        assert "stream_options" not in parsed
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
@@ -1988,15 +2015,15 @@ class TestDEF018_SpecialTokensNeverCopiedFromOutput:
         assert usage["reasoning_tokens"] == 0
 
 
-class TestDEF019_InjectStreamOptionsHostAgnostic:
-    """DEF-019: inject_stream_options works for any host when provider_type is openai."""
+class TestDEF019_StripStreamOptionsHostAgnostic:
+    """DEF-019: stream_options is stripped for any host when provider_type is openai."""
 
     def test_inject_for_openai_provider_type(self):
         body = json.dumps({"model": "gpt-4", "stream": True}).encode("utf-8")
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["stream_options"] == {"include_usage": True}
+        assert "stream_options" not in parsed
 
     def test_no_inject_for_anthropic_provider_type(self):
         body = json.dumps({"model": "claude-3", "stream": True}).encode("utf-8")
@@ -2005,13 +2032,19 @@ class TestDEF019_InjectStreamOptionsHostAgnostic:
         parsed = json.loads(result)
         assert "stream_options" not in parsed
 
-    def test_inject_for_third_party_openai_compatible_host(self):
-        """Third-party host using openai provider_type should still get include_usage."""
-        body = json.dumps({"model": "custom-model", "stream": True}).encode("utf-8")
+    def test_strip_for_third_party_openai_compatible_host(self):
+        """Third-party host using openai provider_type should strip stream_options."""
+        body = json.dumps(
+            {
+                "model": "custom-model",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
+        ).encode("utf-8")
         result = inject_stream_options(body, "openai")
         assert result is not None
         parsed = json.loads(result)
-        assert parsed["stream_options"] == {"include_usage": True}
+        assert "stream_options" not in parsed
 
 
 class TestDEF020_FrontendBuildTypeCheck:
