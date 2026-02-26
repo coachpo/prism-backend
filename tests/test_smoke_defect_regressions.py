@@ -401,6 +401,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "description",
             "auth_type",
             "custom_headers",
+            "forward_stream_options",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -1460,6 +1461,93 @@ class TestDEF009_StreamOptionsCompatibility:
         assert result is not None
         parsed = json.loads(result)
         assert "stream_options" not in parsed
+
+    def test_forward_stream_options_true_preserves_body(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", forward_stream_options=True)
+        assert result == body
+
+    def test_forward_stream_options_false_strips(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "stream_options": {"include_usage": True},
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", forward_stream_options=False)
+        assert result is not None
+        parsed = json.loads(result)
+        assert "stream_options" not in parsed
+
+    def test_forward_stream_options_no_stream_options_unchanged(self):
+        body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        result = inject_stream_options(body, "openai", forward_stream_options=True)
+        assert result == body
+
+    def test_config_export_includes_forward_stream_options(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        export = ConfigEndpointExport(
+            base_url="https://api.openai.com/v1",
+            api_key="sk-test",
+            forward_stream_options=True,
+        )
+        assert export.forward_stream_options is True
+
+        export_default = ConfigEndpointExport(
+            base_url="https://api.openai.com/v1",
+            api_key="sk-test",
+        )
+        assert export_default.forward_stream_options is False
+
+    @pytest.mark.asyncio
+    async def test_create_endpoint_persists_forward_stream_options(self):
+        from app.models.models import ModelConfig
+        from app.routers.endpoints import create_endpoint
+        from app.schemas.schemas import EndpointCreate
+
+        model = ModelConfig(
+            id=77,
+            provider_id=1,
+            model_id="gpt-4o-mini",
+            model_type="native",
+        )
+
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.get = AsyncMock(return_value=model)
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        endpoint = await create_endpoint(
+            model_config_id=77,
+            body=EndpointCreate(
+                base_url="https://api.example.com/v1",
+                api_key="sk-test",
+                forward_stream_options=True,
+            ),
+            db=mock_db,
+        )
+
+        assert endpoint.forward_stream_options is True
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:

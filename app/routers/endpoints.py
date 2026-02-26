@@ -105,6 +105,7 @@ async def create_endpoint(
         cache_creation_price=body.cache_creation_price,
         reasoning_price=body.reasoning_price,
         missing_special_token_price_policy=body.missing_special_token_price_policy,
+        forward_stream_options=body.forward_stream_options,
         pricing_config_version=1 if body.pricing_enabled else 0,
     )
     db.add(endpoint)

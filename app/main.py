@@ -211,7 +211,13 @@ async def _add_missing_columns(conn):
             )
         )
         logger.info("Migrated: added pricing_config_version column to endpoints table")
-
+    if "forward_stream_options" not in ep_columns:
+        await conn.execute(
+            text(
+                "ALTER TABLE endpoints ADD COLUMN forward_stream_options BOOLEAN NOT NULL DEFAULT 0"
+            )
+        )
+        logger.info("Migrated: added forward_stream_options column to endpoints table")
     result = await conn.execute(text("PRAGMA table_info(providers)"))
     prov_columns = {row[1] for row in result.fetchall()}
     if "audit_enabled" not in prov_columns:

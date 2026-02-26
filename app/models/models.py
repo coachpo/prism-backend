@@ -112,6 +112,9 @@ class Endpoint(Base):
     pricing_config_version: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )
+    forward_stream_options: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

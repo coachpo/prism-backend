@@ -296,15 +296,19 @@ def extract_stream_flag(raw_body: bytes) -> bool:
 
 
 def inject_stream_options(
-    raw_body: bytes | None, provider_type: str
+    raw_body: bytes | None, provider_type: str, forward_stream_options: bool = False
 ) -> bytes | None:
     """Strip OpenAI SDK stream_options for cross-provider compatibility.
 
     Some upstreams (including OpenAI-compatible hosts) reject stream_options.
     Prism accepts OpenAI-shaped payloads, so this proxy layer removes the field
     before forwarding regardless of provider type/streaming mode.
+
+    If forward_stream_options is True, the body is returned unchanged.
     """
     _ = provider_type
+    if forward_stream_options:
+        return raw_body
     if not raw_body:
         return raw_body
 

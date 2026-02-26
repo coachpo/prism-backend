@@ -102,6 +102,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                         else "MAP_TO_OUTPUT",
                     ),
                     pricing_config_version=ep.pricing_config_version,
+                    forward_stream_options=ep.forward_stream_options,
                 )
                 for ep in mc.endpoints
             ],
@@ -356,6 +357,7 @@ async def import_config(
                 reasoning_price=ep_data.reasoning_price,
                 missing_special_token_price_policy=ep_data.missing_special_token_price_policy,
                 pricing_config_version=ep_data.pricing_config_version,
+                forward_stream_options=ep_data.forward_stream_options,
             )
             db.add(ep)
             endpoints_count += 1

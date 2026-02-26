@@ -220,7 +220,7 @@ async def _handle_proxy(
         ep_desc = ep.description
         endpoint_body = raw_body
         if endpoint_body:
-            endpoint_body = inject_stream_options(endpoint_body, provider_type)
+            endpoint_body = inject_stream_options(endpoint_body, provider_type, ep.forward_stream_options)
 
         start_time = time.monotonic()
 

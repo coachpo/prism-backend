@@ -71,6 +71,7 @@ class EndpointBase(BaseModel):
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
+    forward_stream_options: bool = False
 
     @field_validator(
         "input_price",
@@ -133,6 +134,7 @@ class EndpointUpdate(BaseModel):
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
+    forward_stream_options: bool | None = None
 
     @field_validator(
         "input_price",
@@ -195,6 +197,7 @@ class EndpointResponse(BaseModel):
     reasoning_price: str | None
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
     pricing_config_version: int
+    forward_stream_options: bool
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
@@ -526,6 +529,7 @@ class ConfigEndpointExport(BaseModel):
         "MAP_TO_OUTPUT"
     )
     pricing_config_version: int = 0
+    forward_stream_options: bool = False
 
 
 class ConfigModelExport(BaseModel):
