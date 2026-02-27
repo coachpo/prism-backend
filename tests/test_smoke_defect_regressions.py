@@ -412,6 +412,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "endpoint_id",
             "is_active",
             "priority",
+            "name",
             "description",
             "auth_type",
             "custom_headers",
@@ -539,7 +540,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                             endpoint_id=31,
                             is_active=True,
                             priority=0,
-                            description="Primary",
+                            name="Primary",
                             auth_type="openai",
                             custom_headers={"X-Org": "my-org"},
                         )
@@ -1154,6 +1155,7 @@ class TestEndpointOwnerRoute:
             "connection_id",
             "model_config_id",
             "model_id",
+            "connection_name",
             "connection_description",
             "endpoint_id",
             "endpoint_name",
@@ -1175,7 +1177,7 @@ class TestEndpointOwnerRoute:
         mock_connection = MagicMock()
         mock_connection.id = 7
         mock_connection.model_config_id = 3
-        mock_connection.description = "PackyCode"
+        mock_connection.name = "PackyCode"
         mock_connection.model_config_rel = mock_model_config
         mock_connection.endpoint_rel = mock_endpoint
 
@@ -1191,6 +1193,7 @@ class TestEndpointOwnerRoute:
         assert response.model_config_id == 3
         assert response.model_id == "gpt-4"
         assert response.connection_description == "PackyCode"
+        assert response.connection_name == "PackyCode"
         assert response.endpoint_id == 13
         assert response.endpoint_name == "primary"
         assert response.endpoint_base_url == "https://api.openai.com/v1"
@@ -1802,7 +1805,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     is_active=True,
                     endpoint_id=1,
                     priority=0,
-                    description="primary",
+                    name="primary",
                 )
                 secondary = Connection(
                     model_config_rel=model,
@@ -1810,7 +1813,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     endpoint_id=2,
                     is_active=True,
                     priority=1,
-                    description="secondary",
+                    name="secondary",
                 )
                 seed_db.add_all(
                     [

@@ -105,7 +105,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     endpoint_id=connection.endpoint_id,
                     is_active=connection.is_active,
                     priority=connection.priority,
-                    description=connection.description,
+                    name=connection.name,
                     auth_type=connection.auth_type,
                     custom_headers=json.loads(connection.custom_headers)
                     if connection.custom_headers is not None
@@ -491,7 +491,7 @@ async def import_config(
                 endpoint_id=mapped_endpoint_id,
                 is_active=connection_data.is_active,
                 priority=connection_data.priority,
-                description=connection_data.description,
+                name=connection_data.name,
                 auth_type=connection_data.auth_type,
                 custom_headers=json.dumps(connection_data.custom_headers)
                 if connection_data.custom_headers is not None

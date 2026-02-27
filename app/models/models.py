@@ -11,7 +11,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.core.database import Base
 
@@ -108,7 +108,8 @@ class Connection(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    name: Mapped[str | None] = mapped_column("description", Text, nullable=True)
+    description = synonym("name")
     auth_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # null=use provider default; "openai", "anthropic" to override

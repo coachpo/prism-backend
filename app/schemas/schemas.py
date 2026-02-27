@@ -85,6 +85,7 @@ class EndpointResponse(BaseModel):
 class ConnectionBase(BaseModel):
     is_active: bool = True
     priority: int = 0
+    name: str | None = None
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
@@ -100,6 +101,22 @@ class ConnectionBase(BaseModel):
         "MAP_TO_OUTPUT"
     )
     forward_stream_options: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_connection_name_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if normalized.get("name") is None and normalized.get("description") is not None:
+            normalized["name"] = normalized["description"]
+        if (
+            normalized.get("description") is None
+            and normalized.get("name") is not None
+        ):
+            normalized["description"] = normalized["name"]
+        return normalized
 
     @field_validator(
         "input_price",
@@ -140,7 +157,6 @@ class ConnectionBase(BaseModel):
                 )
         return self
 
-
 class ConnectionCreate(ConnectionBase):
     endpoint_id: int | None = None
     endpoint_create: EndpointCreate | None = None
@@ -161,6 +177,7 @@ class ConnectionUpdate(BaseModel):
     endpoint_create: EndpointCreate | None = None
     is_active: bool | None = None
     priority: int | None = None
+    name: str | None = None
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
@@ -176,6 +193,22 @@ class ConnectionUpdate(BaseModel):
         None
     )
     forward_stream_options: bool | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_connection_name_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if normalized.get("name") is None and normalized.get("description") is not None:
+            normalized["name"] = normalized["description"]
+        if (
+            normalized.get("description") is None
+            and normalized.get("name") is not None
+        ):
+            normalized["description"] = normalized["name"]
+        return normalized
 
     @field_validator(
         "input_price",
@@ -217,7 +250,6 @@ class ConnectionUpdate(BaseModel):
             raise ValueError("pricing_unit is required when pricing_enabled is true")
         return self
 
-
 class ConnectionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -227,6 +259,7 @@ class ConnectionResponse(BaseModel):
     endpoint: EndpointResponse | None = None
     is_active: bool
     priority: int
+    name: str | None
     description: str | None
     auth_type: str | None
     custom_headers: dict[str, str] | None
@@ -269,6 +302,7 @@ class ConnectionOwnerResponse(BaseModel):
     connection_id: int
     model_config_id: int
     model_id: str
+    connection_name: str | None
     connection_description: str | None
     endpoint_id: int
     endpoint_name: str
@@ -588,6 +622,7 @@ class ConfigConnectionExport(BaseModel):
     endpoint_id: int
     is_active: bool = True
     priority: int = 0
+    name: str | None = None
     description: str | None = None
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
@@ -605,6 +640,21 @@ class ConfigConnectionExport(BaseModel):
     pricing_config_version: int = 0
     forward_stream_options: bool = False
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_connection_name_fields(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+        if normalized.get("name") is None and normalized.get("description") is not None:
+            normalized["name"] = normalized["description"]
+        if (
+            normalized.get("description") is None
+            and normalized.get("name") is not None
+        ):
+            normalized["description"] = normalized["name"]
+        return normalized
 
 class ConfigModelExport(BaseModel):
     provider_type: str
@@ -824,6 +874,7 @@ class ConnectionDropdownItem(BaseModel):
 
     id: int
     endpoint_id: int
+    name: str | None
     description: str | None
 
 

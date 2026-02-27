@@ -149,7 +149,8 @@ async def delete_endpoint(
                             if connection.model_config_rel is not None
                             else None
                         ),
-                        "description": connection.description,
+                        "name": connection.name,
+                        "description": connection.name,
                     }
                     for connection in in_use_rows
                 ],
