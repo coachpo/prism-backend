@@ -8,7 +8,12 @@ from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
 from app.models.models import Connection, Endpoint
-from app.schemas.schemas import EndpointCreate, EndpointResponse, EndpointUpdate
+from app.schemas.schemas import (
+    ConnectionDropdownResponse,
+    EndpointCreate,
+    EndpointResponse,
+    EndpointUpdate,
+)
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 router = APIRouter(tags=["endpoints"])
@@ -63,6 +68,13 @@ async def create_endpoint(
     await db.refresh(endpoint)
     return endpoint
 
+
+
+@router.get("/api/endpoints/connections", response_model=ConnectionDropdownResponse)
+async def list_all_connections(db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(select(Connection).order_by(Connection.id.asc()))
+    connections = result.scalars().all()
+    return ConnectionDropdownResponse(items=connections)
 
 @router.put("/api/endpoints/{endpoint_id}", response_model=EndpointResponse)
 async def update_endpoint(

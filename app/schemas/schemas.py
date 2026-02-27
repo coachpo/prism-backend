@@ -214,9 +214,7 @@ class ConnectionUpdate(BaseModel):
                 "pricing_currency_code is required when pricing_enabled is true"
             )
         if self.pricing_enabled is True and not self.pricing_unit:
-            raise ValueError(
-                "pricing_unit is required when pricing_enabled is true"
-            )
+            raise ValueError("pricing_unit is required when pricing_enabled is true")
         return self
 
 
@@ -283,7 +281,6 @@ class ConnectionSuccessRateResponse(BaseModel):
     success_count: int
     error_count: int
     success_rate: float | None
-
 
 
 # --- Model Config Schemas ---
@@ -476,12 +473,14 @@ class EndpointFxMapping(BaseModel):
 class CostingSettingsResponse(BaseModel):
     report_currency_code: str
     report_currency_symbol: str
+    timezone_preference: str | None = None
     endpoint_fx_mappings: list[EndpointFxMapping]
 
 
 class CostingSettingsUpdate(BaseModel):
     report_currency_code: str
     report_currency_symbol: str
+    timezone_preference: str | None = None
     endpoint_fx_mappings: list[EndpointFxMapping] = []
 
     @field_validator("report_currency_code")
@@ -503,6 +502,18 @@ class CostingSettingsUpdate(BaseModel):
         if len(symbol) > 5:
             raise ValueError("report_currency_symbol must be at most 5 characters")
         return symbol
+
+    @field_validator("timezone_preference")
+    @classmethod
+    def validate_timezone_preference(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        timezone = v.strip()
+        if not timezone:
+            return None
+        if len(timezone) > 100:
+            raise ValueError("timezone_preference must be at most 100 characters")
+        return timezone
 
     @model_validator(mode="after")
     def validate_unique_mappings(self):
@@ -593,6 +604,7 @@ class ConfigConnectionExport(BaseModel):
     )
     pricing_config_version: int = 0
     forward_stream_options: bool = False
+
 
 class ConfigModelExport(BaseModel):
     provider_type: str
@@ -805,3 +817,15 @@ class HeaderBlocklistRuleExport(BaseModel):
     pattern: str
     enabled: bool
     is_system: bool
+
+
+class ConnectionDropdownItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    endpoint_id: int
+    description: str | None
+
+
+class ConnectionDropdownResponse(BaseModel):
+    items: list[ConnectionDropdownItem]

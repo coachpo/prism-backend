@@ -866,6 +866,16 @@ async def _add_missing_columns(conn):
             "pricing_config_version_used INTEGER",
         )
 
+    user_settings_columns = await _table_columns(conn, "user_settings")
+    if user_settings_columns:
+        await _add_column_if_missing(
+            conn,
+            "user_settings",
+            user_settings_columns,
+            "timezone_preference",
+            "timezone_preference VARCHAR(100)",
+        )
+
     audit_columns = await _table_columns(conn, "audit_logs")
     if audit_columns:
         await _add_column_if_missing(

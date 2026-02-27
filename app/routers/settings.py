@@ -26,7 +26,9 @@ async def _get_or_create_user_settings(db: AsyncSession) -> UserSetting:
     ).scalar_one_or_none()
     if settings_row is None:
         settings_row = UserSetting(
-            report_currency_code="USD", report_currency_symbol="$"
+            report_currency_code="USD",
+            report_currency_symbol="$",
+            timezone_preference=None,
         )
         db.add(settings_row)
         await db.flush()
@@ -53,6 +55,7 @@ async def get_costing_settings(db: Annotated[AsyncSession, Depends(get_db)]):
     return CostingSettingsResponse(
         report_currency_code=settings_row.report_currency_code,
         report_currency_symbol=settings_row.report_currency_symbol,
+        timezone_preference=settings_row.timezone_preference,
         endpoint_fx_mappings=[
             EndpointFxMapping(
                 model_id=row.model_id,
@@ -95,6 +98,7 @@ async def update_costing_settings(
 
     settings_row.report_currency_code = body.report_currency_code
     settings_row.report_currency_symbol = body.report_currency_symbol
+    settings_row.timezone_preference = body.timezone_preference
 
     await db.execute(delete(EndpointFxRateSetting))
     for mapping in body.endpoint_fx_mappings:
@@ -111,5 +115,6 @@ async def update_costing_settings(
     return CostingSettingsResponse(
         report_currency_code=settings_row.report_currency_code,
         report_currency_symbol=settings_row.report_currency_symbol,
+        timezone_preference=settings_row.timezone_preference,
         endpoint_fx_mappings=body.endpoint_fx_mappings,
     )

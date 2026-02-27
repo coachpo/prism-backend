@@ -246,6 +246,7 @@ class UserSetting(Base):
     report_currency_symbol: Mapped[str] = mapped_column(
         String(5), default="$", nullable=False
     )
+    timezone_preference: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
