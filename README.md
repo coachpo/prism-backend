@@ -23,17 +23,18 @@ backend/
 │   ├── main.py                      # FastAPI app + startup/shutdown + schema migrations
 │   ├── database.py                  # SQLAlchemy async engine + session factory
 │   ├── models/
-│   │   └── models.py                # ORM models (Provider, ModelConfig, Endpoint, etc.)
+│   │   └── models.py                # ORM models (Provider, ModelConfig, Endpoint, Connection, etc.)
 │   ├── routers/
 │   │   ├── providers.py             # Provider CRUD
 │   │   ├── models.py                # Model CRUD
-│   │   ├── endpoints.py             # Endpoint CRUD + health checks
+│   │   ├── endpoints.py             # Global credential CRUD
+│   │   ├── connections.py           # Model-scoped routing + health checks
 │   │   ├── stats.py                 # Request logs + aggregated statistics
 │   │   ├── audit.py                 # Audit log queries
 │   │   ├── config.py                # Config export/import
 │   │   └── proxy.py                 # Catch-all /v1/* proxy router
 │   └── services/
-│       ├── loadbalancer.py          # Model resolution + endpoint selection
+│       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
 │       └── audit_service.py         # Audit log writing with header redaction
 ├── tests/                           # Pytest test suite
@@ -124,7 +125,20 @@ The SQLite database is created automatically on first run. Schema migrations are
 - `PUT /models/{id}` - Update model
 - `DELETE /models/{id}` - Delete model
 
-- `GET /endpoints` - List all endpoints
+- `GET /endpoints` - List all global endpoints
+- `POST /endpoints` - Create global endpoint
+- `PUT /endpoints/{id}` - Update global endpoint
+- `DELETE /endpoints/{id}` - Delete global endpoint
+
+- `GET /models/{id}/connections` - List connections for model
+- `POST /models/{id}/connections` - Create connection for model
+- `PUT /connections/{id}` - Update connection
+- `DELETE /connections/{id}` - Delete connection
+- `POST /connections/{id}/health` - Manual health check
+
+- `GET /stats/requests` - Request logs with filters
+- `GET /stats/summary` - Aggregated statistics
+- `GET /stats/connection-success-rates` - Per-connection success rates
 - `POST /endpoints` - Create endpoint
 - `PUT /endpoints/{id}` - Update endpoint
 - `DELETE /endpoints/{id}` - Delete endpoint
@@ -152,18 +166,20 @@ All `/v1/*` requests are forwarded to the appropriate upstream provider based on
 
 ### Native vs Proxy Models
 
-- **Native**: Real models with their own endpoint configurations and load balancing
-- **Proxy**: Alias models that forward to a native model (for ID resolution)
+- **Native**: Real models with their own connection configurations and load balancing
+- **Proxy**: Alias models that forward to a native model (for ID resolution) — no connections of their own
 
 ### Load Balancing Strategies
 
-- **single**: Always use the first active endpoint (priority 0)
+- **single**: Always use the first active connection (priority 0)
+- **round_robin**: Rotate through active connections (deprecated, auto-migrated to failover)
+- **failover**: Try connections in priority order until one succeeds
 - **round_robin**: Rotate through active endpoints
 - **failover**: Try endpoints in priority order until one succeeds
 
 ### Success Rate Tracking
 
-Endpoints display a success rate badge computed from `request_logs` data (last 24h):
+Connections display a success rate badge computed from `request_logs` data (last 24h):
 - ≥98% = green
 - 75-98% = yellow
 - <75% = red

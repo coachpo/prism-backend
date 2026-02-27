@@ -37,6 +37,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
+                connection_id=1,
                 endpoint_base_url="http://example.com",
                 status_code=503,
                 response_time_ms=100,
@@ -66,6 +67,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
+                connection_id=1,
                 endpoint_base_url="http://example.com",
                 status_code=0,
                 response_time_ms=50,
@@ -394,8 +396,20 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConfigEndpointExport.model_fields.keys())
         expected = {
+            "endpoint_id",
+            "name",
             "base_url",
             "api_key",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_export_schema_includes_all_connection_fields(self):
+        from app.schemas.schemas import ConfigConnectionExport
+
+        fields = set(ConfigConnectionExport.model_fields.keys())
+        expected = {
+            "connection_id",
+            "endpoint_id",
             "is_active",
             "priority",
             "description",
@@ -430,47 +444,44 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "redirect_to",
             "lb_strategy",
             "is_enabled",
-            "endpoints",
+            "connections",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
     def test_roundtrip_custom_headers_preserved(self):
-        from app.schemas.schemas import ConfigEndpointExport
+        from app.schemas.schemas import ConfigConnectionExport
 
         headers = {"X-Custom": "value", "X-Another": "test"}
-        ep = ConfigEndpointExport(
-            base_url="https://api.example.com",
-            api_key="sk-test",
+        connection = ConfigConnectionExport(
+            endpoint_id=1,
             custom_headers=headers,
             auth_type="openai",
         )
-        exported = ep.model_dump(mode="json")
-        reimported = ConfigEndpointExport(**exported)
+        exported = connection.model_dump(mode="json")
+        reimported = ConfigConnectionExport(**exported)
         assert reimported.custom_headers == headers
         assert reimported.auth_type == "openai"
 
     def test_roundtrip_custom_headers_null(self):
-        from app.schemas.schemas import ConfigEndpointExport
+        from app.schemas.schemas import ConfigConnectionExport
 
-        ep = ConfigEndpointExport(
-            base_url="https://api.example.com",
-            api_key="sk-test",
+        connection = ConfigConnectionExport(
+            endpoint_id=1,
             custom_headers=None,
         )
-        exported = ep.model_dump(mode="json")
-        reimported = ConfigEndpointExport(**exported)
+        exported = connection.model_dump(mode="json")
+        reimported = ConfigConnectionExport(**exported)
         assert reimported.custom_headers is None
 
     def test_roundtrip_custom_headers_empty_dict(self):
-        from app.schemas.schemas import ConfigEndpointExport
+        from app.schemas.schemas import ConfigConnectionExport
 
-        ep = ConfigEndpointExport(
-            base_url="https://api.example.com",
-            api_key="sk-test",
+        connection = ConfigConnectionExport(
+            endpoint_id=1,
             custom_headers={},
         )
-        exported = ep.model_dump(mode="json")
-        reimported = ConfigEndpointExport(**exported)
+        exported = connection.model_dump(mode="json")
+        reimported = ConfigConnectionExport(**exported)
         assert reimported.custom_headers == {}
 
     def test_import_serializes_custom_headers_to_json_string(self):
@@ -488,11 +499,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ConfigProviderExport,
             ConfigModelExport,
             ConfigEndpointExport,
+            ConfigConnectionExport,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=4,
+            version=5,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -501,6 +513,14 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     description="Main provider",
                     audit_enabled=True,
                     audit_capture_bodies=False,
+                )
+            ],
+            endpoints=[
+                ConfigEndpointExport(
+                    endpoint_id=31,
+                    name="openai-main",
+                    base_url="https://api.openai.com/v1",
+                    api_key="sk-test",
                 )
             ],
             models=[
@@ -513,10 +533,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     is_enabled=True,
                     failover_recovery_enabled=True,
                     failover_recovery_cooldown_seconds=60,
-                    endpoints=[
-                        ConfigEndpointExport(
-                            base_url="https://api.openai.com/v1",
-                            api_key="sk-test",
+                    connections=[
+                        ConfigConnectionExport(
+                            connection_id=51,
+                            endpoint_id=31,
                             is_active=True,
                             priority=0,
                             description="Primary",
@@ -539,18 +559,18 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert m.lb_strategy == "failover"
         assert m.failover_recovery_enabled is True
         assert m.failover_recovery_cooldown_seconds == 60
-        assert len(m.endpoints) == 1
-        ep = m.endpoints[0]
-        assert ep.custom_headers == {"X-Org": "my-org"}
-        assert ep.auth_type == "openai"
-        assert ep.priority == 0
+        assert len(m.connections) == 1
+        connection = m.connections[0]
+        assert connection.custom_headers == {"X-Org": "my-org"}
+        assert connection.auth_type == "openai"
+        assert connection.priority == 0
 
 
 class TestDEF008_CacheCreationPricing:
     """DEF-008 (P1): cache creation pricing is tracked separately from cached input."""
 
     @staticmethod
-    def _build_endpoint(
+    def _build_connection(
         *,
         pricing_unit: str,
         input_price: str,
@@ -560,12 +580,17 @@ class TestDEF008_CacheCreationPricing:
         reasoning_price: str,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Endpoint
+        from app.models.models import Connection, Endpoint
 
         endpoint = Endpoint(
-            model_config_id=1,
+            name="pricing-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+        )
+        endpoint.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
             pricing_enabled=True,
             pricing_unit=pricing_unit,
             pricing_currency_code="USD",
@@ -577,8 +602,9 @@ class TestDEF008_CacheCreationPricing:
             missing_special_token_price_policy=missing_special_token_price_policy,
             pricing_config_version=9,
         )
-        endpoint.id = 1
-        return endpoint
+        connection.id = 1
+        connection.endpoint_rel = endpoint
+        return connection, endpoint
 
     def test_extract_token_usage_parses_cache_creation_tokens(self):
         from app.services.stats_service import extract_token_usage
@@ -683,7 +709,7 @@ class TestDEF008_CacheCreationPricing:
             compute_cost_fields,
         )
 
-        endpoint = self._build_endpoint(
+        connection, endpoint = self._build_connection(
             pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
@@ -694,6 +720,7 @@ class TestDEF008_CacheCreationPricing:
         )
 
         result = compute_cost_fields(
+            connection=connection,
             endpoint=endpoint,
             model_id="claude-sonnet",
             status_code=200,
@@ -720,7 +747,7 @@ class TestDEF008_CacheCreationPricing:
             compute_cost_fields,
         )
 
-        endpoint = self._build_endpoint(
+        connection, endpoint = self._build_connection(
             pricing_unit="PER_1K",
             input_price="0",
             output_price="0",
@@ -731,6 +758,7 @@ class TestDEF008_CacheCreationPricing:
         )
 
         result = compute_cost_fields(
+            connection=connection,
             endpoint=endpoint,
             model_id="claude-sonnet",
             status_code=200,
@@ -842,7 +870,7 @@ class TestFailoverRecoveryFieldValidation:
 
     def test_config_export_includes_recovery_fields(self):
         """ConfigModelExport includes recovery fields."""
-        from app.schemas.schemas import ConfigModelExport, ConfigEndpointExport
+        from app.schemas.schemas import ConfigConnectionExport, ConfigModelExport
 
         model = ConfigModelExport(
             provider_type="openai",
@@ -853,10 +881,9 @@ class TestFailoverRecoveryFieldValidation:
             is_enabled=True,
             failover_recovery_enabled=False,
             failover_recovery_cooldown_seconds=300,
-            endpoints=[
-                ConfigEndpointExport(
-                    base_url="https://api.openai.com/v1",
-                    api_key="sk-test",
+            connections=[
+                ConfigConnectionExport(
+                    endpoint_id=1,
                 )
             ],
         )
@@ -865,7 +892,7 @@ class TestFailoverRecoveryFieldValidation:
         assert exported["failover_recovery_cooldown_seconds"] == 300
 
     def test_config_import_rejects_version_1(self):
-        """ConfigImportRequest rejects version != 2."""
+        """ConfigImportRequest rejects version != 5."""
         from app.schemas.schemas import ConfigImportRequest
         from pydantic import ValidationError
 
@@ -874,10 +901,11 @@ class TestFailoverRecoveryFieldValidation:
                 {
                     "version": 1,
                     "providers": [],
+                    "endpoints": [],
                     "models": [],
                 }
             )
-        assert "Input should be 4" in str(exc_info.value)
+        assert "Input should be 5" in str(exc_info.value)
 
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
@@ -887,8 +915,15 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 4,
+                    "version": 5,
                     "providers": [],
+                    "endpoints": [
+                        {
+                            "name": "openai-main",
+                            "base_url": "https://api.openai.com/v1",
+                            "api_key": "sk-test",
+                        }
+                    ],
                     "models": [
                         {
                             "provider_type": "openai",
@@ -897,10 +932,9 @@ class TestFailoverRecoveryFieldValidation:
                             "model_type": "native",
                             "lb_strategy": "round_robin",
                             "is_enabled": True,
-                            "endpoints": [
+                            "connections": [
                                 {
-                                    "base_url": "https://api.openai.com/v1",
-                                    "api_key": "sk-test",
+                                    "endpoint_id": 1,
                                 }
                             ],
                         }
@@ -909,19 +943,20 @@ class TestFailoverRecoveryFieldValidation:
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
 
-    def test_config_version_2_roundtrip(self):
-        """Config export/import roundtrip with version 2 and recovery fields."""
+    def test_config_version_5_roundtrip(self):
+        """Config export/import roundtrip with version 5 and recovery fields."""
         from app.schemas.schemas import (
+            ConfigConnectionExport,
             ConfigExportResponse,
             ConfigImportRequest,
-            ConfigProviderExport,
-            ConfigModelExport,
             ConfigEndpointExport,
+            ConfigModelExport,
+            ConfigProviderExport,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=4,
+            version=5,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -930,6 +965,14 @@ class TestFailoverRecoveryFieldValidation:
                     description="Main provider",
                     audit_enabled=True,
                     audit_capture_bodies=False,
+                )
+            ],
+            endpoints=[
+                ConfigEndpointExport(
+                    endpoint_id=1,
+                    name="openai-main",
+                    base_url="https://api.openai.com/v1",
+                    api_key="sk-test",
                 )
             ],
             models=[
@@ -942,10 +985,9 @@ class TestFailoverRecoveryFieldValidation:
                     is_enabled=True,
                     failover_recovery_enabled=False,
                     failover_recovery_cooldown_seconds=180,
-                    endpoints=[
-                        ConfigEndpointExport(
-                            base_url="https://api.openai.com/v1",
-                            api_key="sk-test",
+                    connections=[
+                        ConfigConnectionExport(
+                            endpoint_id=1,
                             is_active=True,
                             priority=0,
                         )
@@ -956,7 +998,7 @@ class TestFailoverRecoveryFieldValidation:
         exported = config.model_dump(mode="json")
         reimported = ConfigImportRequest(**exported)
 
-        assert reimported.version == 4
+        assert reimported.version == 5
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.lb_strategy == "failover"
@@ -995,6 +1037,7 @@ class TestDEF007_EndpointIdentityInLogs:
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
+                connection_id=1,
                 endpoint_base_url="http://example.com",
                 status_code=200,
                 response_time_ms=100,
@@ -1022,6 +1065,7 @@ class TestDEF007_EndpointIdentityInLogs:
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
+                connection_id=1,
                 endpoint_base_url="http://example.com",
                 status_code=200,
                 response_time_ms=100,
@@ -1045,6 +1089,7 @@ class TestDEF007_EndpointIdentityInLogs:
                 model_id="test-model",
                 provider_type="openai",
                 endpoint_id=1,
+                connection_id=1,
                 endpoint_base_url="http://example.com",
                 status_code=200,
                 response_time_ms=100,
@@ -1102,48 +1147,57 @@ class TestDEF007_EndpointIdentityInLogs:
 
 class TestEndpointOwnerRoute:
     def test_owner_response_schema_has_required_fields(self):
-        from app.schemas.schemas import EndpointOwnerResponse
+        from app.schemas.schemas import ConnectionOwnerResponse
 
-        fields = set(EndpointOwnerResponse.model_fields.keys())
+        fields = set(ConnectionOwnerResponse.model_fields.keys())
         assert fields == {
-            "endpoint_id",
+            "connection_id",
             "model_config_id",
             "model_id",
-            "endpoint_description",
+            "connection_description",
+            "endpoint_id",
+            "endpoint_name",
             "endpoint_base_url",
         }
 
     @pytest.mark.asyncio
     async def test_owner_route_returns_correct_data(self):
-        from app.routers.endpoints import get_endpoint_owner
+        from app.routers.connections import get_connection_owner
 
         mock_model_config = MagicMock()
         mock_model_config.model_id = "gpt-4"
 
         mock_endpoint = MagicMock()
-        mock_endpoint.id = 7
-        mock_endpoint.model_config_id = 3
-        mock_endpoint.description = "PackyCode"
+        mock_endpoint.id = 13
+        mock_endpoint.name = "primary"
         mock_endpoint.base_url = "https://api.openai.com/v1"
-        mock_endpoint.model_config_rel = mock_model_config
+
+        mock_connection = MagicMock()
+        mock_connection.id = 7
+        mock_connection.model_config_id = 3
+        mock_connection.description = "PackyCode"
+        mock_connection.model_config_rel = mock_model_config
+        mock_connection.endpoint_rel = mock_endpoint
 
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = mock_endpoint
+        mock_result.scalar_one_or_none.return_value = mock_connection
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        response = await get_endpoint_owner(endpoint_id=7, db=mock_db)
+        response = await get_connection_owner(connection_id=7, db=mock_db)
 
-        assert response.endpoint_id == 7
+        assert response.connection_id == 7
         assert response.model_config_id == 3
         assert response.model_id == "gpt-4"
-        assert response.endpoint_description == "PackyCode"
+        assert response.connection_description == "PackyCode"
+        assert response.endpoint_id == 13
+        assert response.endpoint_name == "primary"
         assert response.endpoint_base_url == "https://api.openai.com/v1"
 
     @pytest.mark.asyncio
     async def test_owner_route_returns_404_for_missing_endpoint(self):
-        from app.routers.endpoints import get_endpoint_owner
+        from app.routers.connections import get_connection_owner
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None
@@ -1152,7 +1206,7 @@ class TestEndpointOwnerRoute:
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_endpoint_owner(endpoint_id=9999, db=mock_db)
+            await get_connection_owner(connection_id=9999, db=mock_db)
 
         assert exc_info.value.status_code == 404
 
@@ -1341,9 +1395,10 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=4,
+            version=5,
             exported_at=datetime.now(timezone.utc),
             providers=[],
+            endpoints=[],
             models=[],
             header_blocklist_rules=[
                 HeaderBlocklistRuleExport(
@@ -1503,26 +1558,22 @@ class TestDEF009_StreamOptionsCompatibility:
         assert result == body
 
     def test_config_export_includes_forward_stream_options(self):
-        from app.schemas.schemas import ConfigEndpointExport
+        from app.schemas.schemas import ConfigConnectionExport
 
-        export = ConfigEndpointExport(
-            base_url="https://api.openai.com/v1",
-            api_key="sk-test",
+        export = ConfigConnectionExport(
+            endpoint_id=1,
             forward_stream_options=True,
         )
         assert export.forward_stream_options is True
 
-        export_default = ConfigEndpointExport(
-            base_url="https://api.openai.com/v1",
-            api_key="sk-test",
-        )
+        export_default = ConfigConnectionExport(endpoint_id=1)
         assert export_default.forward_stream_options is False
 
     @pytest.mark.asyncio
     async def test_create_endpoint_persists_forward_stream_options(self):
         from app.models.models import ModelConfig
-        from app.routers.endpoints import create_endpoint
-        from app.schemas.schemas import EndpointCreate
+        from app.routers.connections import create_connection
+        from app.schemas.schemas import ConnectionCreate, EndpointCreate
 
         model = ModelConfig(
             id=77,
@@ -1534,80 +1585,93 @@ class TestDEF009_StreamOptionsCompatibility:
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.get = AsyncMock(return_value=model)
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+        )
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
-        endpoint = await create_endpoint(
-            model_config_id=77,
-            body=EndpointCreate(
-                base_url="https://api.example.com/v1",
-                api_key="sk-test",
-                forward_stream_options=True,
-            ),
-            db=mock_db,
-        )
+        with patch(
+            "app.routers.connections._load_connection_or_404",
+            AsyncMock(return_value=MagicMock(forward_stream_options=True)),
+        ):
+            connection = await create_connection(
+                model_config_id=77,
+                body=ConnectionCreate(
+                    endpoint_create=EndpointCreate(
+                        name="inline-endpoint",
+                        base_url="https://api.example.com/v1",
+                        api_key="sk-test",
+                    ),
+                    forward_stream_options=True,
+                ),
+                db=mock_db,
+            )
 
-        assert endpoint.forward_stream_options is True
+        assert connection.forward_stream_options is True
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
-    def _make_endpoint(self, endpoint_id: int):
-        from app.models.models import Endpoint
+    def _make_connection(self, connection_id: int):
+        from app.models.models import Connection
 
-        return Endpoint(
-            id=endpoint_id,
+        return Connection(
+            id=connection_id,
             model_config_id=1,
-            base_url="https://api.example.com/v1",
-            api_key="sk-test",
+            endpoint_id=99,
             is_active=True,
             priority=0,
         )
 
     @pytest.mark.asyncio
     async def test_update_endpoint_disable_clears_recovery_state(self):
-        from app.routers.endpoints import update_endpoint
-        from app.schemas.schemas import EndpointUpdate
+        from app.routers.connections import update_connection
+        from app.schemas.schemas import ConnectionUpdate
         from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
 
-        endpoint = self._make_endpoint(401)
-        mark_endpoint_failed(endpoint.id, 60, 10.0)
-        assert endpoint.id in _recovery_state
+        connection = self._make_connection(401)
+        mark_endpoint_failed(connection.id, 60, 10.0)
+        assert connection.id in _recovery_state
 
         mock_db = AsyncMock()
-        mock_db.get = AsyncMock(return_value=endpoint)
+        mock_db.get = AsyncMock(return_value=connection)
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=MagicMock(return_value=connection)
+            )
+        )
         mock_db.flush = AsyncMock()
-        mock_db.refresh = AsyncMock()
 
         try:
-            await update_endpoint(
-                endpoint_id=endpoint.id,
-                body=EndpointUpdate(is_active=False),
+            await update_connection(
+                connection_id=connection.id,
+                body=ConnectionUpdate(is_active=False),
                 db=mock_db,
             )
-            assert endpoint.is_active is False
-            assert endpoint.id not in _recovery_state
+            assert connection.is_active is False
+            assert connection.id not in _recovery_state
         finally:
-            _recovery_state.pop(endpoint.id, None)
+            _recovery_state.pop(connection.id, None)
 
     @pytest.mark.asyncio
     async def test_delete_endpoint_clears_recovery_state(self):
-        from app.routers.endpoints import delete_endpoint
+        from app.routers.connections import delete_connection
         from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
 
-        endpoint = self._make_endpoint(402)
-        mark_endpoint_failed(endpoint.id, 60, 10.0)
-        assert endpoint.id in _recovery_state
+        connection = self._make_connection(402)
+        mark_endpoint_failed(connection.id, 60, 10.0)
+        assert connection.id in _recovery_state
 
         mock_db = AsyncMock()
-        mock_db.get = AsyncMock(return_value=endpoint)
+        mock_db.get = AsyncMock(return_value=connection)
         mock_db.delete = AsyncMock()
 
         try:
-            await delete_endpoint(endpoint_id=endpoint.id, db=mock_db)
-            assert endpoint.id not in _recovery_state
-            mock_db.delete.assert_awaited_once_with(endpoint)
+            await delete_connection(connection_id=connection.id, db=mock_db)
+            assert connection.id not in _recovery_state
+            mock_db.delete.assert_awaited_once_with(connection)
         finally:
-            _recovery_state.pop(endpoint.id, None)
+            _recovery_state.pop(connection.id, None)
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:
@@ -1658,7 +1722,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         from starlette.requests import Request
 
         from app.core.database import Base
-        from app.models.models import Endpoint, ModelConfig, Provider
+        from app.models.models import Connection, Endpoint, ModelConfig, Provider
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
             _recovery_state,
@@ -1722,23 +1786,42 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     failover_recovery_cooldown_seconds=60,
                     is_enabled=True,
                 )
-                primary = Endpoint(
-                    model_config_rel=model,
+                primary_endpoint = Endpoint(
+                    name="primary",
                     base_url="https://primary.example.com/v1",
                     api_key="sk-primary",
+                )
+                secondary_endpoint = Endpoint(
+                    name="secondary",
+                    base_url="https://secondary.example.com/v1",
+                    api_key="sk-secondary",
+                )
+                primary = Connection(
+                    model_config_rel=model,
+                    endpoint_rel=primary_endpoint,
                     is_active=True,
+                    endpoint_id=1,
                     priority=0,
                     description="primary",
                 )
-                secondary = Endpoint(
+                secondary = Connection(
                     model_config_rel=model,
-                    base_url="https://secondary.example.com/v1",
-                    api_key="sk-secondary",
+                    endpoint_rel=secondary_endpoint,
+                    endpoint_id=2,
                     is_active=True,
                     priority=1,
                     description="secondary",
                 )
-                seed_db.add_all([provider, model, primary, secondary])
+                seed_db.add_all(
+                    [
+                        provider,
+                        model,
+                        primary_endpoint,
+                        secondary_endpoint,
+                        primary,
+                        secondary,
+                    ]
+                )
                 await seed_db.commit()
                 await seed_db.refresh(primary)
                 await seed_db.refresh(secondary)
@@ -1780,7 +1863,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
                     with sqlite3.connect(db_file) as conn:
                         conn.execute(
-                            "UPDATE endpoints SET is_active = 0 WHERE id = ?",
+                            "UPDATE connections SET is_active = 0 WHERE id = ?",
                             (primary_id,),
                         )
                         conn.commit()
@@ -1805,10 +1888,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 assert "secondary.example.com" in client.sent_urls[0]
 
                 primary_row = await db.execute(
-                    select(Endpoint.is_active).where(Endpoint.id == primary_id)
+                    select(Connection.is_active).where(Connection.id == primary_id)
                 )
                 secondary_row = await db.execute(
-                    select(Endpoint.is_active).where(Endpoint.id == secondary_id)
+                    select(Connection.is_active).where(Connection.id == secondary_id)
                 )
                 assert primary_row.scalar_one() is False
                 assert secondary_row.scalar_one() is True
@@ -1931,7 +2014,7 @@ class TestDEF016_MapToOutputFallback:
     """DEF-016: MAP_TO_OUTPUT applies output_price to missing special prices."""
 
     @staticmethod
-    def _build_endpoint(
+    def _build_connection(
         *,
         pricing_unit: str,
         input_price: str,
@@ -1941,12 +2024,17 @@ class TestDEF016_MapToOutputFallback:
         reasoning_price: str | None,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Endpoint
+        from app.models.models import Connection, Endpoint
 
         endpoint = Endpoint(
-            model_config_id=1,
+            name="def016-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+        )
+        endpoint.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
             pricing_enabled=True,
             pricing_unit=pricing_unit,
             pricing_currency_code="USD",
@@ -1958,8 +2046,9 @@ class TestDEF016_MapToOutputFallback:
             missing_special_token_price_policy=missing_special_token_price_policy,
             pricing_config_version=10,
         )
-        endpoint.id = 1
-        return endpoint
+        connection.id = 1
+        connection.endpoint_rel = endpoint
+        return connection, endpoint
 
     def test_map_to_output_uses_output_price_for_missing_specials(self):
         from app.services.costing_service import (
@@ -1967,7 +2056,7 @@ class TestDEF016_MapToOutputFallback:
             compute_cost_fields,
         )
 
-        endpoint = self._build_endpoint(
+        connection, endpoint = self._build_connection(
             pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
@@ -1978,6 +2067,7 @@ class TestDEF016_MapToOutputFallback:
         )
 
         result = compute_cost_fields(
+            connection=connection,
             endpoint=endpoint,
             model_id="test-model",
             status_code=200,
@@ -2007,7 +2097,7 @@ class TestDEF017_ZeroCostFallback:
     """DEF-017: ZERO_COST with missing special prices produces 0 special costs."""
 
     @staticmethod
-    def _build_endpoint(
+    def _build_connection(
         *,
         pricing_unit: str,
         input_price: str,
@@ -2017,12 +2107,17 @@ class TestDEF017_ZeroCostFallback:
         reasoning_price: str | None,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Endpoint
+        from app.models.models import Connection, Endpoint
 
         endpoint = Endpoint(
-            model_config_id=1,
+            name="def017-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+        )
+        endpoint.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
             pricing_enabled=True,
             pricing_unit=pricing_unit,
             pricing_currency_code="USD",
@@ -2034,8 +2129,9 @@ class TestDEF017_ZeroCostFallback:
             missing_special_token_price_policy=missing_special_token_price_policy,
             pricing_config_version=10,
         )
-        endpoint.id = 1
-        return endpoint
+        connection.id = 1
+        connection.endpoint_rel = endpoint
+        return connection, endpoint
 
     def test_zero_cost_produces_zero_for_missing_specials(self):
         from app.services.costing_service import (
@@ -2043,7 +2139,7 @@ class TestDEF017_ZeroCostFallback:
             compute_cost_fields,
         )
 
-        endpoint = self._build_endpoint(
+        connection, endpoint = self._build_connection(
             pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
@@ -2054,6 +2150,7 @@ class TestDEF017_ZeroCostFallback:
         )
 
         result = compute_cost_fields(
+            connection=connection,
             endpoint=endpoint,
             model_id="test-model",
             status_code=200,
@@ -2190,11 +2287,21 @@ class TestDEF021_StreamingCancellationResilience:
         provider.id = 11
 
         endpoint = MagicMock()
-        endpoint.id = 101
+        endpoint.id = 201
+        endpoint.endpoint_id = 201
         endpoint.base_url = "https://api.openai.com/v1"
         endpoint.api_key = "sk-test"
         endpoint.auth_type = None
         endpoint.description = "primary"
+        endpoint.forward_stream_options = False
+
+        connection = MagicMock()
+        connection.id = 101
+        connection.endpoint_id = 201
+        connection.auth_type = None
+        connection.description = "primary"
+        connection.forward_stream_options = False
+        connection.endpoint_rel = endpoint
 
         model_config = MagicMock()
         model_config.provider = provider
@@ -2203,7 +2310,7 @@ class TestDEF021_StreamingCancellationResilience:
         model_config.failover_recovery_enabled = False
         model_config.failover_recovery_cooldown_seconds = 60
 
-        return model_config, endpoint
+        return model_config, connection
 
     @staticmethod
     def _build_db_mock():
@@ -2277,7 +2384,7 @@ class TestDEF021_StreamingCancellationResilience:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_endpoints",
+                "app.routers.proxy.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
             patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
@@ -2378,7 +2485,7 @@ class TestDEF021_StreamingCancellationResilience:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_endpoints",
+                "app.routers.proxy.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
             patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),

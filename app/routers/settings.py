@@ -3,10 +3,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
-from app.models.models import Endpoint, EndpointFxRateSetting, UserSetting
+from app.models.models import (
+    Connection,
+    EndpointFxRateSetting,
+    ModelConfig,
+    UserSetting,
+)
 from app.schemas.schemas import (
     CostingSettingsResponse,
     CostingSettingsUpdate,
@@ -67,39 +71,25 @@ async def update_costing_settings(
 ):
     settings_row = await _get_or_create_user_settings(db)
 
-    endpoint_ids = [item.endpoint_id for item in body.endpoint_fx_mappings]
-    endpoint_model_map: dict[int, str] = {}
+    endpoint_ids = sorted({item.endpoint_id for item in body.endpoint_fx_mappings})
+    valid_pairs: set[tuple[str, int]] = set()
     if endpoint_ids:
-        endpoint_rows = (
-            (
-                await db.execute(
-                    select(Endpoint)
-                    .options(selectinload(Endpoint.model_config_rel))
-                    .where(Endpoint.id.in_(endpoint_ids))
-                )
+        rows = (
+            await db.execute(
+                select(ModelConfig.model_id, Connection.endpoint_id)
+                .join(Connection, Connection.model_config_id == ModelConfig.id)
+                .where(Connection.endpoint_id.in_(endpoint_ids))
             )
-            .scalars()
-            .all()
-        )
-        endpoint_model_map = {
-            ep.id: ep.model_config_rel.model_id
-            for ep in endpoint_rows
-            if ep.model_config_rel
-        }
+        ).all()
+        valid_pairs = {(row.model_id, row.endpoint_id) for row in rows}
 
     for mapping in body.endpoint_fx_mappings:
-        mapped_model_id = endpoint_model_map.get(mapping.endpoint_id)
-        if mapped_model_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Endpoint {mapping.endpoint_id} does not exist",
-            )
-        if mapped_model_id != mapping.model_id:
+        if (mapping.model_id, mapping.endpoint_id) not in valid_pairs:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"Endpoint {mapping.endpoint_id} belongs to model '{mapped_model_id}', "
-                    f"not '{mapping.model_id}'"
+                    "No connection found for "
+                    f"model_id='{mapping.model_id}' and endpoint_id={mapping.endpoint_id}"
                 ),
             )
 

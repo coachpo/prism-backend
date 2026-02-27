@@ -13,6 +13,7 @@ from app.routers import (
     providers,
     models,
     endpoints,
+    connections,
     proxy,
     stats,
     config,
@@ -141,328 +142,865 @@ async def seed_user_settings():
             logger.info("Seeded default user settings")
 
 
-async def _add_missing_columns(conn):
-    """Add columns introduced after initial schema to existing SQLite tables."""
-    result = await conn.execute(text("PRAGMA table_info(endpoints)"))
-    ep_columns = {row[1] for row in result.fetchall()}
-    if "auth_type" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN auth_type VARCHAR(50)")
-        )
-        logger.info("Migrated: added auth_type column to endpoints table")
-    if "custom_headers" not in ep_columns:
-        await conn.execute(text("ALTER TABLE endpoints ADD COLUMN custom_headers TEXT"))
-        logger.info("Migrated: added custom_headers column to endpoints table")
-    if "pricing_enabled" not in ep_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE endpoints ADD COLUMN pricing_enabled BOOLEAN NOT NULL DEFAULT 0"
-            )
-        )
-        logger.info("Migrated: added pricing_enabled column to endpoints table")
-    if "pricing_unit" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN pricing_unit VARCHAR(10)")
-        )
-        logger.info("Migrated: added pricing_unit column to endpoints table")
-    if "pricing_currency_code" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN pricing_currency_code VARCHAR(3)")
-        )
-        logger.info("Migrated: added pricing_currency_code column to endpoints table")
-    if "input_price" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN input_price VARCHAR(20)")
-        )
-        logger.info("Migrated: added input_price column to endpoints table")
-    if "output_price" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN output_price VARCHAR(20)")
-        )
-        logger.info("Migrated: added output_price column to endpoints table")
-    if "cached_input_price" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN cached_input_price VARCHAR(20)")
-        )
-        logger.info("Migrated: added cached_input_price column to endpoints table")
-    if "cache_creation_price" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN cache_creation_price VARCHAR(20)")
-        )
-        logger.info("Migrated: added cache_creation_price column to endpoints table")
-    if "reasoning_price" not in ep_columns:
-        await conn.execute(
-            text("ALTER TABLE endpoints ADD COLUMN reasoning_price VARCHAR(20)")
-        )
-        logger.info("Migrated: added reasoning_price column to endpoints table")
-    if "missing_special_token_price_policy" not in ep_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE endpoints ADD COLUMN missing_special_token_price_policy VARCHAR(20) NOT NULL DEFAULT 'MAP_TO_OUTPUT'"
-            )
-        )
-        logger.info(
-            "Migrated: added missing_special_token_price_policy column to endpoints table"
-        )
-    if "pricing_config_version" not in ep_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE endpoints ADD COLUMN pricing_config_version INTEGER NOT NULL DEFAULT 0"
-            )
-        )
-        logger.info("Migrated: added pricing_config_version column to endpoints table")
-    if "forward_stream_options" not in ep_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE endpoints ADD COLUMN forward_stream_options BOOLEAN NOT NULL DEFAULT 0"
-            )
-        )
-        logger.info("Migrated: added forward_stream_options column to endpoints table")
-    result = await conn.execute(text("PRAGMA table_info(providers)"))
-    prov_columns = {row[1] for row in result.fetchall()}
-    if "audit_enabled" not in prov_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE providers ADD COLUMN audit_enabled BOOLEAN NOT NULL DEFAULT 0"
-            )
-        )
-        logger.info("Migrated: added audit_enabled column to providers table")
-    if "audit_capture_bodies" not in prov_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE providers ADD COLUMN audit_capture_bodies BOOLEAN NOT NULL DEFAULT 1"
-            )
-        )
-        logger.info("Migrated: added audit_capture_bodies column to providers table")
+async def _table_exists(conn, table_name: str) -> bool:
+    result = await conn.execute(
+        text("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :table_name"),
+        {"table_name": table_name},
+    )
+    return result.first() is not None
 
-    result = await conn.execute(text("PRAGMA table_info(request_logs)"))
-    rl_columns = {row[1] for row in result.fetchall()}
-    if "endpoint_description" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN endpoint_description TEXT")
-        )
-        logger.info("Migrated: added endpoint_description column to request_logs table")
-    if "success_flag" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN success_flag BOOLEAN")
-        )
-        logger.info("Migrated: added success_flag column to request_logs table")
-    if "billable_flag" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN billable_flag BOOLEAN")
-        )
-        logger.info("Migrated: added billable_flag column to request_logs table")
-    if "priced_flag" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN priced_flag BOOLEAN")
-        )
-        logger.info("Migrated: added priced_flag column to request_logs table")
-    if "unpriced_reason" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN unpriced_reason VARCHAR(50)")
-        )
-        logger.info("Migrated: added unpriced_reason column to request_logs table")
-    if "reasoning_tokens" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN reasoning_tokens INTEGER")
-        )
-        logger.info("Migrated: added reasoning_tokens column to request_logs table")
-    if "input_cost_micros" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN input_cost_micros BIGINT")
-        )
-        logger.info("Migrated: added input_cost_micros column to request_logs table")
-    if "output_cost_micros" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN output_cost_micros BIGINT")
-        )
-        logger.info("Migrated: added output_cost_micros column to request_logs table")
-    if "reasoning_cost_micros" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN reasoning_cost_micros BIGINT")
-        )
-        logger.info(
-            "Migrated: added reasoning_cost_micros column to request_logs table"
-        )
-    if "total_cost_original_micros" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN total_cost_original_micros BIGINT"
-            )
-        )
-        logger.info(
-            "Migrated: added total_cost_original_micros column to request_logs table"
-        )
-    if "total_cost_user_currency_micros" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN total_cost_user_currency_micros BIGINT"
-            )
-        )
-        logger.info(
-            "Migrated: added total_cost_user_currency_micros column to request_logs table"
-        )
-    if "currency_code_original" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN currency_code_original VARCHAR(3)"
-            )
-        )
-        logger.info(
-            "Migrated: added currency_code_original column to request_logs table"
-        )
-    if "report_currency_code" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN report_currency_code VARCHAR(3)")
-        )
-        logger.info("Migrated: added report_currency_code column to request_logs table")
-    if "report_currency_symbol" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN report_currency_symbol VARCHAR(5)"
-            )
-        )
-        logger.info(
-            "Migrated: added report_currency_symbol column to request_logs table"
-        )
-    if "fx_rate_used" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN fx_rate_used VARCHAR(20)")
-        )
-        logger.info("Migrated: added fx_rate_used column to request_logs table")
-    if "fx_rate_source" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN fx_rate_source VARCHAR(30)")
-        )
-        logger.info("Migrated: added fx_rate_source column to request_logs table")
-    if "pricing_snapshot_unit" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_unit VARCHAR(10)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_unit column to request_logs table"
-        )
-    if "pricing_snapshot_input" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_input VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_input column to request_logs table"
-        )
-    if "pricing_snapshot_output" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_output VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_output column to request_logs table"
-        )
-    if "pricing_snapshot_reasoning" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_reasoning VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_reasoning column to request_logs table"
-        )
-    if "cache_read_input_tokens" not in rl_columns:
-        await conn.execute(
-            text("ALTER TABLE request_logs ADD COLUMN cache_read_input_tokens INTEGER")
-        )
-        logger.info(
-            "Migrated: added cache_read_input_tokens column to request_logs table"
-        )
-    if "cache_creation_input_tokens" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN cache_creation_input_tokens INTEGER"
-            )
-        )
-        logger.info(
-            "Migrated: added cache_creation_input_tokens column to request_logs table"
-        )
-    if "cache_read_input_cost_micros" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN cache_read_input_cost_micros BIGINT"
-            )
-        )
-        logger.info(
-            "Migrated: added cache_read_input_cost_micros column to request_logs table"
-        )
-    if "cache_creation_input_cost_micros" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN cache_creation_input_cost_micros BIGINT"
-            )
-        )
-        logger.info(
-            "Migrated: added cache_creation_input_cost_micros column to request_logs table"
-        )
-    if "pricing_snapshot_cache_read_input" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_cache_read_input VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_cache_read_input column to request_logs table"
-        )
-    if "pricing_snapshot_cache_creation_input" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_cache_creation_input VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_cache_creation_input column to request_logs table"
-        )
-    if "pricing_snapshot_missing_special_token_price_policy" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_snapshot_missing_special_token_price_policy VARCHAR(20)"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_snapshot_missing_special_token_price_policy column to request_logs table"
-        )
-    if "pricing_config_version_used" not in rl_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE request_logs ADD COLUMN pricing_config_version_used INTEGER"
-            )
-        )
-        logger.info(
-            "Migrated: added pricing_config_version_used column to request_logs table"
-        )
 
-    result = await conn.execute(text("PRAGMA table_info(audit_logs)"))
-    al_columns = {row[1] for row in result.fetchall()}
-    if "endpoint_id" not in al_columns:
-        await conn.execute(
-            text("ALTER TABLE audit_logs ADD COLUMN endpoint_id INTEGER")
-        )
-        logger.info("Migrated: added endpoint_id column to audit_logs table")
-    if "endpoint_base_url" not in al_columns:
-        await conn.execute(
-            text("ALTER TABLE audit_logs ADD COLUMN endpoint_base_url VARCHAR(500)")
-        )
-        logger.info("Migrated: added endpoint_base_url column to audit_logs table")
-    if "endpoint_description" not in al_columns:
-        await conn.execute(
-            text("ALTER TABLE audit_logs ADD COLUMN endpoint_description TEXT")
-        )
-        logger.info("Migrated: added endpoint_description column to audit_logs table")
+async def _table_columns(conn, table_name: str) -> set[str]:
+    if not await _table_exists(conn, table_name):
+        return set()
+    result = await conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return {row[1] for row in result.fetchall()}
+
+
+async def _add_column_if_missing(
+    conn,
+    table_name: str,
+    columns: set[str],
+    column_name: str,
+    ddl_fragment: str,
+) -> None:
+    if column_name in columns:
+        return
+    await conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {ddl_fragment}"))
+    columns.add(column_name)
+    logger.info("Migrated: added %s column to %s table", column_name, table_name)
+
+
+async def _rebuild_endpoint_fx_rate_settings_if_needed(conn) -> None:
+    if not await _table_exists(conn, "endpoint_fx_rate_settings"):
+        return
+
+    fk_rows = (
+        await conn.execute(text("PRAGMA foreign_key_list(endpoint_fx_rate_settings)"))
+    ).fetchall()
+    fk_targets = {row[2] for row in fk_rows}
+    if fk_targets == {"endpoints"}:
+        return
 
     await conn.execute(
         text(
+            """
+            CREATE TABLE endpoint_fx_rate_settings_tmp AS
+            SELECT id, model_id, endpoint_id, fx_rate, created_at, updated_at
+            FROM endpoint_fx_rate_settings
+            """
+        )
+    )
+    await conn.execute(text("DROP TABLE endpoint_fx_rate_settings"))
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE endpoint_fx_rate_settings (
+                id INTEGER PRIMARY KEY,
+                model_id VARCHAR(200) NOT NULL,
+                endpoint_id INTEGER NOT NULL,
+                fx_rate VARCHAR(20) NOT NULL,
+                created_at DATETIME,
+                updated_at DATETIME,
+                CONSTRAINT uq_fx_model_endpoint UNIQUE (model_id, endpoint_id),
+                FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE CASCADE
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO endpoint_fx_rate_settings (
+                id,
+                model_id,
+                endpoint_id,
+                fx_rate,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                model_id,
+                endpoint_id,
+                fx_rate,
+                created_at,
+                updated_at
+            FROM endpoint_fx_rate_settings_tmp
+            WHERE endpoint_id IN (SELECT id FROM endpoints)
+            """
+        )
+    )
+    await conn.execute(text("DROP TABLE endpoint_fx_rate_settings_tmp"))
+    logger.info("Migrated: rebuilt endpoint_fx_rate_settings foreign key to endpoints")
+
+
+async def _migrate_legacy_endpoints_table(conn) -> None:
+    endpoint_columns = await _table_columns(conn, "endpoints")
+    if "model_config_id" not in endpoint_columns:
+        return
+
+    if await _table_exists(conn, "connections"):
+        connection_columns = await _table_columns(conn, "connections")
+        result = await conn.execute(text("SELECT COUNT(*) FROM connections"))
+        connection_count = int(result.scalar_one() or 0)
+        if connection_count > 0 and "base_url" not in connection_columns:
+            logger.warning(
+                "Detected pre-existing non-empty connections table; skipping legacy rename migration"
+            )
+            return
+        await conn.execute(text("DROP TABLE connections"))
+
+    await conn.execute(text("ALTER TABLE endpoints RENAME TO connections_legacy"))
+
+    legacy_columns = await _table_columns(conn, "connections_legacy")
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "health_status",
+        "health_status VARCHAR(20) NOT NULL DEFAULT 'unknown'",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "health_detail",
+        "health_detail TEXT",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "last_health_check",
+        "last_health_check DATETIME",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "pricing_enabled",
+        "pricing_enabled BOOLEAN NOT NULL DEFAULT 0",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "pricing_unit",
+        "pricing_unit VARCHAR(10)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "pricing_currency_code",
+        "pricing_currency_code VARCHAR(3)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "input_price",
+        "input_price VARCHAR(20)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "output_price",
+        "output_price VARCHAR(20)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "cached_input_price",
+        "cached_input_price VARCHAR(20)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "cache_creation_price",
+        "cache_creation_price VARCHAR(20)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "reasoning_price",
+        "reasoning_price VARCHAR(20)",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "missing_special_token_price_policy",
+        "missing_special_token_price_policy VARCHAR(20) NOT NULL DEFAULT 'MAP_TO_OUTPUT'",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "pricing_config_version",
+        "pricing_config_version INTEGER NOT NULL DEFAULT 0",
+    )
+    await _add_column_if_missing(
+        conn,
+        "connections_legacy",
+        legacy_columns,
+        "forward_stream_options",
+        "forward_stream_options BOOLEAN NOT NULL DEFAULT 0",
+    )
+
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE endpoints (
+                id INTEGER PRIMARY KEY,
+                name VARCHAR(200) NOT NULL,
+                base_url VARCHAR(500) NOT NULL,
+                api_key VARCHAR(500) NOT NULL,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO endpoints (id, name, base_url, api_key, created_at, updated_at)
+            SELECT
+                id,
+                CASE
+                    WHEN duplicate_count > 1 THEN base_name || '-' || id
+                    ELSE base_name
+                END,
+                base_url,
+                api_key,
+                created_at,
+                updated_at
+            FROM (
+                SELECT
+                    c.id AS id,
+                    c.base_url AS base_url,
+                    c.api_key AS api_key,
+                    c.created_at AS created_at,
+                    c.updated_at AS updated_at,
+                    CASE
+                        WHEN TRIM(COALESCE(c.description, '')) <> '' THEN TRIM(c.description)
+                        ELSE 'endpoint-' || c.id
+                    END AS base_name,
+                    COUNT(*) OVER (
+                        PARTITION BY
+                            CASE
+                                WHEN TRIM(COALESCE(c.description, '')) <> '' THEN TRIM(c.description)
+                                ELSE 'endpoint-' || c.id
+                            END
+                    ) AS duplicate_count
+                FROM connections_legacy c
+            ) AS named
+            """
+        )
+    )
+    await conn.execute(
+        text("CREATE UNIQUE INDEX idx_endpoints_name_unique ON endpoints(name)")
+    )
+
+    await _rebuild_endpoint_fx_rate_settings_if_needed(conn)
+
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE connections (
+                id INTEGER PRIMARY KEY,
+                model_config_id INTEGER NOT NULL,
+                endpoint_id INTEGER NOT NULL,
+                is_active BOOLEAN NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                description TEXT,
+                auth_type VARCHAR(50),
+                custom_headers TEXT,
+                health_status VARCHAR(20) NOT NULL DEFAULT 'unknown',
+                health_detail TEXT,
+                last_health_check DATETIME,
+                pricing_enabled BOOLEAN NOT NULL DEFAULT 0,
+                pricing_unit VARCHAR(10),
+                pricing_currency_code VARCHAR(3),
+                input_price VARCHAR(20),
+                output_price VARCHAR(20),
+                cached_input_price VARCHAR(20),
+                cache_creation_price VARCHAR(20),
+                reasoning_price VARCHAR(20),
+                missing_special_token_price_policy VARCHAR(20) NOT NULL DEFAULT 'MAP_TO_OUTPUT',
+                pricing_config_version INTEGER NOT NULL DEFAULT 0,
+                forward_stream_options BOOLEAN NOT NULL DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME,
+                FOREIGN KEY(model_config_id) REFERENCES model_configs(id) ON DELETE CASCADE,
+                FOREIGN KEY(endpoint_id) REFERENCES endpoints(id) ON DELETE RESTRICT
+            )
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            INSERT INTO connections (
+                id,
+                model_config_id,
+                endpoint_id,
+                is_active,
+                priority,
+                description,
+                auth_type,
+                custom_headers,
+                health_status,
+                health_detail,
+                last_health_check,
+                pricing_enabled,
+                pricing_unit,
+                pricing_currency_code,
+                input_price,
+                output_price,
+                cached_input_price,
+                cache_creation_price,
+                reasoning_price,
+                missing_special_token_price_policy,
+                pricing_config_version,
+                forward_stream_options,
+                created_at,
+                updated_at
+            )
+            SELECT
+                id,
+                model_config_id,
+                id,
+                COALESCE(is_active, 1),
+                COALESCE(priority, 0),
+                description,
+                auth_type,
+                custom_headers,
+                COALESCE(health_status, 'unknown'),
+                health_detail,
+                last_health_check,
+                COALESCE(pricing_enabled, 0),
+                pricing_unit,
+                pricing_currency_code,
+                input_price,
+                output_price,
+                cached_input_price,
+                cache_creation_price,
+                reasoning_price,
+                COALESCE(missing_special_token_price_policy, 'MAP_TO_OUTPUT'),
+                COALESCE(pricing_config_version, 0),
+                COALESCE(forward_stream_options, 0),
+                created_at,
+                updated_at
+            FROM connections_legacy
+            """
+        )
+    )
+    await conn.execute(text("DROP TABLE connections_legacy"))
+
+    logger.info("Migrated: split legacy endpoints table into endpoints + connections")
+
+
+async def _add_missing_columns(conn):
+    await _migrate_legacy_endpoints_table(conn)
+
+    endpoint_columns = await _table_columns(conn, "endpoints")
+    if "name" not in endpoint_columns:
+        await _add_column_if_missing(
+            conn,
+            "endpoints",
+            endpoint_columns,
+            "name",
+            "name VARCHAR(200)",
+        )
+        await conn.execute(
+            text(
+                "UPDATE endpoints SET name = 'endpoint-' || id WHERE name IS NULL OR TRIM(name) = ''"
+            )
+        )
+    await conn.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_name_unique ON endpoints(name)"
+        )
+    )
+
+    connection_columns = await _table_columns(conn, "connections")
+    if connection_columns:
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "endpoint_id",
+            "endpoint_id INTEGER",
+        )
+        await conn.execute(
+            text(
+                "UPDATE connections SET endpoint_id = id WHERE endpoint_id IS NULL AND id IS NOT NULL"
+            )
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "health_status",
+            "health_status VARCHAR(20) NOT NULL DEFAULT 'unknown'",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "health_detail",
+            "health_detail TEXT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "last_health_check",
+            "last_health_check DATETIME",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "pricing_enabled",
+            "pricing_enabled BOOLEAN NOT NULL DEFAULT 0",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "pricing_unit",
+            "pricing_unit VARCHAR(10)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "pricing_currency_code",
+            "pricing_currency_code VARCHAR(3)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "input_price",
+            "input_price VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "output_price",
+            "output_price VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "cached_input_price",
+            "cached_input_price VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "cache_creation_price",
+            "cache_creation_price VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "reasoning_price",
+            "reasoning_price VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "missing_special_token_price_policy",
+            "missing_special_token_price_policy VARCHAR(20) NOT NULL DEFAULT 'MAP_TO_OUTPUT'",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "pricing_config_version",
+            "pricing_config_version INTEGER NOT NULL DEFAULT 0",
+        )
+        await _add_column_if_missing(
+            conn,
+            "connections",
+            connection_columns,
+            "forward_stream_options",
+            "forward_stream_options BOOLEAN NOT NULL DEFAULT 0",
+        )
+
+    provider_columns = await _table_columns(conn, "providers")
+    if provider_columns:
+        await _add_column_if_missing(
+            conn,
+            "providers",
+            provider_columns,
+            "audit_enabled",
+            "audit_enabled BOOLEAN NOT NULL DEFAULT 0",
+        )
+        await _add_column_if_missing(
+            conn,
+            "providers",
+            provider_columns,
+            "audit_capture_bodies",
+            "audit_capture_bodies BOOLEAN NOT NULL DEFAULT 1",
+        )
+
+    request_log_columns = await _table_columns(conn, "request_logs")
+    if request_log_columns:
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "connection_id",
+            "connection_id INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "endpoint_description",
+            "endpoint_description TEXT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "success_flag",
+            "success_flag BOOLEAN",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "billable_flag",
+            "billable_flag BOOLEAN",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "priced_flag",
+            "priced_flag BOOLEAN",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "unpriced_reason",
+            "unpriced_reason VARCHAR(50)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "reasoning_tokens",
+            "reasoning_tokens INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "input_cost_micros",
+            "input_cost_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "output_cost_micros",
+            "output_cost_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "reasoning_cost_micros",
+            "reasoning_cost_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "total_cost_original_micros",
+            "total_cost_original_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "total_cost_user_currency_micros",
+            "total_cost_user_currency_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "currency_code_original",
+            "currency_code_original VARCHAR(3)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "report_currency_code",
+            "report_currency_code VARCHAR(3)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "report_currency_symbol",
+            "report_currency_symbol VARCHAR(5)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "fx_rate_used",
+            "fx_rate_used VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "fx_rate_source",
+            "fx_rate_source VARCHAR(30)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_unit",
+            "pricing_snapshot_unit VARCHAR(10)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_input",
+            "pricing_snapshot_input VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_output",
+            "pricing_snapshot_output VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_reasoning",
+            "pricing_snapshot_reasoning VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "cache_read_input_tokens",
+            "cache_read_input_tokens INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "cache_creation_input_tokens",
+            "cache_creation_input_tokens INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "cache_read_input_cost_micros",
+            "cache_read_input_cost_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "cache_creation_input_cost_micros",
+            "cache_creation_input_cost_micros BIGINT",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_cache_read_input",
+            "pricing_snapshot_cache_read_input VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_cache_creation_input",
+            "pricing_snapshot_cache_creation_input VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_snapshot_missing_special_token_price_policy",
+            "pricing_snapshot_missing_special_token_price_policy VARCHAR(20)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "request_logs",
+            request_log_columns,
+            "pricing_config_version_used",
+            "pricing_config_version_used INTEGER",
+        )
+
+    audit_columns = await _table_columns(conn, "audit_logs")
+    if audit_columns:
+        await _add_column_if_missing(
+            conn,
+            "audit_logs",
+            audit_columns,
+            "endpoint_id",
+            "endpoint_id INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "audit_logs",
+            audit_columns,
+            "connection_id",
+            "connection_id INTEGER",
+        )
+        await _add_column_if_missing(
+            conn,
+            "audit_logs",
+            audit_columns,
+            "endpoint_base_url",
+            "endpoint_base_url VARCHAR(500)",
+        )
+        await _add_column_if_missing(
+            conn,
+            "audit_logs",
+            audit_columns,
+            "endpoint_description",
+            "endpoint_description TEXT",
+        )
+
+    await _rebuild_endpoint_fx_rate_settings_if_needed(conn)
+
+    await conn.execute(
+        text(
+            "UPDATE request_logs SET connection_id = endpoint_id WHERE connection_id IS NULL AND endpoint_id IS NOT NULL"
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE request_logs
+            SET endpoint_description = COALESCE(
+                endpoint_description,
+                (
+                    SELECT c.description
+                    FROM connections c
+                    WHERE c.id = request_logs.connection_id
+                ),
+                (
+                    SELECT e.name
+                    FROM endpoints e
+                    WHERE e.id = request_logs.endpoint_id
+                )
+            )
+            WHERE request_logs.endpoint_description IS NULL
+            """
+        )
+    )
+    await conn.execute(
+        text(
+            """
+            UPDATE audit_logs
+            SET
+                connection_id = COALESCE(
+                    audit_logs.connection_id,
+                    (
+                        SELECT rl.connection_id
+                        FROM request_logs rl
+                        WHERE rl.id = audit_logs.request_log_id
+                    ),
+                    audit_logs.endpoint_id
+                ),
+                endpoint_id = COALESCE(
+                    audit_logs.endpoint_id,
+                    (
+                        SELECT rl.endpoint_id
+                        FROM request_logs rl
+                        WHERE rl.id = audit_logs.request_log_id
+                    )
+                ),
+                endpoint_base_url = COALESCE(
+                    audit_logs.endpoint_base_url,
+                    (
+                        SELECT rl.endpoint_base_url
+                        FROM request_logs rl
+                        WHERE rl.id = audit_logs.request_log_id
+                    )
+                ),
+                endpoint_description = COALESCE(
+                    audit_logs.endpoint_description,
+                    (
+                        SELECT rl.endpoint_description
+                        FROM request_logs rl
+                        WHERE rl.id = audit_logs.request_log_id
+                    )
+                )
+            WHERE audit_logs.request_log_id IS NOT NULL
+            """
+        )
+    )
+
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_connections_model_config_id ON connections(model_config_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_connections_endpoint_id ON connections(endpoint_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_connections_is_active ON connections(is_active)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_connections_priority ON connections(priority)"
+        )
+    )
+    await conn.execute(
+        text(
             "CREATE INDEX IF NOT EXISTS idx_audit_logs_endpoint_id ON audit_logs(endpoint_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_audit_logs_connection_id ON audit_logs(connection_id)"
+        )
+    )
+    await conn.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS idx_request_logs_connection_id ON request_logs(connection_id)"
         )
     )
     await conn.execute(
@@ -481,62 +1019,28 @@ async def _add_missing_columns(conn):
         )
     )
 
-    await conn.execute(
-        text(
-            """
-            UPDATE request_logs SET endpoint_description = (
-                SELECT endpoints.description FROM endpoints
-                WHERE endpoints.id = request_logs.endpoint_id
-            )
-            WHERE request_logs.endpoint_id IS NOT NULL
-              AND request_logs.endpoint_description IS NULL
-            """
+    model_config_columns = await _table_columns(conn, "model_configs")
+    if model_config_columns:
+        await _add_column_if_missing(
+            conn,
+            "model_configs",
+            model_config_columns,
+            "failover_recovery_enabled",
+            "failover_recovery_enabled BOOLEAN NOT NULL DEFAULT 1",
         )
-    )
+        await _add_column_if_missing(
+            conn,
+            "model_configs",
+            model_config_columns,
+            "failover_recovery_cooldown_seconds",
+            "failover_recovery_cooldown_seconds INTEGER NOT NULL DEFAULT 60",
+        )
 
-    await conn.execute(
-        text(
-            """
-            UPDATE audit_logs SET
-                endpoint_id = rl.endpoint_id,
-                endpoint_base_url = rl.endpoint_base_url,
-                endpoint_description = rl.endpoint_description
-            FROM request_logs rl
-            WHERE audit_logs.request_log_id = rl.id
-              AND audit_logs.request_log_id IS NOT NULL
-              AND audit_logs.endpoint_id IS NULL
-            """
-        )
-    )
-
-    # --- model_configs: add failover recovery columns + migrate round_robin ---
-    result = await conn.execute(text("PRAGMA table_info(model_configs)"))
-    mc_columns = {row[1] for row in result.fetchall()}
-    if "failover_recovery_enabled" not in mc_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE model_configs ADD COLUMN failover_recovery_enabled BOOLEAN NOT NULL DEFAULT 1"
-            )
-        )
-        logger.info(
-            "Migrated: added failover_recovery_enabled column to model_configs table"
-        )
-    if "failover_recovery_cooldown_seconds" not in mc_columns:
-        await conn.execute(
-            text(
-                "ALTER TABLE model_configs ADD COLUMN failover_recovery_cooldown_seconds INTEGER NOT NULL DEFAULT 60"
-            )
-        )
-        logger.info(
-            "Migrated: added failover_recovery_cooldown_seconds column to model_configs table"
-        )
-    # Migrate any leftover round_robin strategies to failover
     await conn.execute(
         text(
             "UPDATE model_configs SET lb_strategy = 'failover' WHERE lb_strategy = 'round_robin'"
         )
     )
-
     await conn.execute(
         text(
             """
@@ -567,6 +1071,7 @@ async def _add_missing_columns(conn):
 async def lifespan(app: FastAPI):
     # Startup: create tables, seed data, init HTTP client
     async with engine.begin() as conn:
+        await _add_missing_columns(conn)
         await conn.run_sync(Base.metadata.create_all)
         await _add_missing_columns(conn)
 
@@ -615,6 +1120,7 @@ app.add_middleware(
 app.include_router(providers.router)
 app.include_router(models.router)
 app.include_router(endpoints.router)
+app.include_router(connections.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
 app.include_router(config.router)

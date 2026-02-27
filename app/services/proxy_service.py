@@ -1,12 +1,11 @@
 import json
 import logging
 import re
-from urllib.parse import urlparse
 from typing import AsyncGenerator
 
 import httpx
 
-from app.models.models import Endpoint, HeaderBlocklistRule
+from app.models.models import Connection, Endpoint, HeaderBlocklistRule
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +67,15 @@ def normalize_base_url(raw_url: str) -> str:
 def validate_base_url(base_url: str) -> list[str]:
     """Return a list of warnings about a base_url (empty list = OK)."""
     warnings: list[str] = []
-    from urllib.parse import urlparse
+    try:
+        parsed = httpx.URL(base_url)
+    except Exception:
+        warnings.append(
+            "base_url must include scheme and host (e.g. https://api.example.com/v1)"
+        )
+        return warnings
 
-    parsed = urlparse(base_url)
-    if not parsed.scheme or not parsed.netloc:
+    if not parsed.scheme or not parsed.host:
         warnings.append(
             "base_url must include scheme and host (e.g. https://api.example.com/v1)"
         )
@@ -84,16 +88,19 @@ def validate_base_url(base_url: str) -> list[str]:
     return warnings
 
 
-def build_upstream_url(endpoint: Endpoint, request_path: str) -> str:
+def build_upstream_url(
+    connection: Connection | Endpoint,
+    request_path: str,
+    endpoint: Endpoint | None = None,
+) -> str:
     """Forward the exact request path to the endpoint's base URL.
 
     Handles overlapping path prefixes between base_url and request_path.
     e.g. base_url="https://api.example.com/v1" + request_path="/v1/responses"
          -> "https://api.example.com/v1/responses" (not /v1/v1/responses)
     """
-    from urllib.parse import urlparse, urlunparse
-
-    parsed = urlparse(endpoint.base_url)
+    endpoint_obj = endpoint or connection
+    parsed = httpx.URL(str(endpoint_obj.base_url or ""))
     base_path = parsed.path.rstrip("/")
     req_path = request_path if request_path.startswith("/") else f"/{request_path}"
 
@@ -109,19 +116,20 @@ def build_upstream_url(endpoint: Endpoint, request_path: str) -> str:
             "(base_url=%s, request_path=%s)",
             final_path,
             fixed_path,
-            endpoint.base_url,
+            endpoint_obj.base_url,
             request_path,
         )
         final_path = fixed_path
 
-    return urlunparse((parsed.scheme, parsed.netloc, final_path, "", "", ""))
+    return str(parsed.copy_with(path=final_path))
 
 
 def build_upstream_headers(
-    endpoint: Endpoint,
+    connection: Connection | Endpoint,
     provider_type: str,
     client_headers: dict[str, str] | None = None,
     blocklist_rules: list[HeaderBlocklistRule] | None = None,
+    endpoint: Endpoint | None = None,
 ) -> dict[str, str]:
     """Build headers for the upstream request.
 
@@ -132,8 +140,12 @@ def build_upstream_headers(
     4. Endpoint custom_headers — applied LAST, overwrites same-name
     5. Blocklist sanitization applied twice: on client headers and on final merged result
     """
-    auth_key = endpoint.auth_type or provider_type
+    auth_key = getattr(connection, "auth_type", None) or provider_type
     config = PROVIDER_AUTH.get(auth_key, PROVIDER_AUTH["openai"])
+
+    endpoint_obj = endpoint or connection
+    api_key = getattr(endpoint_obj, "api_key", None)
+    custom_headers = getattr(connection, "custom_headers", None)
 
     proxy_controlled_headers = {
         config["auth_header"].lower(),
@@ -157,12 +169,12 @@ def build_upstream_headers(
     if blocklist_rules:
         headers = sanitize_headers(headers, blocklist_rules)
 
-    headers[config["auth_header"]] = f"{config['auth_prefix']}{endpoint.api_key}"
+    headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
     headers.update(config["extra_headers"])
 
-    if endpoint.custom_headers:
+    if custom_headers:
         try:
-            custom = json.loads(endpoint.custom_headers)
+            custom = json.loads(custom_headers)
             if isinstance(custom, dict):
                 headers.update(custom)
         except (json.JSONDecodeError, TypeError):

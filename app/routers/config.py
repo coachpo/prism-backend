@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db
 from app.models.models import (
+    Connection,
     Provider,
     ModelConfig,
     Endpoint,
@@ -22,6 +23,7 @@ from app.schemas.schemas import (
     ConfigExportResponse,
     ConfigProviderExport,
     ConfigModelExport,
+    ConfigConnectionExport,
     ConfigEndpointExport,
     ConfigUserSettingsExport,
     ConfigEndpointFxRateExport,
@@ -32,6 +34,7 @@ from app.schemas.schemas import (
     HeaderBlocklistRuleResponse,
     HeaderBlocklistRuleExport,
 )
+from app.services.proxy_service import normalize_base_url, validate_base_url
 
 logger = logging.getLogger(__name__)
 
@@ -43,71 +46,99 @@ VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
 @router.get("/export")
 async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
     providers = (await db.execute(select(Provider))).scalars().all()
-    models_q = select(ModelConfig).options(selectinload(ModelConfig.endpoints))
-    model_configs = (await db.execute(models_q)).scalars().all()
+    endpoints = (
+        (await db.execute(select(Endpoint).order_by(Endpoint.id.asc()))).scalars().all()
+    )
+    model_configs = (
+        (
+            await db.execute(
+                select(ModelConfig)
+                .options(
+                    selectinload(ModelConfig.connections).selectinload(
+                        Connection.endpoint_rel
+                    )
+                )
+                .order_by(ModelConfig.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
 
-    provider_type_map = {p.id: p.provider_type for p in providers}
+    provider_type_map = {provider.id: provider.provider_type for provider in providers}
 
     exported_providers = [
         ConfigProviderExport(
-            name=p.name,
-            provider_type=p.provider_type,
-            description=p.description,
-            audit_enabled=p.audit_enabled,
-            audit_capture_bodies=p.audit_capture_bodies,
+            name=provider.name,
+            provider_type=provider.provider_type,
+            description=provider.description,
+            audit_enabled=provider.audit_enabled,
+            audit_capture_bodies=provider.audit_capture_bodies,
         )
-        for p in providers
+        for provider in providers
+    ]
+
+    exported_endpoints = [
+        ConfigEndpointExport(
+            endpoint_id=endpoint.id,
+            name=endpoint.name,
+            base_url=endpoint.base_url,
+            api_key=endpoint.api_key,
+        )
+        for endpoint in endpoints
     ]
 
     exported_models = [
         ConfigModelExport(
-            provider_type=provider_type_map.get(mc.provider_id, ""),
-            model_id=mc.model_id,
-            display_name=mc.display_name,
-            model_type=mc.model_type,
-            redirect_to=mc.redirect_to,
-            lb_strategy="failover" if mc.lb_strategy == "failover" else "single",
-            failover_recovery_enabled=mc.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=mc.failover_recovery_cooldown_seconds,
-            is_enabled=mc.is_enabled,
-            endpoints=[
-                ConfigEndpointExport(
-                    endpoint_id=ep.id,
-                    base_url=ep.base_url,
-                    api_key=ep.api_key,
-                    is_active=ep.is_active,
-                    priority=ep.priority,
-                    description=ep.description,
-                    auth_type=ep.auth_type,
-                    custom_headers=json.loads(ep.custom_headers)
-                    if ep.custom_headers is not None
+            provider_type=provider_type_map.get(model.provider_id, ""),
+            model_id=model.model_id,
+            display_name=model.display_name,
+            model_type=model.model_type,
+            redirect_to=model.redirect_to,
+            lb_strategy="failover" if model.lb_strategy == "failover" else "single",
+            failover_recovery_enabled=model.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
+            is_enabled=model.is_enabled,
+            connections=[
+                ConfigConnectionExport(
+                    connection_id=connection.id,
+                    endpoint_id=connection.endpoint_id,
+                    is_active=connection.is_active,
+                    priority=connection.priority,
+                    description=connection.description,
+                    auth_type=connection.auth_type,
+                    custom_headers=json.loads(connection.custom_headers)
+                    if connection.custom_headers is not None
                     else None,
-                    pricing_enabled=ep.pricing_enabled,
+                    pricing_enabled=connection.pricing_enabled,
                     pricing_unit=cast(
                         Literal["PER_1K", "PER_1M"] | None,
-                        ep.pricing_unit
-                        if ep.pricing_unit in ("PER_1K", "PER_1M")
+                        connection.pricing_unit
+                        if connection.pricing_unit in ("PER_1K", "PER_1M")
                         else None,
                     ),
-                    pricing_currency_code=ep.pricing_currency_code,
-                    input_price=ep.input_price,
-                    output_price=ep.output_price,
-                    cached_input_price=ep.cached_input_price,
-                    cache_creation_price=ep.cache_creation_price,
-                    reasoning_price=ep.reasoning_price,
+                    pricing_currency_code=connection.pricing_currency_code,
+                    input_price=connection.input_price,
+                    output_price=connection.output_price,
+                    cached_input_price=connection.cached_input_price,
+                    cache_creation_price=connection.cache_creation_price,
+                    reasoning_price=connection.reasoning_price,
                     missing_special_token_price_policy=cast(
                         Literal["MAP_TO_OUTPUT", "ZERO_COST"],
                         "ZERO_COST"
-                        if ep.missing_special_token_price_policy == "ZERO_COST"
+                        if connection.missing_special_token_price_policy == "ZERO_COST"
                         else "MAP_TO_OUTPUT",
                     ),
-                    pricing_config_version=ep.pricing_config_version,
-                    forward_stream_options=ep.forward_stream_options,
+                    pricing_config_version=connection.pricing_config_version,
+                    forward_stream_options=connection.forward_stream_options,
                 )
-                for ep in mc.endpoints
+                for connection in sorted(
+                    model.connections,
+                    key=lambda c: (c.priority, c.id),
+                )
             ],
         )
-        for mc in model_configs
+        for model in model_configs
     ]
 
     user_settings = (
@@ -127,9 +158,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
     )
 
     data = ConfigExportResponse(
-        version=4,
+        version=5,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
+        endpoints=exported_endpoints,
         models=exported_models,
         user_settings=ConfigUserSettingsExport(
             report_currency_code=(
@@ -153,13 +185,13 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
         ),
         header_blocklist_rules=[
             HeaderBlocklistRuleExport(
-                name=r.name,
-                match_type=r.match_type,
-                pattern=r.pattern,
-                enabled=r.enabled,
-                is_system=r.is_system,
+                name=rule.name,
+                match_type=rule.match_type,
+                pattern=rule.pattern,
+                enabled=rule.enabled,
+                is_system=rule.is_system,
             )
-            for r in (
+            for rule in (
                 await db.execute(
                     select(HeaderBlocklistRule).order_by(
                         HeaderBlocklistRule.is_system.desc(),
@@ -182,10 +214,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version != 4:
+    if data.version != 5:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 4",
+            detail=f"Unsupported config version: {data.version}. Expected: 5",
         )
 
     if not data.providers:
@@ -205,75 +237,151 @@ def _validate_import(data: ConfigImportRequest) -> None:
             )
         seen_provider_types.add(p.provider_type)
 
-    provider_types_in_file = {p.provider_type for p in data.providers}
-    seen_model_ids: set[str] = set()
-    native_models: dict[str, str] = {}
+    provider_types_in_file = {provider.provider_type for provider in data.providers}
 
-    for m in data.models:
-        if m.model_id in seen_model_ids:
-            raise HTTPException(
-                status_code=400, detail=f"Duplicate model_id: '{m.model_id}'"
-            )
-        seen_model_ids.add(m.model_id)
-
-        if m.provider_type not in provider_types_in_file:
+    endpoint_ids_in_file: set[int] = set()
+    endpoint_names_in_file: set[str] = set()
+    for endpoint in data.endpoints:
+        if endpoint.endpoint_id is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Model '{m.model_id}' references unknown provider type '{m.provider_type}'",
+                detail="Each endpoint in config version 5 must include endpoint_id",
+            )
+        if endpoint.endpoint_id in endpoint_ids_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate endpoint_id: {endpoint.endpoint_id}",
+            )
+        endpoint_ids_in_file.add(endpoint.endpoint_id)
+
+        endpoint_name = endpoint.name.strip()
+        if not endpoint_name:
+            raise HTTPException(
+                status_code=400, detail="Endpoint name must not be empty"
+            )
+        if endpoint_name in endpoint_names_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate endpoint name: '{endpoint_name}'",
+            )
+        endpoint_names_in_file.add(endpoint_name)
+
+        normalized_url = normalize_base_url(endpoint.base_url)
+        url_warnings = validate_base_url(normalized_url)
+        if url_warnings:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Endpoint '{endpoint_name}' has invalid base_url: {'; '.join(url_warnings)}",
             )
 
-        if m.model_type == "native":
-            if m.redirect_to is not None:
+    seen_model_ids: set[str] = set()
+    native_models: dict[str, str] = {}
+    connection_id_seen: set[int] = set()
+    connection_pairs: set[tuple[str, int]] = set()
+
+    for model in data.models:
+        if model.model_id in seen_model_ids:
+            raise HTTPException(
+                status_code=400, detail=f"Duplicate model_id: '{model.model_id}'"
+            )
+        seen_model_ids.add(model.model_id)
+
+        if model.provider_type not in provider_types_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model.model_id}' references unknown provider type "
+                    f"'{model.provider_type}'"
+                ),
+            )
+
+        if model.model_type == "native":
+            if model.redirect_to is not None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Native model '{m.model_id}' must not have redirect_to",
+                    detail=f"Native model '{model.model_id}' must not have redirect_to",
                 )
-            native_models[m.model_id] = m.provider_type
-        elif m.model_type == "proxy":
-            if m.endpoints:
+            native_models[model.model_id] = model.provider_type
+        elif model.model_type == "proxy":
+            if model.connections:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Proxy model '{m.model_id}' must not have endpoints",
+                    detail=f"Proxy model '{model.model_id}' must not have connections",
                 )
 
-        for endpoint in m.endpoints:
-            if endpoint.pricing_enabled:
-                if endpoint.pricing_unit is None:
+        for connection in model.connections:
+            if connection.connection_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Each connection in config version 5 must include connection_id "
+                        f"(model '{model.model_id}')"
+                    ),
+                )
+            if connection.connection_id in connection_id_seen:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate connection_id: {connection.connection_id}",
+                )
+            connection_id_seen.add(connection.connection_id)
+
+            if connection.endpoint_id not in endpoint_ids_in_file:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Connection {connection.connection_id} for model '{model.model_id}' "
+                        f"references unknown endpoint_id {connection.endpoint_id}"
+                    ),
+                )
+
+            connection_pairs.add((model.model_id, connection.endpoint_id))
+
+            if connection.pricing_enabled:
+                if connection.pricing_unit is None:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Endpoint for model '{m.model_id}' has pricing_enabled=true "
+                            f"Connection for model '{model.model_id}' has pricing_enabled=true "
                             "but pricing_unit is missing"
                         ),
                     )
-                if endpoint.pricing_currency_code is None:
+                if connection.pricing_currency_code is None:
                     raise HTTPException(
                         status_code=400,
                         detail=(
-                            f"Endpoint for model '{m.model_id}' has pricing_enabled=true "
+                            f"Connection for model '{model.model_id}' has pricing_enabled=true "
                             "but pricing_currency_code is missing"
                         ),
                     )
 
-    for m in data.models:
-        if m.model_type == "proxy":
-            if not m.redirect_to or m.redirect_to not in native_models:
+    for model in data.models:
+        if model.model_type == "proxy":
+            if not model.redirect_to or model.redirect_to not in native_models:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Model '{m.model_id}' references unknown redirect target '{m.redirect_to}'",
+                    detail=(
+                        f"Model '{model.model_id}' references unknown redirect target "
+                        f"'{model.redirect_to}'"
+                    ),
                 )
-            if native_models[m.redirect_to] != m.provider_type:
+            if native_models[model.redirect_to] != model.provider_type:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Model '{m.model_id}' cannot redirect cross-provider to '{m.redirect_to}'",
+                    detail=(
+                        f"Model '{model.model_id}' cannot redirect cross-provider to "
+                        f"'{model.redirect_to}'"
+                    ),
                 )
-        if m.lb_strategy == "round_robin":
+        if model.lb_strategy == "round_robin":
             raise HTTPException(
                 status_code=400,
-                detail=f"Model '{m.model_id}' uses unsupported lb_strategy 'round_robin'. Use 'single' or 'failover'.",
+                detail=(
+                    f"Model '{model.model_id}' uses unsupported lb_strategy "
+                    "'round_robin'. Use 'single' or 'failover'."
+                ),
             )
 
-    if data.version == 4 and data.user_settings is not None:
+    if data.user_settings is not None:
         seen_fx: set[tuple[str, int]] = set()
         for mapping in data.user_settings.endpoint_fx_mappings:
             key = (mapping.model_id, mapping.endpoint_id)
@@ -286,6 +394,14 @@ def _validate_import(data: ConfigImportRequest) -> None:
                     ),
                 )
             seen_fx.add(key)
+            if key not in connection_pairs:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "FX mapping must reference an imported model/endpoint connection pair: "
+                        f"model_id='{mapping.model_id}', endpoint_id={mapping.endpoint_id}"
+                    ),
+                )
 
 
 @router.post("/import", response_model=ConfigImportResponse)
@@ -296,6 +412,7 @@ async def import_config(
     _validate_import(data)
 
     await db.execute(delete(EndpointFxRateSetting))
+    await db.execute(delete(Connection))
     await db.execute(delete(Endpoint))
     await db.execute(delete(ModelConfig))
     await db.execute(delete(Provider))
@@ -314,7 +431,30 @@ async def import_config(
         await db.flush()
         provider_map[p.provider_type] = provider.id
 
+    endpoint_id_map: dict[int, int] = {}
     endpoints_count = 0
+    for endpoint_data in data.endpoints:
+        if endpoint_data.endpoint_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Each endpoint in config version 5 must include endpoint_id",
+            )
+
+        normalized_url = normalize_base_url(endpoint_data.base_url)
+        endpoint = Endpoint(
+            id=endpoint_data.endpoint_id,
+            name=endpoint_data.name.strip(),
+            base_url=normalized_url,
+            api_key=endpoint_data.api_key,
+        )
+        db.add(endpoint)
+        await db.flush()
+
+        endpoint_id_map[endpoint_data.endpoint_id] = endpoint.id
+        endpoints_count += 1
+
+    connections_count = 0
+    imported_connection_pairs: set[tuple[str, int]] = set()
 
     native_models = [m for m in data.models if m.model_type == "native"]
     proxy_models = [m for m in data.models if m.model_type == "proxy"]
@@ -334,33 +474,43 @@ async def import_config(
         db.add(mc)
         await db.flush()
 
-        for ep_data in m.endpoints:
-            ep = Endpoint(
-                id=ep_data.endpoint_id,
+        for connection_data in m.connections:
+            mapped_endpoint_id = endpoint_id_map.get(connection_data.endpoint_id)
+            if mapped_endpoint_id is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Connection {connection_data.connection_id} references unknown "
+                        f"endpoint_id {connection_data.endpoint_id}"
+                    ),
+                )
+
+            connection = Connection(
+                id=connection_data.connection_id,
                 model_config_id=mc.id,
-                base_url=ep_data.base_url,
-                api_key=ep_data.api_key,
-                is_active=ep_data.is_active,
-                priority=ep_data.priority,
-                description=ep_data.description,
-                auth_type=ep_data.auth_type,
-                custom_headers=json.dumps(ep_data.custom_headers)
-                if ep_data.custom_headers is not None
+                endpoint_id=mapped_endpoint_id,
+                is_active=connection_data.is_active,
+                priority=connection_data.priority,
+                description=connection_data.description,
+                auth_type=connection_data.auth_type,
+                custom_headers=json.dumps(connection_data.custom_headers)
+                if connection_data.custom_headers is not None
                 else None,
-                pricing_enabled=ep_data.pricing_enabled,
-                pricing_unit=ep_data.pricing_unit,
-                pricing_currency_code=ep_data.pricing_currency_code,
-                input_price=ep_data.input_price,
-                output_price=ep_data.output_price,
-                cached_input_price=ep_data.cached_input_price,
-                cache_creation_price=ep_data.cache_creation_price,
-                reasoning_price=ep_data.reasoning_price,
-                missing_special_token_price_policy=ep_data.missing_special_token_price_policy,
-                pricing_config_version=ep_data.pricing_config_version,
-                forward_stream_options=ep_data.forward_stream_options,
+                pricing_enabled=connection_data.pricing_enabled,
+                pricing_unit=connection_data.pricing_unit,
+                pricing_currency_code=connection_data.pricing_currency_code,
+                input_price=connection_data.input_price,
+                output_price=connection_data.output_price,
+                cached_input_price=connection_data.cached_input_price,
+                cache_creation_price=connection_data.cache_creation_price,
+                reasoning_price=connection_data.reasoning_price,
+                missing_special_token_price_policy=connection_data.missing_special_token_price_policy,
+                pricing_config_version=connection_data.pricing_config_version,
+                forward_stream_options=connection_data.forward_stream_options,
             )
-            db.add(ep)
-            endpoints_count += 1
+            db.add(connection)
+            connections_count += 1
+            imported_connection_pairs.add((m.model_id, connection_data.endpoint_id))
 
     for m in proxy_models:
         mc = ModelConfig(
@@ -387,44 +537,19 @@ async def import_config(
         )
         db.add(user_settings)
 
-    if data.version == 4 and data.user_settings is not None:
+    if data.user_settings is not None:
         user_settings.report_currency_code = data.user_settings.report_currency_code
         user_settings.report_currency_symbol = data.user_settings.report_currency_symbol
-
-        endpoint_rows = (
-            (
-                await db.execute(
-                    select(Endpoint)
-                    .options(selectinload(Endpoint.model_config_rel))
-                    .where(
-                        Endpoint.id.in_(
-                            [
-                                m.endpoint_id
-                                for m in data.user_settings.endpoint_fx_mappings
-                            ]
-                        )
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        endpoint_model_map = {
-            ep.id: ep.model_config_rel.model_id
-            for ep in endpoint_rows
-            if ep.model_config_rel is not None
-        }
-
         for mapping in data.user_settings.endpoint_fx_mappings:
-            endpoint_model_id = endpoint_model_map.get(mapping.endpoint_id)
-            if endpoint_model_id is None:
+            if (mapping.model_id, mapping.endpoint_id) not in imported_connection_pairs:
                 continue
-            if endpoint_model_id != mapping.model_id:
+            mapped_endpoint_id = endpoint_id_map.get(mapping.endpoint_id)
+            if mapped_endpoint_id is None:
                 continue
             db.add(
                 EndpointFxRateSetting(
                     model_id=mapping.model_id,
-                    endpoint_id=mapping.endpoint_id,
+                    endpoint_id=mapped_endpoint_id,
                     fx_rate=mapping.fx_rate,
                 )
             )
@@ -482,8 +607,9 @@ async def import_config(
 
     return ConfigImportResponse(
         providers_imported=len(data.providers),
-        models_imported=len(data.models),
         endpoints_imported=endpoints_count,
+        models_imported=len(data.models),
+        connections_imported=connections_count,
     )
 
 

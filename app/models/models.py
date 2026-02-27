@@ -1,15 +1,15 @@
 from datetime import datetime
 
 from sqlalchemy import (
-    ForeignKey,
-    String,
-    Boolean,
-    Integer,
     BigInteger,
+    Boolean,
     DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
     Text,
     UniqueConstraint,
-    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,7 +68,7 @@ class ModelConfig(Base):
     )
 
     provider: Mapped["Provider"] = relationship(back_populates="model_configs")
-    endpoints: Mapped[list["Endpoint"]] = relationship(
+    connections: Mapped[list["Connection"]] = relationship(
         back_populates="model_config_rel", cascade="all, delete-orphan"
     )
 
@@ -77,11 +77,35 @@ class Endpoint(Base):
     __tablename__ = "endpoints"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    api_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    connections: Mapped[list["Connection"]] = relationship(
+        back_populates="endpoint_rel"
+    )
+
+
+class Connection(Base):
+    __tablename__ = "connections"
+    __table_args__ = (
+        Index("idx_connections_model_config_id", "model_config_id"),
+        Index("idx_connections_endpoint_id", "endpoint_id"),
+        Index("idx_connections_is_active", "is_active"),
+        Index("idx_connections_priority", "priority"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
     model_config_id: Mapped[int] = mapped_column(
         ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False
     )
-    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    api_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    endpoint_id: Mapped[int] = mapped_column(
+        ForeignKey("endpoints.id", ondelete="RESTRICT"), nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -120,7 +144,20 @@ class Endpoint(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
-    model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="endpoints")
+    model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="connections")
+    endpoint_rel: Mapped["Endpoint"] = relationship(back_populates="connections")
+
+    @property
+    def base_url(self) -> str | None:
+        if self.endpoint_rel is None:
+            return None
+        return self.endpoint_rel.base_url
+
+    @property
+    def api_key(self) -> str | None:
+        if self.endpoint_rel is None:
+            return None
+        return self.endpoint_rel.api_key
 
 
 class RequestLog(Base):
@@ -130,6 +167,9 @@ class RequestLog(Base):
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
     endpoint_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     response_time_ms: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -166,7 +206,6 @@ class RequestLog(Base):
     pricing_snapshot_reasoning: Mapped[str | None] = mapped_column(
         String(20), nullable=True
     )
-    # --- new column names (v4 upgrade) ---
     cache_read_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     cache_creation_input_tokens: Mapped[int | None] = mapped_column(
         Integer, nullable=True
@@ -271,6 +310,9 @@ class AuditLog(Base):
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
     endpoint_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_method: Mapped[str] = mapped_column(String(10), nullable=False)

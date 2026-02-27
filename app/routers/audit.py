@@ -24,6 +24,7 @@ async def list_audit_logs(
     model_id: str | None = None,
     status_code: int | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -38,6 +39,8 @@ async def list_audit_logs(
         filters.append(AuditLog.response_status == status_code)
     if endpoint_id is not None:
         filters.append(AuditLog.endpoint_id == endpoint_id)
+    if connection_id is not None:
+        filters.append(AuditLog.connection_id == connection_id)
     if from_time:
         filters.append(AuditLog.created_at >= from_time)
     if to_time:
@@ -69,6 +72,7 @@ async def list_audit_logs(
                 provider_id=row.provider_id,
                 model_id=row.model_id,
                 endpoint_id=row.endpoint_id,
+                connection_id=row.connection_id,
                 endpoint_base_url=row.endpoint_base_url,
                 endpoint_description=row.endpoint_description,
                 request_method=row.request_method,

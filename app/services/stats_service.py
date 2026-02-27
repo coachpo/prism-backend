@@ -16,6 +16,7 @@ async def log_request(
     model_id: str,
     provider_type: str,
     endpoint_id: int | None,
+    connection_id: int | None,
     endpoint_base_url: str | None,
     status_code: int,
     response_time_ms: int,
@@ -61,6 +62,7 @@ async def log_request(
             model_id=model_id,
             provider_type=provider_type,
             endpoint_id=endpoint_id,
+            connection_id=connection_id,
             endpoint_base_url=endpoint_base_url,
             status_code=status_code,
             response_time_ms=response_time_ms,
@@ -454,6 +456,7 @@ async def get_request_logs(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[RequestLog], int]:
@@ -474,6 +477,8 @@ async def get_request_logs(
         filters.append(RequestLog.created_at <= to_time)
     if endpoint_id is not None:
         filters.append(RequestLog.endpoint_id == endpoint_id)
+    if connection_id is not None:
+        filters.append(RequestLog.connection_id == connection_id)
 
     where = and_(*filters) if filters else literal(True)
 
@@ -500,6 +505,7 @@ async def get_stats_summary(
     model_id: str | None = None,
     provider_type: str | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
 ) -> dict:
     time_filters = []
     if from_time is not None:
@@ -512,6 +518,8 @@ async def get_stats_summary(
         time_filters.append(RequestLog.provider_type == provider_type)
     if endpoint_id is not None:
         time_filters.append(RequestLog.endpoint_id == endpoint_id)
+    if connection_id is not None:
+        time_filters.append(RequestLog.connection_id == connection_id)
 
     time_filter = and_(*time_filters) if time_filters else literal(True)
 
@@ -603,7 +611,7 @@ async def get_stats_summary(
     }
 
 
-async def get_endpoint_success_rates(
+async def get_connection_success_rates(
     db: AsyncSession,
     *,
     from_time: datetime | None = None,
@@ -622,12 +630,12 @@ async def get_endpoint_success_rates(
 
     q = (
         select(
-            RequestLog.endpoint_id.label("endpoint_id"),
+            RequestLog.connection_id.label("connection_id"),
             func.count().label("total_requests"),
             func.sum(success_case).label("success_count"),
         )
-        .where(RequestLog.endpoint_id.isnot(None))
-        .group_by(RequestLog.endpoint_id)
+        .where(RequestLog.connection_id.isnot(None))
+        .group_by(RequestLog.connection_id)
     )
     if time_filters:
         q = q.where(and_(*time_filters))
@@ -641,7 +649,7 @@ async def get_endpoint_success_rates(
         rate = round((success / total * 100), 2) if total > 0 else None
         results.append(
             {
-                "endpoint_id": row.endpoint_id,
+                "connection_id": row.connection_id,
                 "total_requests": total,
                 "success_count": success,
                 "error_count": error,
@@ -649,6 +657,15 @@ async def get_endpoint_success_rates(
             }
         )
     return results
+
+
+async def get_endpoint_success_rates(
+    db: AsyncSession,
+    *,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+) -> list[dict]:
+    return await get_connection_success_rates(db, from_time=from_time, to_time=to_time)
 
 
 async def get_model_health_stats(
@@ -721,6 +738,7 @@ async def get_spending_report(
     provider_type: str | None = None,
     model_id: str | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     group_by: str = "none",
     limit: int = 50,
     offset: int = 0,
@@ -739,6 +757,8 @@ async def get_spending_report(
         filters.append(RequestLog.model_id == model_id)
     if endpoint_id is not None:
         filters.append(RequestLog.endpoint_id == endpoint_id)
+    if connection_id is not None:
+        filters.append(RequestLog.connection_id == connection_id)
     where = and_(*filters) if filters else literal(True)
     success_where = and_(where, RequestLog.success_flag == True)  # noqa: E712
 

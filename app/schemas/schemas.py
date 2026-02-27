@@ -49,12 +49,40 @@ class ProviderResponse(ProviderBase):
     updated_at: datetime
 
 
-# --- Endpoint Schemas ---
+# --- Global Endpoint Schemas (credentials only) ---
 
 
 class EndpointBase(BaseModel):
+    name: str
     base_url: str
     api_key: str
+
+
+class EndpointCreate(EndpointBase):
+    pass
+
+
+class EndpointUpdate(BaseModel):
+    name: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+
+
+class EndpointResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    base_url: str
+    api_key: str
+    created_at: datetime
+    updated_at: datetime
+
+
+# --- Connection Schemas (model-scoped routing config) ---
+
+
+class ConnectionBase(BaseModel):
     is_active: bool = True
     priority: int = 0
     description: str | None = None
@@ -113,13 +141,24 @@ class EndpointBase(BaseModel):
         return self
 
 
-class EndpointCreate(EndpointBase):
-    pass
+class ConnectionCreate(ConnectionBase):
+    endpoint_id: int | None = None
+    endpoint_create: EndpointCreate | None = None
+
+    @model_validator(mode="after")
+    def validate_endpoint_selector(self):
+        has_endpoint_id = self.endpoint_id is not None
+        has_endpoint_create = self.endpoint_create is not None
+        if has_endpoint_id == has_endpoint_create:
+            raise ValueError(
+                "Exactly one of endpoint_id or endpoint_create must be provided"
+            )
+        return self
 
 
-class EndpointUpdate(BaseModel):
-    base_url: str | None = None
-    api_key: str | None = None
+class ConnectionUpdate(BaseModel):
+    endpoint_id: int | None = None
+    endpoint_create: EndpointCreate | None = None
     is_active: bool | None = None
     priority: int | None = None
     description: str | None = None
@@ -133,7 +172,9 @@ class EndpointUpdate(BaseModel):
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
-    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = None
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = (
+        None
+    )
     forward_stream_options: bool | None = None
 
     @field_validator(
@@ -165,23 +206,27 @@ class EndpointUpdate(BaseModel):
         return code
 
     @model_validator(mode="after")
-    def validate_update_pricing_config(self):
+    def validate_update(self):
+        if self.endpoint_id is not None and self.endpoint_create is not None:
+            raise ValueError("endpoint_id and endpoint_create are mutually exclusive")
         if self.pricing_enabled is True and not self.pricing_currency_code:
             raise ValueError(
                 "pricing_currency_code is required when pricing_enabled is true"
             )
         if self.pricing_enabled is True and not self.pricing_unit:
-            raise ValueError("pricing_unit is required when pricing_enabled is true")
+            raise ValueError(
+                "pricing_unit is required when pricing_enabled is true"
+            )
         return self
 
 
-class EndpointResponse(BaseModel):
+class ConnectionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     model_config_id: int
-    base_url: str
-    api_key: str
+    endpoint_id: int
+    endpoint: EndpointResponse | None = None
     is_active: bool
     priority: int
     description: str | None
@@ -215,19 +260,30 @@ class EndpointResponse(BaseModel):
 
 
 class HealthCheckResponse(BaseModel):
-    endpoint_id: int
+    connection_id: int
     health_status: str
     checked_at: datetime
     detail: str
     response_time_ms: int
 
 
-class EndpointOwnerResponse(BaseModel):
-    endpoint_id: int
+class ConnectionOwnerResponse(BaseModel):
+    connection_id: int
     model_config_id: int
     model_id: str
-    endpoint_description: str | None
+    connection_description: str | None
+    endpoint_id: int
+    endpoint_name: str
     endpoint_base_url: str
+
+
+class ConnectionSuccessRateResponse(BaseModel):
+    connection_id: int
+    total_requests: int
+    success_count: int
+    error_count: int
+    success_rate: float | None
+
 
 
 # --- Model Config Schemas ---
@@ -285,7 +341,7 @@ class ModelConfigResponse(BaseModel):
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
     is_enabled: bool
-    endpoints: list[EndpointResponse]
+    connections: list[ConnectionResponse]
     created_at: datetime
     updated_at: datetime
 
@@ -304,8 +360,8 @@ class ModelConfigListResponse(BaseModel):
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
     is_enabled: bool
-    endpoint_count: int
-    active_endpoint_count: int
+    connection_count: int
+    active_connection_count: int
     health_success_rate: float | None = None
     health_total_requests: int = 0
     created_at: datetime
@@ -322,6 +378,7 @@ class RequestLogResponse(BaseModel):
     model_id: str
     provider_type: str
     endpoint_id: int | None
+    connection_id: int | None
     endpoint_base_url: str | None
     status_code: int
     response_time_ms: int
@@ -510,8 +567,14 @@ class SpendingReportResponse(BaseModel):
 
 class ConfigEndpointExport(BaseModel):
     endpoint_id: int | None = None
+    name: str
     base_url: str
     api_key: str
+
+
+class ConfigConnectionExport(BaseModel):
+    connection_id: int | None = None
+    endpoint_id: int
     is_active: bool = True
     priority: int = 0
     description: str | None = None
@@ -531,7 +594,6 @@ class ConfigEndpointExport(BaseModel):
     pricing_config_version: int = 0
     forward_stream_options: bool = False
 
-
 class ConfigModelExport(BaseModel):
     provider_type: str
     model_id: str
@@ -542,7 +604,7 @@ class ConfigModelExport(BaseModel):
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
     is_enabled: bool = True
-    endpoints: list[ConfigEndpointExport] = []
+    connections: list[ConfigConnectionExport] = []
 
 
 class ConfigProviderExport(BaseModel):
@@ -566,18 +628,20 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[4] = 4
+    version: Literal[5] = 5
     exported_at: datetime
     providers: list[ConfigProviderExport]
+    endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = []
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[4]
+    version: Literal[5]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
+    endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
@@ -585,8 +649,9 @@ class ConfigImportRequest(BaseModel):
 
 class ConfigImportResponse(BaseModel):
     providers_imported: int
-    models_imported: int
     endpoints_imported: int
+    models_imported: int
+    connections_imported: int
 
 
 # --- Audit Log Schemas ---
@@ -600,6 +665,7 @@ class AuditLogListItem(BaseModel):
     provider_id: int
     model_id: str
     endpoint_id: int | None = None
+    connection_id: int | None = None
     endpoint_base_url: str | None = None
     endpoint_description: str | None = None
     request_method: str
@@ -620,6 +686,7 @@ class AuditLogDetail(BaseModel):
     provider_id: int
     model_id: str
     endpoint_id: int | None = None
+    connection_id: int | None = None
     endpoint_base_url: str | None = None
     endpoint_description: str | None = None
     request_method: str

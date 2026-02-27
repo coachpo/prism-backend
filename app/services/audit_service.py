@@ -63,6 +63,7 @@ async def record_audit_log(
     duration_ms: int,
     capture_bodies: bool,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     endpoint_base_url: str | None = None,
     endpoint_description: str | None = None,
 ) -> None:
@@ -91,6 +92,7 @@ async def record_audit_log(
             provider_id=provider_id,
             model_id=model_id,
             endpoint_id=endpoint_id,
+            connection_id=connection_id,
             endpoint_base_url=endpoint_base_url,
             endpoint_description=endpoint_description,
             request_method=request_method,

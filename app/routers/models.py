@@ -67,7 +67,7 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.endpoints)
+            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
         .order_by(ModelConfig.id)
     )
@@ -94,8 +94,10 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
                 failover_recovery_enabled=config.failover_recovery_enabled,
                 failover_recovery_cooldown_seconds=config.failover_recovery_cooldown_seconds,
                 is_enabled=config.is_enabled,
-                endpoint_count=len(config.endpoints),
-                active_endpoint_count=sum(1 for ep in config.endpoints if ep.is_active),
+                connection_count=len(config.connections),
+                active_connection_count=sum(
+                    1 for connection in config.connections if connection.is_active
+                ),
                 health_success_rate=stats.get("health_success_rate"),
                 health_total_requests=stats.get("health_total_requests", 0),
                 created_at=config.created_at,
@@ -110,7 +112,7 @@ async def get_model(model_config_id: int, db: Annotated[AsyncSession, Depends(ge
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.endpoints)
+            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
         .where(ModelConfig.id == model_config_id)
     )
@@ -165,7 +167,7 @@ async def create_model(
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.endpoints)
+            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
         .where(ModelConfig.id == config.id)
     )
@@ -181,7 +183,7 @@ async def update_model(
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.endpoints)
+            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
         .where(ModelConfig.id == model_config_id)
     )
@@ -243,7 +245,7 @@ async def update_model(
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.endpoints)
+            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
         .where(ModelConfig.id == config.id)
     )

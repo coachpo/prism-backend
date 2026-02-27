@@ -11,12 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
-from app.models.models import Endpoint, HeaderBlocklistRule
+from app.models.models import Connection, HeaderBlocklistRule
 from app.services.loadbalancer import (
-    get_model_config_with_endpoints,
+    get_model_config_with_connections,
     build_attempt_plan,
-    mark_endpoint_failed,
-    mark_endpoint_recovered,
+    mark_connection_failed,
+    mark_connection_recovered,
 )
 from app.services.proxy_service import (
     build_upstream_url,
@@ -81,7 +81,7 @@ def _rewrite_model_in_path(
 
 async def _endpoint_is_active_now(db: AsyncSession, endpoint_id: int) -> bool:
     result = await db.execute(
-        select(Endpoint.is_active).where(Endpoint.id == endpoint_id)
+        select(Connection.is_active).where(Connection.id == endpoint_id)
     )
     return bool(result.scalar_one_or_none())
 
@@ -116,7 +116,7 @@ async def _handle_proxy(
             ),
         )
 
-    model_config = await get_model_config_with_endpoints(db, model_id)
+    model_config = await get_model_config_with_connections(db, model_id)
     if not model_config:
         logger.warning(
             "Proxy lookup failed: model_id=%r not found or disabled (path=%s)",
@@ -168,23 +168,30 @@ async def _handle_proxy(
     if not endpoints_to_try:
         raise HTTPException(
             status_code=503,
-            detail=f"No active endpoints available for model '{model_id}'. All endpoints may be in cooldown.",
+            detail=f"No active connections available for model '{model_id}'. All connections may be in cooldown.",
         )
 
     costing_settings = await load_costing_settings(
         db,
         model_id=model_id,
-        endpoint_ids=[ep.id for ep in endpoints_to_try],
+        endpoint_ids=sorted(
+            {
+                endpoint.endpoint_id
+                for endpoint in endpoints_to_try
+                if endpoint.endpoint_id is not None
+            }
+        ),
     )
 
     def build_cost_fields(
-        endpoint,
+        connection,
         status_code: int,
         tokens: dict[str, int | None] | None = None,
     ) -> CostFieldPayload:
         token_values = tokens or {}
         return compute_cost_fields(
-            endpoint=endpoint,
+            connection=connection,
+            endpoint=connection.endpoint_rel,
             model_id=model_id,
             status_code=status_code,
             input_tokens=token_values.get("input_tokens"),
@@ -202,8 +209,11 @@ async def _handle_proxy(
     last_error = None
     attempted_any_endpoint = False
     for ep in endpoints_to_try:
+        if ep.endpoint_rel is None:
+            logger.warning("Skipping connection %d because endpoint is missing", ep.id)
+            continue
         if not await _endpoint_is_active_now(db, ep.id):
-            mark_endpoint_recovered(ep.id)
+            mark_connection_recovered(ep.id)
             logger.info(
                 "Skipping endpoint %d because it is currently disabled",
                 ep.id,
@@ -211,16 +221,24 @@ async def _handle_proxy(
             continue
 
         attempted_any_endpoint = True
-        upstream_url = build_upstream_url(ep, effective_request_path)
+        upstream_url = build_upstream_url(
+            ep, effective_request_path, endpoint=ep.endpoint_rel
+        )
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
         headers = build_upstream_headers(
-            ep, provider_type, client_headers, blocklist_rules
+            ep,
+            provider_type,
+            client_headers,
+            blocklist_rules,
+            endpoint=ep.endpoint_rel,
         )
         ep_desc = ep.description
         endpoint_body = raw_body
         if endpoint_body:
-            endpoint_body = inject_stream_options(endpoint_body, provider_type, ep.forward_stream_options)
+            endpoint_body = inject_stream_options(
+                endpoint_body, provider_type, ep.forward_stream_options
+            )
 
         start_time = time.monotonic()
 
@@ -248,8 +266,9 @@ async def _handle_proxy(
                         rl_id = await log_request(
                             model_id=model_id,
                             provider_type=provider_type,
-                            endpoint_id=ep.id,
-                            endpoint_base_url=ep.base_url,
+                            endpoint_id=ep.endpoint_id,
+                            connection_id=ep.id,
+                            endpoint_base_url=ep.endpoint_rel.base_url,
                             endpoint_description=ep_desc,
                             status_code=upstream_resp.status_code,
                             response_time_ms=elapsed_ms,
@@ -262,8 +281,9 @@ async def _handle_proxy(
                             await record_audit_log(
                                 request_log_id=rl_id,
                                 provider_id=provider_id,
-                                endpoint_id=ep.id,
-                                endpoint_base_url=ep.base_url,
+                                endpoint_id=ep.endpoint_id,
+                                connection_id=ep.id,
+                                endpoint_base_url=ep.endpoint_rel.base_url,
                                 endpoint_description=ep_desc,
                                 model_id=model_id,
                                 request_method=method,
@@ -278,7 +298,7 @@ async def _handle_proxy(
                                 capture_bodies=audit_capture_bodies,
                             )
                         if recovery_active:
-                            mark_endpoint_failed(
+                            mark_connection_failed(
                                 ep.id,
                                 model_config.failover_recovery_cooldown_seconds,
                                 time.monotonic(),
@@ -289,8 +309,9 @@ async def _handle_proxy(
                     rl_id = await log_request(
                         model_id=model_id,
                         provider_type=provider_type,
-                        endpoint_id=ep.id,
-                        endpoint_base_url=ep.base_url,
+                        endpoint_id=ep.endpoint_id,
+                        connection_id=ep.id,
+                        endpoint_base_url=ep.endpoint_rel.base_url,
                         endpoint_description=ep_desc,
                         status_code=upstream_resp.status_code,
                         response_time_ms=elapsed_ms,
@@ -306,8 +327,9 @@ async def _handle_proxy(
                         await record_audit_log(
                             request_log_id=rl_id,
                             provider_id=provider_id,
-                            endpoint_id=ep.id,
-                            endpoint_base_url=ep.base_url,
+                            endpoint_id=ep.endpoint_id,
+                            connection_id=ep.id,
+                            endpoint_base_url=ep.endpoint_rel.base_url,
                             endpoint_description=ep_desc,
                             model_id=model_id,
                             request_method=method,
@@ -323,7 +345,7 @@ async def _handle_proxy(
                         )
 
                     if recovery_active:
-                        mark_endpoint_recovered(ep.id)
+                        mark_connection_recovered(ep.id)
                     return Response(
                         content=body,
                         status_code=upstream_resp.status_code,
@@ -332,11 +354,11 @@ async def _handle_proxy(
 
                 # Success case - mark endpoint as recovered
                 if recovery_active:
-                    mark_endpoint_recovered(ep.id)
+                    mark_connection_recovered(ep.id)
                 _log_model_id = model_id
                 _log_provider_type = provider_type
                 _log_endpoint_id = ep.id
-                _log_endpoint_base_url = ep.base_url
+                _log_endpoint_base_url = ep.endpoint_rel.base_url
                 _log_endpoint_desc = ep_desc
                 _log_endpoint = ep
                 _log_status_code = upstream_resp.status_code
@@ -385,7 +407,8 @@ async def _handle_proxy(
                                 rl_id = await log_request(
                                     model_id=_log_model_id,
                                     provider_type=_log_provider_type,
-                                    endpoint_id=_log_endpoint_id,
+                                    endpoint_id=_log_endpoint.endpoint_id,
+                                    connection_id=_log_endpoint_id,
                                     endpoint_base_url=_log_endpoint_base_url,
                                     endpoint_description=_log_endpoint_desc,
                                     status_code=_log_status_code,
@@ -412,7 +435,8 @@ async def _handle_proxy(
                                     await record_audit_log(
                                         request_log_id=rl_id,
                                         provider_id=_audit_provider_id,
-                                        endpoint_id=_log_endpoint_id,
+                                        endpoint_id=_log_endpoint.endpoint_id,
+                                        connection_id=_log_endpoint_id,
                                         endpoint_base_url=_log_endpoint_base_url,
                                         endpoint_description=_log_endpoint_desc,
                                         model_id=_log_model_id,
@@ -495,8 +519,9 @@ async def _handle_proxy(
                     rl_id = await log_request(
                         model_id=model_id,
                         provider_type=provider_type,
-                        endpoint_id=ep.id,
-                        endpoint_base_url=ep.base_url,
+                        endpoint_id=ep.endpoint_id,
+                        connection_id=ep.id,
+                        endpoint_base_url=ep.endpoint_rel.base_url,
                         endpoint_description=ep_desc,
                         status_code=response.status_code,
                         response_time_ms=elapsed_ms,
@@ -511,8 +536,9 @@ async def _handle_proxy(
                         await record_audit_log(
                             request_log_id=rl_id,
                             provider_id=provider_id,
-                            endpoint_id=ep.id,
-                            endpoint_base_url=ep.base_url,
+                            endpoint_id=ep.endpoint_id,
+                            connection_id=ep.id,
+                            endpoint_base_url=ep.endpoint_rel.base_url,
                             endpoint_description=ep_desc,
                             model_id=model_id,
                             request_method=method,
@@ -527,7 +553,7 @@ async def _handle_proxy(
                             capture_bodies=audit_capture_bodies,
                         )
                     if recovery_active:
-                        mark_endpoint_failed(
+                        mark_connection_failed(
                             ep.id,
                             model_config.failover_recovery_cooldown_seconds,
                             time.monotonic(),
@@ -544,8 +570,9 @@ async def _handle_proxy(
                 rl_id = await log_request(
                     model_id=model_id,
                     provider_type=provider_type,
-                    endpoint_id=ep.id,
-                    endpoint_base_url=ep.base_url,
+                    endpoint_id=ep.endpoint_id,
+                    connection_id=ep.id,
+                    endpoint_base_url=ep.endpoint_rel.base_url,
                     endpoint_description=ep_desc,
                     status_code=response.status_code,
                     response_time_ms=elapsed_ms,
@@ -561,8 +588,9 @@ async def _handle_proxy(
                     await record_audit_log(
                         request_log_id=rl_id,
                         provider_id=provider_id,
-                        endpoint_id=ep.id,
-                        endpoint_base_url=ep.base_url,
+                        endpoint_id=ep.endpoint_id,
+                        connection_id=ep.id,
+                        endpoint_base_url=ep.endpoint_rel.base_url,
                         endpoint_description=ep_desc,
                         model_id=model_id,
                         request_method=method,
@@ -579,7 +607,7 @@ async def _handle_proxy(
 
                 # Success or non-failover error - mark as recovered if in failover mode
                 if recovery_active:
-                    mark_endpoint_recovered(ep.id)
+                    mark_connection_recovered(ep.id)
                 return Response(
                     content=response.content,
                     status_code=response.status_code,
@@ -593,8 +621,9 @@ async def _handle_proxy(
             rl_id = await log_request(
                 model_id=model_id,
                 provider_type=provider_type,
-                endpoint_id=ep.id,
-                endpoint_base_url=ep.base_url,
+                endpoint_id=ep.endpoint_id,
+                connection_id=ep.id,
+                endpoint_base_url=ep.endpoint_rel.base_url,
                 endpoint_description=ep_desc,
                 status_code=0,
                 response_time_ms=elapsed_ms,
@@ -607,8 +636,9 @@ async def _handle_proxy(
                 await record_audit_log(
                     request_log_id=rl_id,
                     provider_id=provider_id,
-                    endpoint_id=ep.id,
-                    endpoint_base_url=ep.base_url,
+                    endpoint_id=ep.endpoint_id,
+                    connection_id=ep.id,
+                    endpoint_base_url=ep.endpoint_rel.base_url,
                     endpoint_description=ep_desc,
                     model_id=model_id,
                     request_method=method,
@@ -623,7 +653,7 @@ async def _handle_proxy(
                     capture_bodies=audit_capture_bodies,
                 )
             if recovery_active:
-                mark_endpoint_failed(
+                mark_connection_failed(
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
@@ -636,8 +666,9 @@ async def _handle_proxy(
             rl_id = await log_request(
                 model_id=model_id,
                 provider_type=provider_type,
-                endpoint_id=ep.id,
-                endpoint_base_url=ep.base_url,
+                endpoint_id=ep.endpoint_id,
+                connection_id=ep.id,
+                endpoint_base_url=ep.endpoint_rel.base_url,
                 endpoint_description=ep_desc,
                 status_code=0,
                 response_time_ms=elapsed_ms,
@@ -650,8 +681,9 @@ async def _handle_proxy(
                 await record_audit_log(
                     request_log_id=rl_id,
                     provider_id=provider_id,
-                    endpoint_id=ep.id,
-                    endpoint_base_url=ep.base_url,
+                    endpoint_id=ep.endpoint_id,
+                    connection_id=ep.id,
+                    endpoint_base_url=ep.endpoint_rel.base_url,
                     endpoint_description=ep_desc,
                     model_id=model_id,
                     request_method=method,
@@ -666,7 +698,7 @@ async def _handle_proxy(
                     capture_bodies=audit_capture_bodies,
                 )
             if recovery_active:
-                mark_endpoint_failed(
+                mark_connection_failed(
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
@@ -676,12 +708,12 @@ async def _handle_proxy(
     if not attempted_any_endpoint:
         raise HTTPException(
             status_code=503,
-            detail=f"No active endpoints available for model '{model_id}'.",
+            detail=f"No active connections available for model '{model_id}'.",
         )
 
     raise HTTPException(
         status_code=502,
-        detail=f"All endpoints failed for model '{model_id}'. Last error: {last_error}",
+        detail=f"All connections failed for model '{model_id}'. Last error: {last_error}",
     )
 
 

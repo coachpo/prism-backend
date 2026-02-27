@@ -7,7 +7,7 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Endpoint, EndpointFxRateSetting, UserSetting
+from app.models.models import Connection, Endpoint, EndpointFxRateSetting, UserSetting
 
 SIX_DP = Decimal("0.000001")
 MICRO_FACTOR = Decimal("1000000")
@@ -131,6 +131,7 @@ async def load_costing_settings(
 
 def compute_cost_fields(
     *,
+    connection: Connection | None,
     endpoint: Endpoint | None,
     model_id: str,
     status_code: int,
@@ -174,12 +175,20 @@ def compute_cost_fields(
         "pricing_config_version_used": None,
     }
 
-    if endpoint is None:
+    if connection is None:
+        if success_flag:
+            result["unpriced_reason"] = "MISSING_CONNECTION"
+        return result
+
+    endpoint_id = connection.endpoint_id if connection.endpoint_id is not None else None
+    if endpoint_id is None and endpoint is not None:
+        endpoint_id = endpoint.id
+    if endpoint_id is None:
         if success_flag:
             result["unpriced_reason"] = "MISSING_ENDPOINT"
         return result
 
-    fx_key = (model_id, endpoint.id)
+    fx_key = (model_id, endpoint_id)
     fx_rate_str = settings.endpoint_fx_map.get(fx_key)
     try:
         fx_rate = (
@@ -203,24 +212,24 @@ def compute_cost_fields(
     if not success_flag:
         return result
 
-    if not endpoint.pricing_enabled:
+    if not connection.pricing_enabled:
         result["unpriced_reason"] = "PRICING_DISABLED"
         return result
 
-    if not endpoint.pricing_unit or endpoint.pricing_unit not in UNIT_FACTORS:
+    if not connection.pricing_unit or connection.pricing_unit not in UNIT_FACTORS:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
 
-    if not endpoint.pricing_currency_code:
+    if not connection.pricing_currency_code:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
 
     try:
-        input_price = _parse_non_negative(endpoint.input_price)
-        output_price = _parse_non_negative(endpoint.output_price)
-        _parse_non_negative(endpoint.cached_input_price)
-        _parse_non_negative(endpoint.cache_creation_price)
-        _parse_non_negative(endpoint.reasoning_price)
+        input_price = _parse_non_negative(connection.input_price)
+        output_price = _parse_non_negative(connection.output_price)
+        _parse_non_negative(connection.cached_input_price)
+        _parse_non_negative(connection.cache_creation_price)
+        _parse_non_negative(connection.reasoning_price)
     except ValueError:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
@@ -235,38 +244,46 @@ def compute_cost_fields(
         result["unpriced_reason"] = "MISSING_TOKEN_USAGE"
         return result
 
-    policy = endpoint.missing_special_token_price_policy or "MAP_TO_OUTPUT"
+    policy = connection.missing_special_token_price_policy or "MAP_TO_OUTPUT"
     input_count = max(input_tokens or 0, 0)
     output_count = max(output_tokens or 0, 0)
 
     # Cost counts: used for pricing math only (policy-derived)
-    cached_cost_count = max(cache_read_input_tokens, 0) if cache_read_input_tokens is not None else 0
-    cache_creation_cost_count = max(cache_creation_input_tokens, 0) if cache_creation_input_tokens is not None else 0
-    reasoning_cost_count = max(reasoning_tokens, 0) if reasoning_tokens is not None else 0
+    cached_cost_count = (
+        max(cache_read_input_tokens, 0) if cache_read_input_tokens is not None else 0
+    )
+    cache_creation_cost_count = (
+        max(cache_creation_input_tokens, 0)
+        if cache_creation_input_tokens is not None
+        else 0
+    )
+    reasoning_cost_count = (
+        max(reasoning_tokens, 0) if reasoning_tokens is not None else 0
+    )
 
     # Prices: use endpoint config, fall back via policy if None
-    if endpoint.cached_input_price is not None:
-        cached_price = Decimal(str(endpoint.cached_input_price))
+    if connection.cached_input_price is not None:
+        cached_price = Decimal(str(connection.cached_input_price))
     elif policy == "MAP_TO_OUTPUT":
         cached_price = output_price  # use output price as fallback
     else:  # ZERO_COST
         cached_price = Decimal("0")
 
-    if endpoint.cache_creation_price is not None:
-        cache_creation_price = Decimal(str(endpoint.cache_creation_price))
+    if connection.cache_creation_price is not None:
+        cache_creation_price = Decimal(str(connection.cache_creation_price))
     elif policy == "MAP_TO_OUTPUT":
         cache_creation_price = output_price
     else:  # ZERO_COST
         cache_creation_price = Decimal("0")
 
-    if endpoint.reasoning_price is not None:
-        reasoning_price = Decimal(str(endpoint.reasoning_price))
+    if connection.reasoning_price is not None:
+        reasoning_price = Decimal(str(connection.reasoning_price))
     elif policy == "MAP_TO_OUTPUT":
         reasoning_price = output_price
     else:  # ZERO_COST
         reasoning_price = Decimal("0")
 
-    factor = UNIT_FACTORS[endpoint.pricing_unit]
+    factor = UNIT_FACTORS[connection.pricing_unit]
     input_cost = (Decimal(input_count) / factor) * input_price
     output_cost = (Decimal(output_count) / factor) * output_price
     cached_cost = (Decimal(cached_cost_count) / factor) * cached_price
@@ -294,8 +311,8 @@ def compute_cost_fields(
             "reasoning_cost_micros": decimal_to_micros(reasoning_cost),
             "total_cost_original_micros": decimal_to_micros(total_original),
             "total_cost_user_currency_micros": decimal_to_micros(total_user_currency),
-            "currency_code_original": endpoint.pricing_currency_code,
-            "pricing_snapshot_unit": endpoint.pricing_unit,
+            "currency_code_original": connection.pricing_currency_code,
+            "pricing_snapshot_unit": connection.pricing_unit,
             "pricing_snapshot_input": _normalize_decimal_string(input_price),
             "pricing_snapshot_output": _normalize_decimal_string(output_price),
             "pricing_snapshot_cache_read_input": _normalize_decimal_string(
@@ -306,7 +323,7 @@ def compute_cost_fields(
             ),
             "pricing_snapshot_reasoning": _normalize_decimal_string(reasoning_price),
             "pricing_snapshot_missing_special_token_price_policy": policy,
-            "pricing_config_version_used": endpoint.pricing_config_version,
+            "pricing_config_version_used": connection.pricing_config_version,
         }
     )
     return result

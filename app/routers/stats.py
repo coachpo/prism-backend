@@ -11,14 +11,14 @@ from app.schemas.schemas import (
     RequestLogListResponse,
     RequestLogResponse,
     StatsSummaryResponse,
-    EndpointSuccessRateResponse,
+    ConnectionSuccessRateResponse,
     BatchDeleteResponse,
     SpendingReportResponse,
 )
 from app.services.stats_service import (
     get_request_logs,
     get_stats_summary,
-    get_endpoint_success_rates,
+    get_connection_success_rates,
     get_spending_report,
 )
 
@@ -35,6 +35,7 @@ async def list_request_logs(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -47,6 +48,7 @@ async def list_request_logs(
         from_time=from_time,
         to_time=to_time,
         endpoint_id=endpoint_id,
+        connection_id=connection_id,
         limit=limit,
         offset=offset,
     )
@@ -70,6 +72,7 @@ async def stats_summary(
     model_id: str | None = None,
     provider_type: str | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
 ):
     result = await get_stats_summary(
         db,
@@ -79,17 +82,20 @@ async def stats_summary(
         model_id=model_id,
         provider_type=provider_type,
         endpoint_id=endpoint_id,
+        connection_id=connection_id,
     )
     return StatsSummaryResponse(**result)
 
 
-@router.get("/endpoint-success-rates", response_model=list[EndpointSuccessRateResponse])
-async def endpoint_success_rates(
+@router.get(
+    "/connection-success-rates", response_model=list[ConnectionSuccessRateResponse]
+)
+async def connection_success_rates(
     db: Annotated[AsyncSession, Depends(get_db)],
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ):
-    return await get_endpoint_success_rates(db, from_time=from_time, to_time=to_time)
+    return await get_connection_success_rates(db, from_time=from_time, to_time=to_time)
 
 
 @router.get("/spending", response_model=SpendingReportResponse)
@@ -101,6 +107,7 @@ async def spending_report(
     provider_type: str | None = None,
     model_id: str | None = None,
     endpoint_id: int | None = None,
+    connection_id: int | None = None,
     group_by: str = Query(
         default="none",
         pattern="^(none|day|week|month|provider|model|endpoint|model_endpoint)$",
@@ -117,6 +124,7 @@ async def spending_report(
         provider_type=provider_type,
         model_id=model_id,
         endpoint_id=endpoint_id,
+        connection_id=connection_id,
         group_by=group_by,
         limit=limit,
         offset=offset,
