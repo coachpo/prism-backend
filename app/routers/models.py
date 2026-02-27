@@ -276,3 +276,61 @@ async def delete_model(
             )
 
     await db.delete(config)
+
+
+@router.get("/by-endpoint/{endpoint_id}", response_model=list[ModelConfigListResponse])
+async def get_models_by_endpoint(
+    endpoint_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+):
+    """Get all models that use a specific endpoint."""
+    from app.models.models import Connection
+    
+    # Find all connections using this endpoint
+    result = await db.execute(
+        select(Connection)
+        .options(selectinload(Connection.model_config_rel).selectinload(ModelConfig.provider))
+        .where(Connection.endpoint_id == endpoint_id)
+    )
+    connections = result.scalars().all()
+    
+    # Extract unique model configs
+    model_configs = {conn.model_config_rel for conn in connections}
+    
+    # Get health stats
+    health_stats = await get_model_health_stats(db)
+    
+    # Build response
+    response = []
+    for config in model_configs:
+        stats = health_stats.get(config.model_id, {})
+        
+        # Count connections for this model
+        model_connections = [c for c in connections if c.model_config_id == config.id]
+        active_count = sum(1 for c in model_connections if c.is_active)
+        
+        response.append(
+            ModelConfigListResponse(
+                id=config.id,
+                provider_id=config.provider_id,
+                provider=ProviderResponse.model_validate(config.provider),
+                model_id=config.model_id,
+                display_name=config.display_name,
+                model_type=config.model_type,
+                redirect_to=config.redirect_to,
+                lb_strategy=cast(
+                    Literal["single", "failover"],
+                    "failover" if config.lb_strategy == "failover" else "single",
+                ),
+                failover_recovery_enabled=config.failover_recovery_enabled,
+                failover_recovery_cooldown_seconds=config.failover_recovery_cooldown_seconds,
+                is_enabled=config.is_enabled,
+                connection_count=len(model_connections),
+                active_connection_count=active_count,
+                health_success_rate=stats.get("health_success_rate"),
+                health_total_requests=stats.get("health_total_requests", 0),
+                created_at=config.created_at,
+                updated_at=config.updated_at,
+            )
+        )
+    
+    return sorted(response, key=lambda m: m.model_id)
