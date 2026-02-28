@@ -10,7 +10,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_active_profile_id
 from app.models.models import Connection, HeaderBlocklistRule
 from app.services.loadbalancer import (
     get_model_config_with_connections,
@@ -79,10 +79,13 @@ def _rewrite_model_in_path(
     )
 
 
-async def _endpoint_is_active_now(db: AsyncSession, endpoint_id: int) -> bool:
-    result = await db.execute(
-        select(Connection.is_active).where(Connection.id == endpoint_id)
-    )
+async def _endpoint_is_active_now(
+    db: AsyncSession, connection_id: int, profile_id: int | None = None
+ ) -> bool:
+    query = select(Connection.is_active).where(Connection.id == connection_id)
+    if profile_id is not None:
+        query = query.where(Connection.profile_id == profile_id)
+    result = await db.execute(query)
     return bool(result.scalar_one_or_none())
 
 
@@ -105,7 +108,8 @@ async def _handle_proxy(
     db: AsyncSession,
     raw_body: bytes | None,
     request_path: str,
-):
+    profile_id: int = 1,
+ ):
     model_id = _resolve_model_id(request, raw_body, request_path)
     if not model_id:
         raise HTTPException(
@@ -116,7 +120,7 @@ async def _handle_proxy(
             ),
         )
 
-    model_config = await get_model_config_with_connections(db, model_id)
+    model_config = await get_model_config_with_connections(db, profile_id, model_id)
     if not model_config:
         logger.warning(
             "Proxy lookup failed: model_id=%r not found or disabled (path=%s)",
@@ -141,7 +145,9 @@ async def _handle_proxy(
             (
                 await db.execute(
                     select(HeaderBlocklistRule).where(
-                        HeaderBlocklistRule.enabled == True  # noqa: E712
+                        HeaderBlocklistRule.enabled == True,  # noqa: E712
+                        (HeaderBlocklistRule.is_system == True)  # noqa: E712
+                        | (HeaderBlocklistRule.profile_id == profile_id),
                     )
                 )
             )
@@ -173,6 +179,7 @@ async def _handle_proxy(
 
     costing_settings = await load_costing_settings(
         db,
+        profile_id=profile_id,
         model_id=model_id,
         endpoint_ids=sorted(
             {
@@ -213,7 +220,7 @@ async def _handle_proxy(
             logger.warning("Skipping connection %d because endpoint is missing", ep.id)
             continue
         if not await _endpoint_is_active_now(db, ep.id):
-            mark_connection_recovered(ep.id)
+            mark_connection_recovered(profile_id, ep.id)
             logger.info(
                 "Skipping endpoint %d because it is currently disabled",
                 ep.id,
@@ -265,6 +272,7 @@ async def _handle_proxy(
                         )
                         rl_id = await log_request(
                             model_id=model_id,
+                            profile_id=profile_id,
                             provider_type=provider_type,
                             endpoint_id=ep.endpoint_id,
                             connection_id=ep.id,
@@ -280,6 +288,7 @@ async def _handle_proxy(
                         if audit_enabled:
                             await record_audit_log(
                                 request_log_id=rl_id,
+                                profile_id=profile_id,
                                 provider_id=provider_id,
                                 endpoint_id=ep.endpoint_id,
                                 connection_id=ep.id,
@@ -299,6 +308,7 @@ async def _handle_proxy(
                             )
                         if recovery_active:
                             mark_connection_failed(
+                                profile_id,
                                 ep.id,
                                 model_config.failover_recovery_cooldown_seconds,
                                 time.monotonic(),
@@ -308,6 +318,7 @@ async def _handle_proxy(
                     tokens = extract_token_usage(body)
                     rl_id = await log_request(
                         model_id=model_id,
+                        profile_id=profile_id,
                         provider_type=provider_type,
                         endpoint_id=ep.endpoint_id,
                         connection_id=ep.id,
@@ -326,6 +337,7 @@ async def _handle_proxy(
                     if audit_enabled:
                         await record_audit_log(
                             request_log_id=rl_id,
+                            profile_id=profile_id,
                             provider_id=provider_id,
                             endpoint_id=ep.endpoint_id,
                             connection_id=ep.id,
@@ -345,7 +357,7 @@ async def _handle_proxy(
                         )
 
                     if recovery_active:
-                        mark_connection_recovered(ep.id)
+                        mark_connection_recovered(profile_id, ep.id)
                     return Response(
                         content=body,
                         status_code=upstream_resp.status_code,
@@ -354,7 +366,7 @@ async def _handle_proxy(
 
                 # Success case - mark endpoint as recovered
                 if recovery_active:
-                    mark_connection_recovered(ep.id)
+                    mark_connection_recovered(profile_id, ep.id)
                 _log_model_id = model_id
                 _log_provider_type = provider_type
                 _log_endpoint_id = ep.id
@@ -406,6 +418,7 @@ async def _handle_proxy(
                                 tokens = extract_token_usage(payload)
                                 rl_id = await log_request(
                                     model_id=_log_model_id,
+                                    profile_id=profile_id,
                                     provider_type=_log_provider_type,
                                     endpoint_id=_log_endpoint.endpoint_id,
                                     connection_id=_log_endpoint_id,
@@ -434,6 +447,7 @@ async def _handle_proxy(
                                 try:
                                     await record_audit_log(
                                         request_log_id=rl_id,
+                                        profile_id=profile_id,
                                         provider_id=_audit_provider_id,
                                         endpoint_id=_log_endpoint.endpoint_id,
                                         connection_id=_log_endpoint_id,
@@ -518,6 +532,7 @@ async def _handle_proxy(
                     )
                     rl_id = await log_request(
                         model_id=model_id,
+                        profile_id=profile_id,
                         provider_type=provider_type,
                         endpoint_id=ep.endpoint_id,
                         connection_id=ep.id,
@@ -535,6 +550,7 @@ async def _handle_proxy(
                     if audit_enabled:
                         await record_audit_log(
                             request_log_id=rl_id,
+                            profile_id=profile_id,
                             provider_id=provider_id,
                             endpoint_id=ep.endpoint_id,
                             connection_id=ep.id,
@@ -554,6 +570,7 @@ async def _handle_proxy(
                         )
                     if recovery_active:
                         mark_connection_failed(
+                            profile_id,
                             ep.id,
                             model_config.failover_recovery_cooldown_seconds,
                             time.monotonic(),
@@ -569,6 +586,7 @@ async def _handle_proxy(
 
                 rl_id = await log_request(
                     model_id=model_id,
+                    profile_id=profile_id,
                     provider_type=provider_type,
                     endpoint_id=ep.endpoint_id,
                     connection_id=ep.id,
@@ -587,6 +605,7 @@ async def _handle_proxy(
                 if audit_enabled:
                     await record_audit_log(
                         request_log_id=rl_id,
+                        profile_id=profile_id,
                         provider_id=provider_id,
                         endpoint_id=ep.endpoint_id,
                         connection_id=ep.id,
@@ -607,7 +626,7 @@ async def _handle_proxy(
 
                 # Success or non-failover error - mark as recovered if in failover mode
                 if recovery_active:
-                    mark_connection_recovered(ep.id)
+                    mark_connection_recovered(profile_id, ep.id)
                 return Response(
                     content=response.content,
                     status_code=response.status_code,
@@ -620,6 +639,7 @@ async def _handle_proxy(
             logger.warning(f"Endpoint {ep.id} connection failed: {e}")
             rl_id = await log_request(
                 model_id=model_id,
+                profile_id=profile_id,
                 provider_type=provider_type,
                 endpoint_id=ep.endpoint_id,
                 connection_id=ep.id,
@@ -635,6 +655,7 @@ async def _handle_proxy(
             if audit_enabled:
                 await record_audit_log(
                     request_log_id=rl_id,
+                    profile_id=profile_id,
                     provider_id=provider_id,
                     endpoint_id=ep.endpoint_id,
                     connection_id=ep.id,
@@ -654,6 +675,7 @@ async def _handle_proxy(
                 )
             if recovery_active:
                 mark_connection_failed(
+                    profile_id,
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
@@ -665,6 +687,7 @@ async def _handle_proxy(
             logger.warning(f"Endpoint {ep.id} timed out: {e}")
             rl_id = await log_request(
                 model_id=model_id,
+                profile_id=profile_id,
                 provider_type=provider_type,
                 endpoint_id=ep.endpoint_id,
                 connection_id=ep.id,
@@ -680,6 +703,7 @@ async def _handle_proxy(
             if audit_enabled:
                 await record_audit_log(
                     request_log_id=rl_id,
+                    profile_id=profile_id,
                     provider_id=provider_id,
                     endpoint_id=ep.endpoint_id,
                     connection_id=ep.id,
@@ -699,6 +723,7 @@ async def _handle_proxy(
                 )
             if recovery_active:
                 mark_connection_failed(
+                    profile_id,
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
@@ -722,9 +747,10 @@ async def proxy_catch_all(
     request: Request,
     path: str,
     db: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    profile_id: Annotated[int, Depends(get_active_profile_id)],
 ):
     raw_body = await request.body() or None
-    return await _handle_proxy(request, db, raw_body, f"/v1/{path}")
+    return await _handle_proxy(request, db, raw_body, f"/v1/{path}", profile_id)
 
 
 @router.api_route(
@@ -734,6 +760,7 @@ async def proxy_catch_all_v1beta(
     request: Request,
     path: str,
     db: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    profile_id: Annotated[int, Depends(get_active_profile_id)],
 ):
     raw_body = await request.body() or None
-    return await _handle_proxy(request, db, raw_body, f"/v1beta/{path}")
+    return await _handle_proxy(request, db, raw_body, f"/v1beta/{path}", profile_id)

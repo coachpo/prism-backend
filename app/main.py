@@ -12,6 +12,7 @@ from app.core.database import engine
 from app.core.migrations import run_migrations
 from app.models.models import Provider, HeaderBlocklistRule, UserSetting
 from app.routers import (
+    profiles,
     providers,
     models,
     endpoints,
@@ -195,6 +196,7 @@ app.add_middleware(
 )
 
 # Mount routers
+app.include_router(profiles.router)
 app.include_router(providers.router)
 app.include_router(models.router)
 app.include_router(endpoints.router)

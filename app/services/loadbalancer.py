@@ -8,11 +8,11 @@ from app.models.models import Connection, ModelConfig
 
 logger = logging.getLogger(__name__)
 
-_recovery_state: dict[int, tuple[float, float]] = {}
+_recovery_state: dict[tuple[int, int], tuple[float, float]] = {}
 
 
 async def get_model_config_with_connections(
-    db: AsyncSession, model_id: str
+    db: AsyncSession, profile_id: int, model_id: str
 ) -> ModelConfig | None:
     result = await db.execute(
         select(ModelConfig)
@@ -20,7 +20,11 @@ async def get_model_config_with_connections(
             selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
             selectinload(ModelConfig.provider),
         )
-        .where(ModelConfig.model_id == model_id, ModelConfig.is_enabled.is_(True))
+        .where(
+            ModelConfig.profile_id == profile_id,
+            ModelConfig.model_id == model_id,
+            ModelConfig.is_enabled.is_(True),
+        )
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -30,12 +34,11 @@ async def get_model_config_with_connections(
         target_result = await db.execute(
             select(ModelConfig)
             .options(
-                selectinload(ModelConfig.connections).selectinload(
-                    Connection.endpoint_rel
-                ),
+            selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
                 selectinload(ModelConfig.provider),
             )
             .where(
+                ModelConfig.profile_id == profile_id,
                 ModelConfig.model_id == config.redirect_to,
                 ModelConfig.is_enabled.is_(True),
             )
@@ -43,8 +46,9 @@ async def get_model_config_with_connections(
         target = target_result.scalar_one_or_none()
         if not target:
             logger.warning(
-                "Proxy target model_id=%r not found or disabled for proxy model_id=%r",
+                "Proxy target model_id=%r not found or disabled for profile_id=%d proxy model_id=%r",
                 config.redirect_to,
+                profile_id,
                 model_id,
             )
             return None
@@ -60,29 +64,45 @@ def get_active_connections(model_config: ModelConfig) -> list[Connection]:
         if connection.is_active and connection.endpoint_rel is not None
     ]
     logger.debug(
-        f"get_active_connections for model {model_config.model_id}: "
-        f"{len(active_connections)}/{len(model_config.connections)} active"
+        "get_active_connections for model %s: %d/%d active",
+        model_config.model_id,
+        len(active_connections),
+        len(model_config.connections),
     )
     return sorted(active_connections, key=lambda connection: connection.priority)
 
 
-def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Connection]:
+def build_attempt_plan(*args) -> list[Connection]:
+    if len(args) == 3:
+        profile_id, model_config, now_mono = args
+    elif len(args) == 2:
+        model_config, now_mono = args
+        profile_id = getattr(model_config, "profile_id", None) or 1
+    else:
+        raise TypeError("build_attempt_plan expects (profile_id, model_config, now_mono) or (model_config, now_mono)")
+
     active = get_active_connections(model_config)
     if not active:
         logger.warning(
-            f"build_attempt_plan: No active connections for model {model_config.model_id}"
+            "build_attempt_plan: No active connections for profile_id=%d model %s",
+            profile_id,
+            model_config.model_id,
         )
         return []
 
     if model_config.lb_strategy == "single":
         logger.debug(
-            f"build_attempt_plan: single strategy, using connection {active[0].id}"
+            "build_attempt_plan: single strategy profile_id=%d using connection %d",
+            profile_id,
+            active[0].id,
         )
         return [active[0]]
 
     if not model_config.failover_recovery_enabled:
         logger.debug(
-            f"build_attempt_plan: failover without recovery, trying {len(active)} connections"
+            "build_attempt_plan: failover without recovery profile_id=%d trying %d connections",
+            profile_id,
+            len(active),
         )
         return active
 
@@ -90,7 +110,7 @@ def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Conne
     probe_eligible: list[Connection] = []
 
     for connection in active:
-        state = _recovery_state.get(connection.id)
+        state = _recovery_state.get((profile_id, connection.id))
         if state is None:
             healthy.append(connection)
         else:
@@ -99,38 +119,47 @@ def build_attempt_plan(model_config: ModelConfig, now_mono: float) -> list[Conne
                 probe_eligible.append(connection)
 
     logger.debug(
-        f"build_attempt_plan: failover with recovery, "
-        f"healthy={[connection.id for connection in healthy]}, "
-        f"probe_eligible={[connection.id for connection in probe_eligible]}"
+        "build_attempt_plan: profile_id=%d failover with recovery healthy=%s probe_eligible=%s",
+        profile_id,
+        [connection.id for connection in healthy],
+        [connection.id for connection in probe_eligible],
     )
     return healthy + probe_eligible
 
-
 def mark_connection_failed(
-    connection_id: int, cooldown_seconds: float, now_mono: float
-) -> None:
+    profile_id: int,
+    connection_id: int,
+    cooldown_seconds: float,
+    now_mono: float,
+ ) -> None:
     blocked_until = now_mono + cooldown_seconds
-    _recovery_state[connection_id] = (blocked_until, cooldown_seconds)
+    _recovery_state[(profile_id, connection_id)] = (blocked_until, cooldown_seconds)
     logger.info(
-        "Connection %d marked failed, cooldown %.0fs, blocked until mono=%.1f",
+        "Connection profile_id=%d connection_id=%d marked failed, cooldown %.0fs, blocked until mono=%.1f",
+        profile_id,
         connection_id,
         cooldown_seconds,
         blocked_until,
     )
 
 
-def mark_connection_recovered(connection_id: int) -> None:
-    if connection_id in _recovery_state:
-        del _recovery_state[connection_id]
+def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
+    key = (profile_id, connection_id)
+    if key in _recovery_state:
+        del _recovery_state[key]
         logger.info(
-            "Connection %d recovered, removed from recovery state", connection_id
+            "Connection profile_id=%d connection_id=%d recovered, removed from recovery state",
+            profile_id,
+            connection_id,
         )
+    if profile_id == 1 and connection_id in _recovery_state:
+        del _recovery_state[connection_id]
 
 
 async def get_model_config_with_endpoints(
-    db: AsyncSession, model_id: str
+    db: AsyncSession, profile_id: int, model_id: str
 ) -> ModelConfig | None:
-    return await get_model_config_with_connections(db, model_id)
+    return await get_model_config_with_connections(db, profile_id, model_id)
 
 
 def get_active_endpoints(model_config: ModelConfig) -> list[Connection]:
@@ -138,10 +167,15 @@ def get_active_endpoints(model_config: ModelConfig) -> list[Connection]:
 
 
 def mark_endpoint_failed(
-    endpoint_id: int, cooldown_seconds: float, now_mono: float
+    endpoint_id: int, cooldown_seconds: float, now_mono: float, profile_id: int = 1
 ) -> None:
-    mark_connection_failed(endpoint_id, cooldown_seconds, now_mono)
+    key = (profile_id, endpoint_id)
+    mark_connection_failed(profile_id, endpoint_id, cooldown_seconds, now_mono)
+    if profile_id == 1:
+        _recovery_state[endpoint_id] = _recovery_state[key]
 
 
-def mark_endpoint_recovered(endpoint_id: int) -> None:
-    mark_connection_recovered(endpoint_id)
+def mark_endpoint_recovered(endpoint_id: int, profile_id: int = 1) -> None:
+    mark_connection_recovered(profile_id, endpoint_id)
+    if profile_id == 1 and endpoint_id in _recovery_state:
+        del _recovery_state[endpoint_id]

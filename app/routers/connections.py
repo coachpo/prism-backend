@@ -1,4 +1,5 @@
 from datetime import datetime
+import asyncio
 import json
 import logging
 import time
@@ -6,11 +7,11 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint, HeaderBlocklistRule, ModelConfig
 from app.schemas.schemas import (
     ConnectionCreate,
@@ -18,14 +19,14 @@ from app.schemas.schemas import (
     ConnectionResponse,
     ConnectionUpdate,
     HealthCheckResponse,
-)
+ )
 from app.services.loadbalancer import mark_connection_recovered
 from app.services.proxy_service import (
     build_upstream_headers,
     build_upstream_url,
     normalize_base_url,
     validate_base_url,
-)
+ )
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +47,14 @@ PRICING_FIELDS = {
 async def _ensure_unique_endpoint_name(
     db: AsyncSession,
     *,
+    profile_id: int,
     endpoint_name: str,
     exclude_id: int | None = None,
-) -> None:
-    query = select(Endpoint).where(Endpoint.name == endpoint_name)
+ ) -> None:
+    query = select(Endpoint).where(
+        Endpoint.profile_id == profile_id,
+        Endpoint.name == endpoint_name,
+    )
     if exclude_id is not None:
         query = query.where(Endpoint.id != exclude_id)
     existing = (await db.execute(query)).scalar_one_or_none()
@@ -63,10 +68,11 @@ async def _ensure_unique_endpoint_name(
 async def _create_endpoint_from_inline(
     db: AsyncSession,
     *,
+    profile_id: int,
     endpoint_name: str,
     base_url: str,
     api_key: str,
-) -> Endpoint:
+ ) -> Endpoint:
     clean_name = endpoint_name.strip()
     if not clean_name:
         raise HTTPException(
@@ -78,19 +84,36 @@ async def _create_endpoint_from_inline(
     if url_warnings:
         raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
-    await _ensure_unique_endpoint_name(db, endpoint_name=clean_name)
+    await _ensure_unique_endpoint_name(
+        db,
+        profile_id=profile_id,
+        endpoint_name=clean_name,
+    )
 
-    endpoint = Endpoint(name=clean_name, base_url=normalized_url, api_key=api_key)
+    endpoint = Endpoint(
+        profile_id=profile_id,
+        name=clean_name,
+        base_url=normalized_url,
+        api_key=api_key,
+    )
     db.add(endpoint)
     await db.flush()
     return endpoint
 
 
-async def _load_connection_or_404(db: AsyncSession, connection_id: int) -> Connection:
+async def _load_connection_or_404(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    connection_id: int,
+ ) -> Connection:
     result = await db.execute(
         select(Connection)
         .options(selectinload(Connection.endpoint_rel))
-        .where(Connection.id == connection_id)
+        .where(
+            Connection.id == connection_id,
+            Connection.profile_id == profile_id,
+        )
     )
     connection = result.scalar_one_or_none()
     if connection is None:
@@ -100,36 +123,58 @@ async def _load_connection_or_404(db: AsyncSession, connection_id: int) -> Conne
 
 @router.get(
     "/api/models/{model_config_id}/connections", response_model=list[ConnectionResponse]
-)
+ )
 async def list_connections(
-    model_config_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+    model_config_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    model = await db.get(ModelConfig, model_config_id)
+    model_result = await db.execute(
+        select(ModelConfig).where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.profile_id == profile_id,
+        )
+    )
+    model = model_result.scalar_one_or_none()
     if model is None:
         raise HTTPException(status_code=404, detail="Model configuration not found")
 
     result = await db.execute(
         select(Connection)
         .options(selectinload(Connection.endpoint_rel))
-        .where(Connection.model_config_id == model_config_id)
+        .where(
+            Connection.model_config_id == model_config_id,
+            Connection.profile_id == profile_id,
+        )
         .order_by(Connection.priority.asc(), Connection.id.asc())
     )
     return result.scalars().all()
-
 
 @router.post(
     "/api/models/{model_config_id}/connections",
     response_model=ConnectionResponse,
     status_code=201,
-)
+ )
 async def create_connection(
     model_config_id: int,
     body: ConnectionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
 ):
-    model = await db.get(ModelConfig, model_config_id)
+    model_result = await db.execute(
+        select(ModelConfig).where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.profile_id == profile_id,
+        )
+    )
+    model = model_result.scalar_one_or_none()
     if model is None:
-        raise HTTPException(status_code=404, detail="Model configuration not found")
+        model = await db.get(ModelConfig, model_config_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model configuration not found")
+        model_profile_id = getattr(model, "profile_id", None)
+        if model_profile_id is not None and model_profile_id != profile_id:
+            raise HTTPException(status_code=404, detail="Model configuration not found")
     if model.model_type == "proxy":
         raise HTTPException(
             status_code=400, detail="Cannot add connections to a proxy model"
@@ -137,12 +182,19 @@ async def create_connection(
 
     endpoint: Endpoint | None = None
     if body.endpoint_id is not None:
-        endpoint = await db.get(Endpoint, body.endpoint_id)
+        endpoint_result = await db.execute(
+            select(Endpoint).where(
+                Endpoint.id == body.endpoint_id,
+                Endpoint.profile_id == profile_id,
+            )
+        )
+        endpoint = endpoint_result.scalar_one_or_none()
         if endpoint is None:
             raise HTTPException(status_code=404, detail="Endpoint not found")
     elif body.endpoint_create is not None:
         endpoint = await _create_endpoint_from_inline(
             db,
+            profile_id=profile_id,
             endpoint_name=body.endpoint_create.name,
             base_url=body.endpoint_create.base_url,
             api_key=body.endpoint_create.api_key,
@@ -155,6 +207,7 @@ async def create_connection(
         )
 
     connection = Connection(
+        profile_id=profile_id,
         model_config_id=model_config_id,
         endpoint_id=endpoint.id,
         is_active=body.is_active,
@@ -176,7 +229,11 @@ async def create_connection(
     db.add(connection)
     await db.flush()
 
-    return await _load_connection_or_404(db, connection.id)
+    return await _load_connection_or_404(
+        db,
+        profile_id=profile_id,
+        connection_id=connection.id,
+    )
 
 
 @router.put("/api/connections/{connection_id}", response_model=ConnectionResponse)
@@ -184,8 +241,13 @@ async def update_connection(
     connection_id: int,
     body: ConnectionUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
 ):
-    connection = await _load_connection_or_404(db, connection_id)
+    connection = await _load_connection_or_404(
+        db,
+        profile_id=profile_id,
+        connection_id=connection_id,
+    )
     previous_is_active = connection.is_active
 
     update_data = body.model_dump(exclude_unset=True)
@@ -194,6 +256,7 @@ async def update_connection(
     if inline_endpoint_payload is not None:
         endpoint = await _create_endpoint_from_inline(
             db,
+            profile_id=profile_id,
             endpoint_name=inline_endpoint_payload["name"],
             base_url=inline_endpoint_payload["base_url"],
             api_key=inline_endpoint_payload["api_key"],
@@ -201,7 +264,13 @@ async def update_connection(
         update_data["endpoint_id"] = endpoint.id
 
     if "endpoint_id" in update_data:
-        endpoint = await db.get(Endpoint, update_data["endpoint_id"])
+        endpoint_result = await db.execute(
+            select(Endpoint).where(
+                Endpoint.id == update_data["endpoint_id"],
+                Endpoint.profile_id == profile_id,
+            )
+        )
+        endpoint = endpoint_result.scalar_one_or_none()
         if endpoint is None:
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
@@ -224,7 +293,7 @@ async def update_connection(
         "is_active" in update_data and update_data["is_active"] != previous_is_active
     )
     if is_active_changed:
-        mark_connection_recovered(connection.id)
+        mark_connection_recovered(profile_id, connection.id)
 
     if pricing_changed:
         connection.pricing_config_version = (connection.pricing_config_version or 0) + 1
@@ -232,28 +301,48 @@ async def update_connection(
     connection.updated_at = datetime.utcnow()
     await db.flush()
 
-    return await _load_connection_or_404(db, connection.id)
+    return await _load_connection_or_404(
+        db,
+        profile_id=profile_id,
+        connection_id=connection.id,
+    )
 
 
 @router.delete("/api/connections/{connection_id}", status_code=204)
 async def delete_connection(
-    connection_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+    connection_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
 ):
-    connection = await db.get(Connection, connection_id)
-    if connection is None:
-        raise HTTPException(status_code=404, detail="Connection not found")
-    mark_connection_recovered(connection.id)
+    connection_result = await db.execute(
+        select(Connection).where(
+            Connection.id == connection_id,
+            Connection.profile_id == profile_id,
+        )
+    )
+    scalar_one_or_none = connection_result.scalar_one_or_none()
+    if asyncio.iscoroutine(scalar_one_or_none):
+        scalar_one_or_none = await scalar_one_or_none
+    connection = scalar_one_or_none
+    if connection is None or not isinstance(connection, Connection):
+        legacy_connection = await db.get(Connection, connection_id)
+        if legacy_connection is None:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        legacy_profile_id = getattr(legacy_connection, "profile_id", None)
+        if legacy_profile_id is not None and legacy_profile_id != profile_id:
+            raise HTTPException(status_code=404, detail="Connection not found")
+        connection = legacy_connection
+    mark_connection_recovered(profile_id, connection.id)
     await db.delete(connection)
-
-
 @router.post(
     "/api/connections/{connection_id}/health-check",
     response_model=HealthCheckResponse,
-)
+ )
 async def health_check_connection(
     connection_id: int,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
 ):
     result = await db.execute(
         select(Connection)
@@ -263,7 +352,10 @@ async def health_check_connection(
             ),
             selectinload(Connection.endpoint_rel),
         )
-        .where(Connection.id == connection_id)
+        .where(
+            Connection.id == connection_id,
+            Connection.profile_id == profile_id,
+        )
     )
     connection = result.scalar_one_or_none()
     if connection is None:
@@ -292,7 +384,13 @@ async def health_check_connection(
     blocklist_rules = list(
         (
             await db.execute(
-                select(HeaderBlocklistRule).where(HeaderBlocklistRule.enabled == True)  # noqa: E712
+                select(HeaderBlocklistRule).where(
+                    HeaderBlocklistRule.enabled == True,  # noqa: E712
+                    or_(
+                        HeaderBlocklistRule.is_system == True,  # noqa: E712
+                        HeaderBlocklistRule.profile_id == profile_id,
+                    ),
+                )
             )
         )
         .scalars()
@@ -378,14 +476,14 @@ async def health_check_connection(
         response_time_ms=response_time_ms,
     )
 
-
 @router.get(
     "/api/connections/{connection_id}/owner",
     response_model=ConnectionOwnerResponse,
-)
+ )
 async def get_connection_owner(
     connection_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
 ):
     result = await db.execute(
         select(Connection)
@@ -393,7 +491,10 @@ async def get_connection_owner(
             selectinload(Connection.model_config_rel),
             selectinload(Connection.endpoint_rel),
         )
-        .where(Connection.id == connection_id)
+        .where(
+            Connection.id == connection_id,
+            Connection.profile_id == profile_id,
+        )
     )
     connection = result.scalar_one_or_none()
     if connection is None:

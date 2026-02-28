@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 async def log_request(
     *,
     model_id: str,
+    profile_id: int = 1,
     provider_type: str,
     endpoint_id: int | None,
     connection_id: int | None,
@@ -59,6 +60,7 @@ async def log_request(
 
     try:
         entry = RequestLog(
+            profile_id=profile_id,
             model_id=model_id,
             provider_type=provider_type,
             endpoint_id=endpoint_id,
@@ -449,6 +451,7 @@ def extract_token_usage(body: bytes | None) -> dict[str, int | None]:
 async def get_request_logs(
     db: AsyncSession,
     *,
+    profile_id: int,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -460,7 +463,7 @@ async def get_request_logs(
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[RequestLog], int]:
-    filters = []
+    filters = [RequestLog.profile_id == profile_id]
     if model_id:
         filters.append(RequestLog.model_id == model_id)
     if provider_type:
@@ -499,6 +502,7 @@ async def get_request_logs(
 async def get_stats_summary(
     db: AsyncSession,
     *,
+    profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     group_by: str | None = None,
@@ -507,7 +511,7 @@ async def get_stats_summary(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ) -> dict:
-    time_filters = []
+    time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
@@ -614,10 +618,11 @@ async def get_stats_summary(
 async def get_connection_success_rates(
     db: AsyncSession,
     *,
+    profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> list[dict]:
-    time_filters = []
+    time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
@@ -662,19 +667,26 @@ async def get_connection_success_rates(
 async def get_endpoint_success_rates(
     db: AsyncSession,
     *,
+    profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> list[dict]:
-    return await get_connection_success_rates(db, from_time=from_time, to_time=to_time)
+    return await get_connection_success_rates(
+        db,
+        profile_id=profile_id,
+        from_time=from_time,
+        to_time=to_time,
+    )
 
 
 async def get_model_health_stats(
     db: AsyncSession,
     *,
+    profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> dict[str, dict]:
-    time_filters = []
+    time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
@@ -732,6 +744,7 @@ def resolve_time_preset(
 async def get_spending_report(
     db: AsyncSession,
     *,
+    profile_id: int,
     preset: str | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -746,7 +759,7 @@ async def get_spending_report(
 ) -> dict:
     from_time, to_time = resolve_time_preset(preset, from_time, to_time)
 
-    filters = []
+    filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
@@ -972,7 +985,7 @@ async def get_spending_report(
     ).all()
 
     settings_row = (
-        await db.execute(select(UserSetting).order_by(UserSetting.id.asc()).limit(1))
+        await db.execute(select(UserSetting).where(UserSetting.profile_id == profile_id).order_by(UserSetting.id.asc()).limit(1))
     ).scalar_one_or_none()
 
     report_currency_code = settings_row.report_currency_code if settings_row else "USD"

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func, delete, and_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import AuditLog
 from app.schemas.schemas import (
     AuditLogListItem,
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 @router.get("/logs", response_model=AuditLogListResponse)
 async def list_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     provider_id: int | None = None,
     model_id: str | None = None,
     status_code: int | None = None,
@@ -30,7 +31,7 @@ async def list_audit_logs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    filters = []
+    filters = [AuditLog.profile_id == profile_id]
     if provider_id is not None:
         filters.append(AuditLog.provider_id == provider_id)
     if model_id:
@@ -70,6 +71,7 @@ async def list_audit_logs(
                 id=row.id,
                 request_log_id=row.request_log_id,
                 provider_id=row.provider_id,
+                profile_id=row.profile_id,
                 model_id=row.model_id,
                 endpoint_id=row.endpoint_id,
                 connection_id=row.connection_id,
@@ -93,8 +95,9 @@ async def list_audit_logs(
 async def get_audit_log(
     log_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    result = await db.execute(select(AuditLog).where(AuditLog.id == log_id))
+    result = await db.execute(select(AuditLog).where(AuditLog.id == log_id, AuditLog.profile_id == profile_id))
     row = result.scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Audit log not found")
@@ -104,6 +107,7 @@ async def get_audit_log(
 @router.delete("/logs", response_model=AuditLogDeleteResponse)
 async def delete_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
     before: datetime | None = None,
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
@@ -116,14 +120,20 @@ async def delete_audit_logs(
         )
 
     if delete_all:
-        stmt = delete(AuditLog)
+        stmt = delete(AuditLog).where(AuditLog.profile_id == profile_id)
     elif older_than_days is not None:
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             days=older_than_days
         )
-        stmt = delete(AuditLog).where(AuditLog.created_at < cutoff)
+        stmt = delete(AuditLog).where(
+            AuditLog.profile_id == profile_id,
+            AuditLog.created_at < cutoff,
+        )
     else:
-        stmt = delete(AuditLog).where(AuditLog.created_at < before)
+        stmt = delete(AuditLog).where(
+            AuditLog.profile_id == profile_id,
+            AuditLog.created_at < before,
+        )
 
     result = await db.execute(stmt)
     await db.flush()

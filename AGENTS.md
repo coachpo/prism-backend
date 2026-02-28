@@ -8,17 +8,19 @@ FastAPI async API server — proxy engine for LLM requests with PostgreSQL persi
 
 ```
 app/
-├── main.py              # App factory, lifespan (DB init, httpx pool, seed), CORS, 8 router mounts, /health endpoint (615 lines)
+├── main.py              # App factory, lifespan (DB init, httpx pool, seed), CORS, 10 router mounts, /health endpoint (213 lines)
 ├── dependencies.py      # get_db() — async session with auto-commit/rollback
 ├── core/
 │   ├── config.py        # pydantic-settings: timeouts, DB URL, LB config (reads .env)
 │   └── database.py      # Async engine + session factory + Base
-├── models/models.py     # 8 ORM models (281 lines): Provider, ModelConfig, Endpoint, RequestLog, AuditLog, HeaderBlocklistRule, UserSetting, EndpointFxRateSetting
+├── models/models.py     # 10 ORM models (477 lines): Profile, Provider, ModelConfig, Endpoint, Connection, RequestLog, UserSetting, EndpointFxRateSetting, HeaderBlocklistRule, AuditLog
 ├── schemas/schemas.py   # Pydantic request/response schemas (736 lines, mirrors models/)
-├── routers/             # 8 API route handlers (2338 lines total)
+├── routers/             # 10 API route handlers
 │   ├── providers.py     # CRUD /api/providers (list, get, update audit settings) — 47 lines
+│   ├── profiles.py      # CRUD /api/profiles (list, get active, create, update, delete, activate) — 211 lines
 │   ├── models.py        # CRUD /api/models (list with health stats, get, create, update, delete) — 276 lines
 │   ├── endpoints.py     # CRUD /api/models/{id}/endpoints + health check + owner route — 318 lines
+│   ├── connections.py   # CRUD /api/models/{id}/connections + health check + owner route — 514 lines
 │   ├── stats.py         # /api/stats/* — request logs, summary, endpoint success rates, spending report, batch delete — 159 lines
 │   ├── audit.py         # /api/audit/* — audit log list, detail, batch delete — 126 lines
 │   ├── config.py        # /api/config/* — config export/import (v2/v3) + header blocklist CRUD — 628 lines
@@ -53,11 +55,13 @@ app/
 | Costing settings | `routers/settings.py` | `/api/settings/costing` — report currency + per-endpoint FX rates |
 | Audit logging | `services/audit_service.py` | `record_audit_log()` — called from `proxy.py` after each request |
 | Audit toggle | `routers/providers.py` | `PATCH /api/providers/{id}` — `audit_enabled`, `audit_capture_bodies` |
-| Config backup | `routers/config.py` | Export v3: providers + models + endpoints + user_settings + blocklist rules |
+|| Config backup | `routers/config.py` | Export v6: providers + models + endpoints + connections + user_settings + blocklist rules + FX mappings |
 | Batch delete logs | `routers/stats.py` + `routers/audit.py` | `DELETE` with `older_than_days` (≥1) or `delete_all=true`; audit also supports `before` |
 | Gemini path rewrite | `services/proxy_service.py` | Gemini uses model-in-path pattern (`/models/{model}:generateContent`) |
 | Header blocklist | `routers/config.py` + `proxy_service.py` | System (seeded) + user rules; auth headers protected from blocklist |
 | Endpoint owner | `routers/endpoints.py` | `GET /api/endpoints/{id}/owner` — returns model_id for endpoint navigation |
+|| Connection management | `routers/connections.py` | Model-scoped routing config, health checks, pricing |
+|| Profile management | `routers/profiles.py` | CRUD for profiles, activate/deactivate, soft delete (max 10) |
 
 ## CONVENTIONS
 
@@ -79,8 +83,8 @@ app/
 - Never use the request-scoped `db` session inside a `StreamingResponse` generator — it's closed after the route returns. Use `AsyncSessionLocal()` directly.
 - Never add `content-length` or hop-by-hop headers to upstream requests — `HOP_BY_HOP_HEADERS` frozenset handles this
 - `base_url` must not end with `/` — `normalize_base_url()` strips it on create/update
-- Don't chain proxy aliases — `get_model_config_with_endpoints()` does exactly one redirect lookup
-- Proxy models cannot have endpoints — blocked at endpoint creation and config import
+- Don't chain proxy aliases — `get_model_config_with_connections()` does exactly one redirect lookup
+- Proxy models cannot have connections — blocked at connection creation and config import
 - Native models cannot have `redirect_to` — only proxy models use this field
 - Never log raw auth headers — `audit_service.py` redacts `authorization`, `x-api-key`, `x-goog-api-key` and any header matching `key|secret|token|auth` pattern
 - Don't use `round_robin` LB strategy — removed, auto-migrated to `failover` on startup

@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import EndpointFxRateSetting, ModelConfig, Provider
 from app.schemas.schemas import (
     ModelConfigCreate,
@@ -22,11 +22,12 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 
 async def _validate_proxy(
     db: AsyncSession,
+    profile_id: int,
     model_type: str,
     redirect_to: str | None,
     provider_id: int,
     exclude_model_id: str | None = None,
-):
+ ):
     if model_type == "proxy":
         if not redirect_to:
             raise HTTPException(
@@ -36,7 +37,10 @@ async def _validate_proxy(
         target_result = await db.execute(
             select(ModelConfig)
             .options(selectinload(ModelConfig.provider))
-            .where(ModelConfig.model_id == redirect_to)
+            .where(
+                ModelConfig.profile_id == profile_id,
+                ModelConfig.model_id == redirect_to,
+            )
         )
         target = target_result.scalar_one_or_none()
         if not target:
@@ -61,19 +65,22 @@ async def _validate_proxy(
                 detail="redirect_to must be null for native models",
             )
 
-
 @router.get("", response_model=list[ModelConfigListResponse])
-async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
+async def list_models(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
     result = await db.execute(
         select(ModelConfig)
         .options(
             selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
+        .where(ModelConfig.profile_id == profile_id)
         .order_by(ModelConfig.id)
     )
     configs = result.scalars().all()
 
-    health_stats = await get_model_health_stats(db)
+    health_stats = await get_model_health_stats(db, profile_id=profile_id)
 
     response = []
     for config in configs:
@@ -81,6 +88,7 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
         response.append(
             ModelConfigListResponse(
                 id=config.id,
+                profile_id=config.profile_id,
                 provider_id=config.provider_id,
                 provider=ProviderResponse.model_validate(config.provider),
                 model_id=config.model_id,
@@ -108,13 +116,20 @@ async def list_models(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 @router.get("/{model_config_id}", response_model=ModelConfigResponse)
-async def get_model(model_config_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
+async def get_model(
+    model_config_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
     result = await db.execute(
         select(ModelConfig)
         .options(
             selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
-        .where(ModelConfig.id == model_config_id)
+        .where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.profile_id == profile_id,
+        )
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -124,14 +139,19 @@ async def get_model(model_config_id: int, db: Annotated[AsyncSession, Depends(ge
 
 @router.post("", response_model=ModelConfigResponse, status_code=201)
 async def create_model(
-    body: ModelConfigCreate, db: Annotated[AsyncSession, Depends(get_db)]
+    body: ModelConfigCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     provider = await db.get(Provider, body.provider_id)
     if not provider:
         raise HTTPException(status_code=400, detail="Provider not found")
 
     existing = await db.execute(
-        select(ModelConfig).where(ModelConfig.model_id == body.model_id)
+        select(ModelConfig).where(
+            ModelConfig.profile_id == profile_id,
+            ModelConfig.model_id == body.model_id,
+        )
     )
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -144,9 +164,10 @@ async def create_model(
             status_code=400, detail="model_type must be 'native' or 'proxy'"
         )
 
-    await _validate_proxy(db, model_type, body.redirect_to, body.provider_id)
+    await _validate_proxy(db, profile_id, model_type, body.redirect_to, body.provider_id)
 
     config = ModelConfig(
+        profile_id=profile_id,
         provider_id=body.provider_id,
         model_id=body.model_id,
         display_name=body.display_name,
@@ -179,13 +200,17 @@ async def update_model(
     model_config_id: int,
     body: ModelConfigUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     result = await db.execute(
         select(ModelConfig)
         .options(
             selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
         )
-        .where(ModelConfig.id == model_config_id)
+        .where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.profile_id == profile_id,
+        )
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -201,7 +226,10 @@ async def update_model(
 
     if "model_id" in update_data and update_data["model_id"] != config.model_id:
         existing = await db.execute(
-            select(ModelConfig).where(ModelConfig.model_id == update_data["model_id"])
+            select(ModelConfig).where(
+                ModelConfig.profile_id == profile_id,
+                ModelConfig.model_id == update_data["model_id"],
+            )
         )
         if existing.scalar_one_or_none():
             raise HTTPException(
@@ -220,6 +248,7 @@ async def update_model(
 
     await _validate_proxy(
         db,
+        profile_id,
         new_model_type,
         new_redirect_to,
         new_provider_id,
@@ -235,7 +264,10 @@ async def update_model(
     if "model_id" in update_data and update_data["model_id"] != original_model_id:
         await db.execute(
             update(EndpointFxRateSetting)
-            .where(EndpointFxRateSetting.model_id == original_model_id)
+            .where(
+                EndpointFxRateSetting.profile_id == profile_id,
+                EndpointFxRateSetting.model_id == original_model_id,
+            )
             .values(model_id=update_data["model_id"])
         )
 
@@ -254,10 +286,15 @@ async def update_model(
 
 @router.delete("/{model_config_id}", status_code=204)
 async def delete_model(
-    model_config_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+    model_config_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     result = await db.execute(
-        select(ModelConfig).where(ModelConfig.id == model_config_id)
+        select(ModelConfig).where(
+            ModelConfig.id == model_config_id,
+            ModelConfig.profile_id == profile_id,
+        )
     )
     config = result.scalar_one_or_none()
     if not config:
@@ -265,7 +302,10 @@ async def delete_model(
 
     if config.model_type == "native":
         referrers = await db.execute(
-            select(ModelConfig).where(ModelConfig.redirect_to == config.model_id)
+            select(ModelConfig).where(
+                ModelConfig.profile_id == profile_id,
+                ModelConfig.redirect_to == config.model_id,
+            )
         )
         referrer_list = referrers.scalars().all()
         if referrer_list:
@@ -280,7 +320,9 @@ async def delete_model(
 
 @router.get("/by-endpoint/{endpoint_id}", response_model=list[ModelConfigListResponse])
 async def get_models_by_endpoint(
-    endpoint_id: int, db: Annotated[AsyncSession, Depends(get_db)]
+    endpoint_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     """Get all models that use a specific endpoint."""
     from app.models.models import Connection
@@ -289,7 +331,10 @@ async def get_models_by_endpoint(
     result = await db.execute(
         select(Connection)
         .options(selectinload(Connection.model_config_rel).selectinload(ModelConfig.provider))
-        .where(Connection.endpoint_id == endpoint_id)
+        .where(
+            Connection.endpoint_id == endpoint_id,
+            Connection.profile_id == profile_id,
+        )
     )
     connections = result.scalars().all()
     
@@ -297,7 +342,7 @@ async def get_models_by_endpoint(
     model_configs = {conn.model_config_rel for conn in connections}
     
     # Get health stats
-    health_stats = await get_model_health_stats(db)
+    health_stats = await get_model_health_stats(db, profile_id=profile_id)
     
     # Build response
     response = []
@@ -311,6 +356,7 @@ async def get_models_by_endpoint(
         response.append(
             ModelConfigListResponse(
                 id=config.id,
+                profile_id=config.profile_id,
                 provider_id=config.provider_id,
                 provider=ProviderResponse.model_validate(config.provider),
                 model_id=config.model_id,

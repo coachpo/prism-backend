@@ -21,7 +21,34 @@ def _validate_decimal_non_negative(value: str | None, field_name: str) -> str | 
     return f"{parsed}"
 
 
-# --- Provider Schemas ---
+class ProfileBase(BaseModel):
+    name: str
+    description: str | None = None
+
+
+class ProfileCreate(ProfileBase):
+    pass
+
+
+class ProfileUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class ProfileResponse(ProfileBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    is_active: bool
+    version: int
+    deleted_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProfileActivateRequest(BaseModel):
+    expected_active_profile_id: int
+    expected_active_profile_version: int
 
 
 class ProviderBase(BaseModel):
@@ -72,6 +99,7 @@ class EndpointResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    profile_id: int
     name: str
     base_url: str
     api_key: str
@@ -246,6 +274,7 @@ class ConnectionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    profile_id: int
     model_config_id: int
     endpoint_id: int
     endpoint: EndpointResponse | None = None
@@ -353,6 +382,7 @@ class ModelConfigResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    profile_id: int
     provider_id: int
     provider: ProviderResponse
     model_id: str
@@ -372,6 +402,7 @@ class ModelConfigListResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    profile_id: int
     provider_id: int
     provider: ProviderResponse
     model_id: str
@@ -397,6 +428,7 @@ class RequestLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    profile_id: int
     model_id: str
     provider_type: str
     endpoint_id: int | None
@@ -496,6 +528,7 @@ class EndpointFxMapping(BaseModel):
 
 
 class CostingSettingsResponse(BaseModel):
+    profile_id: int | None = None
     report_currency_code: str
     report_currency_symbol: str
     timezone_preference: str | None = None
@@ -503,6 +536,7 @@ class CostingSettingsResponse(BaseModel):
 
 
 class CostingSettingsUpdate(BaseModel):
+    profile_id: int | None = None
     report_currency_code: str
     report_currency_symbol: str
     timezone_preference: str | None = None
@@ -603,6 +637,7 @@ class SpendingReportResponse(BaseModel):
 
 class ConfigEndpointExport(BaseModel):
     endpoint_id: int | None = None
+    endpoint_ref: str | None = None
     name: str
     base_url: str
     api_key: str
@@ -610,7 +645,9 @@ class ConfigEndpointExport(BaseModel):
 
 class ConfigConnectionExport(BaseModel):
     connection_id: int | None = None
-    endpoint_id: int
+    connection_ref: str | None = None
+    endpoint_id: int | None = None
+    endpoint_ref: str | None = None
     is_active: bool = True
     priority: int = 0
     name: str | None = None
@@ -669,7 +706,8 @@ class ConfigProviderExport(BaseModel):
 
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
-    endpoint_id: int
+    endpoint_id: int | None = None
+    endpoint_ref: str | None = None
     fx_rate: str
 
 
@@ -680,7 +718,7 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[6] = 6
+    version: Literal[6, 7] = 6
     exported_at: datetime
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
@@ -690,13 +728,14 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[6]
+    version: Literal[6, 7]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
+    mode: Literal["replace", "merge"] | None = None
 
 
 class ConfigImportResponse(BaseModel):
@@ -714,6 +753,7 @@ class AuditLogListItem(BaseModel):
 
     id: int
     request_log_id: int | None
+    profile_id: int
     provider_id: int
     model_id: str
     endpoint_id: int | None = None
@@ -735,6 +775,7 @@ class AuditLogDetail(BaseModel):
 
     id: int
     request_log_id: int | None
+    profile_id: int
     provider_id: int
     model_id: str
     endpoint_id: int | None = None
@@ -847,6 +888,7 @@ class HeaderBlocklistRuleResponse(BaseModel):
     pattern: str
     enabled: bool
     is_system: bool
+    profile_id: int | None
     created_at: datetime
     updated_at: datetime
 
@@ -857,6 +899,7 @@ class HeaderBlocklistRuleExport(BaseModel):
     pattern: str
     enabled: bool
     is_system: bool
+    profile_id: int | None = None
 
 
 class ConnectionDropdownItem(BaseModel):

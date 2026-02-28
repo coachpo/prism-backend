@@ -889,7 +889,7 @@ class TestFailoverRecoveryFieldValidation:
         assert exported["failover_recovery_cooldown_seconds"] == 300
 
     def test_config_import_rejects_version_1(self):
-        """ConfigImportRequest rejects version != 6."""
+        """ConfigImportRequest rejects version values outside 6/7."""
         from app.schemas.schemas import ConfigImportRequest
         from pydantic import ValidationError
 
@@ -902,7 +902,7 @@ class TestFailoverRecoveryFieldValidation:
                     "models": [],
                 }
             )
-        assert "Input should be 6" in str(exc_info.value)
+        assert "Input should be 6 or 7" in str(exc_info.value)
 
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
@@ -987,7 +987,7 @@ class TestFailoverRecoveryFieldValidation:
             _validate_import(data)
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Duplicate connection_id: 7"
+        assert exc_info.value.detail == "Duplicate connection reference: 'legacy-connection-id:7'"
 
     def test_config_version_6_roundtrip(self):
         """Config export/import roundtrip with version 6 and recovery fields."""
@@ -2568,3 +2568,293 @@ class TestDEF021_StreamingCancellationResilience:
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
 
+
+
+class TestDEF022_ProfileIsolationRuntimeDependencies:
+    def test_proxy_routes_use_active_profile_dependency(self):
+        from app.dependencies import get_active_profile_id, get_effective_profile_id
+        from app.routers import proxy as proxy_router
+
+        route_by_path = {
+            route.path: route
+            for route in proxy_router.router.routes
+            if hasattr(route, "dependant")
+        }
+
+        v1_route = route_by_path["/v1/{path:path}"]
+        v1beta_route = route_by_path["/v1beta/{path:path}"]
+
+        v1_dependencies = {dep.call for dep in v1_route.dependant.dependencies}
+        v1beta_dependencies = {dep.call for dep in v1beta_route.dependant.dependencies}
+
+        assert get_active_profile_id in v1_dependencies
+        assert get_active_profile_id in v1beta_dependencies
+        assert get_effective_profile_id not in v1_dependencies
+        assert get_effective_profile_id not in v1beta_dependencies
+
+
+class TestDEF023_ConfigImportReferenceValidation:
+    def test_validate_import_accepts_v7_logical_refs(self):
+        from app.routers.config import _validate_import
+        from app.schemas.schemas import ConfigImportRequest
+
+        data = ConfigImportRequest.model_validate(
+            {
+                "version": 7,
+                "providers": [{"name": "OpenAI", "provider_type": "openai"}],
+                "endpoints": [
+                    {
+                        "endpoint_ref": "endpoint:openai-main",
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4o",
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "connection_ref": "connection:gpt-4o:openai-main:0:primary:0",
+                                "endpoint_ref": "endpoint:openai-main",
+                            }
+                        ],
+                    }
+                ],
+                "user_settings": {
+                    "endpoint_fx_mappings": [
+                        {
+                            "model_id": "gpt-4o",
+                            "endpoint_ref": "endpoint:openai-main",
+                            "fx_rate": "1",
+                        }
+                    ]
+                },
+            }
+        )
+
+        _validate_import(data)
+
+    def test_validate_import_rejects_duplicate_logical_connection_refs(self):
+        from app.routers.config import _validate_import
+        from app.schemas.schemas import ConfigImportRequest
+
+        data = ConfigImportRequest.model_validate(
+            {
+                "version": 7,
+                "providers": [{"name": "OpenAI", "provider_type": "openai"}],
+                "endpoints": [
+                    {
+                        "endpoint_ref": "endpoint:openai-main",
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4o",
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "connection_ref": "connection:dup",
+                                "endpoint_ref": "endpoint:openai-main",
+                            }
+                        ],
+                    },
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4.1",
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "connection_ref": "connection:dup",
+                                "endpoint_ref": "endpoint:openai-main",
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_import(data)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Duplicate connection reference: 'connection:dup'"
+
+
+class TestDEF024_ConfigImportExportRefRemap:
+    @pytest.mark.asyncio
+    async def test_import_v6_remaps_source_ids_and_exports_v7_refs(self):
+        from sqlalchemy import select
+        from app.core.database import AsyncSessionLocal, engine
+        from app.models.models import Connection, Endpoint, EndpointFxRateSetting
+        from app.routers.config import export_config, import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        # Prevent cross-loop pooled asyncpg connections from previous tests.
+        await engine.dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        endpoint_name = f"def024-endpoint-{suffix}"
+        model_id = f"def024-model-{suffix}"
+        connection_name = f"def024-connection-{suffix}"
+        source_endpoint_id = 900001
+        source_connection_id = 900002
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 6,
+                "providers": [
+                    {
+                        "name": "OpenAI",
+                        "provider_type": "openai",
+                    }
+                ],
+                "endpoints": [
+                    {
+                        "endpoint_id": source_endpoint_id,
+                        "name": endpoint_name,
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": model_id,
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "connection_id": source_connection_id,
+                                "endpoint_id": source_endpoint_id,
+                                "name": connection_name,
+                            }
+                        ],
+                    }
+                ],
+                "user_settings": {
+                    "report_currency_code": "USD",
+                    "report_currency_symbol": "$",
+                    "endpoint_fx_mappings": [
+                        {
+                            "model_id": model_id,
+                            "endpoint_id": source_endpoint_id,
+                            "fx_rate": "1.25",
+                        }
+                    ],
+                },
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            response = await import_config(data=payload, db=db, profile_id=1)
+            await db.commit()
+            assert response.endpoints_imported == 1
+            assert response.connections_imported == 1
+
+        async with AsyncSessionLocal() as db:
+            endpoint = (
+                await db.execute(
+                    select(Endpoint).where(
+                        Endpoint.profile_id == 1,
+                        Endpoint.name == endpoint_name,
+                    )
+                )
+            ).scalar_one()
+            connection = (
+                await db.execute(
+                    select(Connection).where(
+                        Connection.profile_id == 1,
+                        Connection.name == connection_name,
+                    )
+                )
+            ).scalar_one()
+            fx_row = (
+                await db.execute(
+                    select(EndpointFxRateSetting).where(
+                        EndpointFxRateSetting.profile_id == 1,
+                        EndpointFxRateSetting.model_id == model_id,
+                        EndpointFxRateSetting.endpoint_id == endpoint.id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+            assert endpoint.id != source_endpoint_id
+            assert connection.id != source_connection_id
+            assert connection.endpoint_id == endpoint.id
+            assert fx_row is not None
+
+            export_response = await export_config(db=db, profile_id=1)
+            exported = json.loads(export_response.body)
+
+        assert exported["version"] == 7
+        exported_endpoint = next(
+            e for e in exported["endpoints"] if e["name"] == endpoint_name
+        )
+        assert exported_endpoint["endpoint_ref"] == f"endpoint:{endpoint_name}"
+        assert exported_endpoint["endpoint_id"] is None
+
+        exported_model = next(
+            m for m in exported["models"] if m["model_id"] == model_id
+        )
+        exported_connection = next(
+            c for c in exported_model["connections"] if c["name"] == connection_name
+        )
+        assert exported_connection["endpoint_ref"] == f"endpoint:{endpoint_name}"
+        assert exported_connection["connection_id"] is None
+        assert exported_connection["connection_ref"].startswith("connection:")
+
+        exported_mapping = next(
+            m
+            for m in exported["user_settings"]["endpoint_fx_mappings"]
+            if m["model_id"] == model_id
+        )
+        assert exported_mapping["endpoint_ref"] == f"endpoint:{endpoint_name}"
+        assert exported_mapping["endpoint_id"] is None
+
+
+class TestDEF025_ModelHealthStatsProfileScope:
+    @pytest.mark.asyncio
+    async def test_list_models_passes_profile_id_to_health_stats(self):
+        from app.routers.models import list_models
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "app.routers.models.get_model_health_stats",
+            AsyncMock(return_value={}),
+        ) as health_mock:
+            response = await list_models(db=mock_db, profile_id=7)
+
+        assert response == []
+        health_mock.assert_awaited_once_with(mock_db, profile_id=7)
+
+    @pytest.mark.asyncio
+    async def test_get_models_by_endpoint_passes_profile_id_to_health_stats(self):
+        from app.routers.models import get_models_by_endpoint
+
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        with patch(
+            "app.routers.models.get_model_health_stats",
+            AsyncMock(return_value={}),
+        ) as health_mock:
+            response = await get_models_by_endpoint(
+                endpoint_id=123,
+                db=mock_db,
+                profile_id=9,
+            )
+
+        assert response == []
+        health_mock.assert_awaited_once_with(mock_db, profile_id=9)

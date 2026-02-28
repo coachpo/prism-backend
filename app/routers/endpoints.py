@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint
 from app.schemas.schemas import (
     ConnectionDropdownResponse,
@@ -22,10 +22,11 @@ router = APIRouter(tags=["endpoints"])
 async def _ensure_unique_endpoint_name(
     db: AsyncSession,
     *,
+    profile_id: int,
     endpoint_name: str,
     exclude_id: int | None = None,
 ) -> None:
-    query = select(Endpoint).where(Endpoint.name == endpoint_name)
+    query = select(Endpoint).where(Endpoint.profile_id == profile_id, Endpoint.name == endpoint_name)
     if exclude_id is not None:
         query = query.where(Endpoint.id != exclude_id)
     existing = (await db.execute(query)).scalar_one_or_none()
@@ -37,8 +38,11 @@ async def _ensure_unique_endpoint_name(
 
 
 @router.get("/api/endpoints", response_model=list[EndpointResponse])
-async def list_endpoints(db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Endpoint).order_by(Endpoint.id.asc()))
+async def list_endpoints(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    result = await db.execute(select(Endpoint).where(Endpoint.profile_id == profile_id).order_by(Endpoint.id.asc()))
     return result.scalars().all()
 
 
@@ -46,6 +50,7 @@ async def list_endpoints(db: Annotated[AsyncSession, Depends(get_db)]):
 async def create_endpoint(
     body: EndpointCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     endpoint_name = body.name.strip()
     if not endpoint_name:
@@ -56,9 +61,10 @@ async def create_endpoint(
     if url_warnings:
         raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
-    await _ensure_unique_endpoint_name(db, endpoint_name=endpoint_name)
+    await _ensure_unique_endpoint_name(db, profile_id=profile_id, endpoint_name=endpoint_name)
 
     endpoint = Endpoint(
+        profile_id=profile_id,
         name=endpoint_name,
         base_url=normalized_url,
         api_key=body.api_key,
@@ -71,8 +77,11 @@ async def create_endpoint(
 
 
 @router.get("/api/endpoints/connections", response_model=ConnectionDropdownResponse)
-async def list_all_connections(db: Annotated[AsyncSession, Depends(get_db)]):
-    result = await db.execute(select(Connection).order_by(Connection.id.asc()))
+async def list_all_connections(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    result = await db.execute(select(Connection).where(Connection.profile_id == profile_id).order_by(Connection.id.asc()))
     connections = result.scalars().all()
     return ConnectionDropdownResponse(items=connections)
 
@@ -81,8 +90,15 @@ async def update_endpoint(
     endpoint_id: int,
     body: EndpointUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    endpoint = await db.get(Endpoint, endpoint_id)
+    endpoint_result = await db.execute(
+        select(Endpoint).where(
+            Endpoint.id == endpoint_id,
+            Endpoint.profile_id == profile_id,
+        )
+    )
+    endpoint = endpoint_result.scalar_one_or_none()
     if endpoint is None:
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
@@ -94,6 +110,7 @@ async def update_endpoint(
             raise HTTPException(status_code=422, detail="name must not be empty")
         await _ensure_unique_endpoint_name(
             db,
+            profile_id=profile_id,
             endpoint_name=endpoint_name,
             exclude_id=endpoint_id,
         )
@@ -118,8 +135,15 @@ async def update_endpoint(
 async def delete_endpoint(
     endpoint_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    endpoint = await db.get(Endpoint, endpoint_id)
+    endpoint_result = await db.execute(
+        select(Endpoint).where(
+            Endpoint.id == endpoint_id,
+            Endpoint.profile_id == profile_id,
+        )
+    )
+    endpoint = endpoint_result.scalar_one_or_none()
     if endpoint is None:
         raise HTTPException(status_code=404, detail="Endpoint not found")
 
@@ -128,7 +152,10 @@ async def delete_endpoint(
             await db.execute(
                 select(Connection)
                 .options(selectinload(Connection.model_config_rel))
-                .where(Connection.endpoint_id == endpoint_id)
+                .where(
+                    Connection.endpoint_id == endpoint_id,
+                    Connection.profile_id == profile_id,
+                )
                 .order_by(Connection.id.asc())
             )
         )

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.dependencies import get_db
+from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import RequestLog
 from app.schemas.schemas import (
     RequestLogListResponse,
@@ -28,6 +28,7 @@ router = APIRouter(prefix="/api/stats", tags=["statistics"])
 @router.get("/requests", response_model=RequestLogListResponse)
 async def list_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -42,6 +43,7 @@ async def list_request_logs(
     items, total = await get_request_logs(
         db,
         model_id=model_id,
+        profile_id=profile_id,
         provider_type=provider_type,
         status_code=status_code,
         success=success,
@@ -66,6 +68,7 @@ async def list_request_logs(
 @router.get("/summary", response_model=StatsSummaryResponse)
 async def stats_summary(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     group_by: str | None = None,
@@ -77,6 +80,7 @@ async def stats_summary(
     result = await get_stats_summary(
         db,
         from_time=from_time,
+        profile_id=profile_id,
         to_time=to_time,
         group_by=group_by,
         model_id=model_id,
@@ -92,15 +96,22 @@ async def stats_summary(
 )
 async def connection_success_rates(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ):
-    return await get_connection_success_rates(db, from_time=from_time, to_time=to_time)
+    return await get_connection_success_rates(
+        db,
+        profile_id=profile_id,
+        from_time=from_time,
+        to_time=to_time,
+    )
 
 
 @router.get("/spending", response_model=SpendingReportResponse)
 async def spending_report(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     preset: str | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -120,6 +131,7 @@ async def spending_report(
         db,
         preset=preset,
         from_time=from_time,
+        profile_id=profile_id,
         to_time=to_time,
         provider_type=provider_type,
         model_id=model_id,
@@ -135,6 +147,7 @@ async def spending_report(
 @router.delete("/requests", response_model=BatchDeleteResponse)
 async def delete_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
 ):
@@ -150,7 +163,7 @@ async def delete_request_logs(
         )
 
     if delete_all:
-        stmt = delete(RequestLog)
+        stmt = delete(RequestLog).where(RequestLog.profile_id == profile_id)
     else:
         if older_than_days is None:
             raise HTTPException(
@@ -159,7 +172,10 @@ async def delete_request_logs(
             )
         days = int(older_than_days)
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
-        stmt = delete(RequestLog).where(RequestLog.created_at < cutoff)
+        stmt = delete(RequestLog).where(
+            RequestLog.profile_id == profile_id,
+            RequestLog.created_at < cutoff,
+        )
 
     result = await db.execute(stmt)
     await db.flush()

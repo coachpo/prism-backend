@@ -50,6 +50,7 @@ def _truncate_body(body: str | None) -> str | None:
 async def record_audit_log(
     *,
     request_log_id: int | None,
+    profile_id: int = 1,
     provider_id: int,
     model_id: str,
     request_method: str,
@@ -89,6 +90,7 @@ async def record_audit_log(
 
         entry = AuditLog(
             request_log_id=request_log_id,
+            profile_id=profile_id,
             provider_id=provider_id,
             model_id=model_id,
             endpoint_id=endpoint_id,

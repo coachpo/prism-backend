@@ -3,6 +3,7 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -10,10 +11,56 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
-)
+    text,
+ )
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.core.database import Base
+
+
+class Profile(Base):
+    __tablename__ = "profiles"
+    __table_args__ = (
+        Index(
+            "uq_profiles_single_active",
+            "is_active",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        Index("idx_profiles_deleted_at", "deleted_at"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    model_configs: Mapped[list["ModelConfig"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    endpoints: Mapped[list["Endpoint"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    connections: Mapped[list["Connection"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    user_settings: Mapped[list["UserSetting"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    endpoint_fx_rate_settings: Mapped[list["EndpointFxRateSetting"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="profile")
+    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="profile")
+    header_blocklist_rules: Mapped[list["HeaderBlocklistRule"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
 
 
 class Provider(Base):
@@ -41,10 +88,26 @@ class Provider(Base):
 
 class ModelConfig(Base):
     __tablename__ = "model_configs"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "model_id",
+            name="uq_model_configs_profile_model_id",
+        ),
+        Index(
+            "idx_model_configs_profile_model_enabled",
+            "profile_id",
+            "model_id",
+            "is_enabled",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+    )
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), nullable=False)
-    model_id: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model_type: Mapped[str] = mapped_column(
         String(20), default="native", nullable=False
@@ -67,6 +130,7 @@ class ModelConfig(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="model_configs")
     provider: Mapped["Provider"] = relationship(back_populates="model_configs")
     connections: Mapped[list["Connection"]] = relationship(
         back_populates="model_config_rel", cascade="all, delete-orphan"
@@ -75,9 +139,15 @@ class ModelConfig(Base):
 
 class Endpoint(Base):
     __tablename__ = "endpoints"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_endpoints_profile_name"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     api_key: Mapped[str] = mapped_column(String(500), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -85,6 +155,7 @@ class Endpoint(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="endpoints")
     connections: Mapped[list["Connection"]] = relationship(
         back_populates="endpoint_rel"
     )
@@ -97,9 +168,20 @@ class Connection(Base):
         Index("idx_connections_endpoint_id", "endpoint_id"),
         Index("idx_connections_is_active", "is_active"),
         Index("idx_connections_priority", "priority"),
+        Index("idx_connections_profile_id", "profile_id"),
+        Index(
+            "idx_connections_profile_model_active_priority",
+            "profile_id",
+            "model_config_id",
+            "is_active",
+            "priority",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+    )
     model_config_id: Mapped[int] = mapped_column(
         ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False
     )
@@ -144,6 +226,7 @@ class Connection(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="connections")
     model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="connections")
     endpoint_rel: Mapped["Endpoint"] = relationship(back_populates="connections")
 
@@ -162,8 +245,16 @@ class Connection(Base):
 
 class RequestLog(Base):
     __tablename__ = "request_logs"
+    __table_args__ = (
+        Index("idx_request_logs_billable_flag", "billable_flag"),
+        Index("idx_request_logs_priced_flag", "priced_flag"),
+        Index("idx_request_logs_profile_created_at", "profile_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True, default=1
+    )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -235,11 +326,19 @@ class RequestLog(Base):
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="request_logs")
+
 
 class UserSetting(Base):
     __tablename__ = "user_settings"
+    __table_args__ = (
+        UniqueConstraint("profile_id", name="uq_user_settings_profile_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+    )
     report_currency_code: Mapped[str] = mapped_column(
         String(3), default="USD", nullable=False
     )
@@ -252,15 +351,31 @@ class UserSetting(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="user_settings")
+
 
 class EndpointFxRateSetting(Base):
     __tablename__ = "endpoint_fx_rate_settings"
     __table_args__ = (
-        UniqueConstraint("model_id", "endpoint_id", name="uq_fx_model_endpoint"),
+        UniqueConstraint(
+            "profile_id",
+            "model_id",
+            "endpoint_id",
+            name="uq_fx_profile_model_endpoint",
+        ),
         Index("idx_fx_endpoint_id", "endpoint_id"),
+        Index(
+            "idx_fx_profile_model_endpoint",
+            "profile_id",
+            "model_id",
+            "endpoint_id",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+    )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     endpoint_id: Mapped[int] = mapped_column(
         ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
@@ -271,15 +386,36 @@ class EndpointFxRateSetting(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile"] = relationship(back_populates="endpoint_fx_rate_settings")
+
 
 class HeaderBlocklistRule(Base):
     __tablename__ = "header_blocklist_rules"
     __table_args__ = (
-        UniqueConstraint("match_type", "pattern", name="uq_match_type_pattern"),
+        UniqueConstraint(
+            "profile_id",
+            "match_type",
+            "pattern",
+            name="uq_hbr_profile_match_pattern",
+        ),
+        Index(
+            "uq_hbr_system_match_pattern",
+            "match_type",
+            "pattern",
+            unique=True,
+            postgresql_where=text("is_system = true"),
+        ),
         Index("idx_hbr_enabled", "enabled"),
+        CheckConstraint(
+            "((is_system = true AND profile_id IS NULL) OR (is_system = false AND profile_id IS NOT NULL))",
+            name="ck_hbr_profile_scope",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int | None] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=True, index=True
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     match_type: Mapped[str] = mapped_column(
         String(20), nullable=False
@@ -294,11 +430,20 @@ class HeaderBlocklistRule(Base):
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
 
+    profile: Mapped["Profile | None"] = relationship(back_populates="header_blocklist_rules")
+
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("idx_audit_logs_connection_id", "connection_id"),
+        Index("idx_audit_logs_profile_created_at", "profile_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True, default=1
+    )
     request_log_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("request_logs.id", ondelete="SET NULL"),
@@ -328,3 +473,5 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, nullable=False, index=True
     )
+
+    profile: Mapped["Profile"] = relationship(back_populates="audit_logs")

@@ -85,12 +85,12 @@ def _parse_non_negative(value: str | Decimal | int | float | None) -> Decimal:
 
 async def load_costing_settings(
     db: AsyncSession,
-    *,
+    profile_id: int,
     model_id: str,
     endpoint_ids: list[int],
 ) -> CostingSettingsSnapshot:
     settings_row = (
-        await db.execute(select(UserSetting).order_by(UserSetting.id.asc()).limit(1))
+        await db.execute(select(UserSetting).where(UserSetting.profile_id == profile_id).order_by(UserSetting.id.asc()).limit(1))
     ).scalar_one_or_none()
 
     if settings_row is None:
@@ -106,6 +106,7 @@ async def load_costing_settings(
             (
                 await db.execute(
                     select(EndpointFxRateSetting).where(
+                        EndpointFxRateSetting.profile_id == profile_id,
                         EndpointFxRateSetting.model_id == model_id,
                         EndpointFxRateSetting.endpoint_id.in_(endpoint_ids),
                     )
