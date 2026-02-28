@@ -505,7 +505,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=5,
+            version=6,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -573,7 +573,6 @@ class TestDEF008_CacheCreationPricing:
     @staticmethod
     def _build_connection(
         *,
-        pricing_unit: str,
         input_price: str,
         output_price: str,
         cached_input_price: str,
@@ -593,7 +592,6 @@ class TestDEF008_CacheCreationPricing:
             model_config_id=1,
             endpoint_id=1,
             pricing_enabled=True,
-            pricing_unit=pricing_unit,
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -711,7 +709,6 @@ class TestDEF008_CacheCreationPricing:
         )
 
         connection, endpoint = self._build_connection(
-            pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
             cached_input_price="1",
@@ -749,7 +746,6 @@ class TestDEF008_CacheCreationPricing:
         )
 
         connection, endpoint = self._build_connection(
-            pricing_unit="PER_1K",
             input_price="0",
             output_price="0",
             cached_input_price="0",
@@ -893,7 +889,7 @@ class TestFailoverRecoveryFieldValidation:
         assert exported["failover_recovery_cooldown_seconds"] == 300
 
     def test_config_import_rejects_version_1(self):
-        """ConfigImportRequest rejects version != 5."""
+        """ConfigImportRequest rejects version != 6."""
         from app.schemas.schemas import ConfigImportRequest
         from pydantic import ValidationError
 
@@ -906,7 +902,7 @@ class TestFailoverRecoveryFieldValidation:
                     "models": [],
                 }
             )
-        assert "Input should be 5" in str(exc_info.value)
+        assert "Input should be 6" in str(exc_info.value)
 
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
@@ -916,7 +912,7 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 5,
+                    "version": 6,
                     "providers": [],
                     "endpoints": [
                         {
@@ -944,8 +940,57 @@ class TestFailoverRecoveryFieldValidation:
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
 
-    def test_config_version_5_roundtrip(self):
-        """Config export/import roundtrip with version 5 and recovery fields."""
+    def test_config_import_rejects_duplicate_connection_id(self):
+        """Config import validation rejects duplicate connection IDs."""
+        from app.routers.config import _validate_import
+        from app.schemas.schemas import ConfigImportRequest
+
+        data = ConfigImportRequest.model_validate(
+            {
+                "version": 6,
+                "providers": [
+                    {
+                        "name": "OpenAI",
+                        "provider_type": "openai",
+                    }
+                ],
+                "endpoints": [
+                    {
+                        "endpoint_id": 1,
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4o",
+                        "model_type": "native",
+                        "connections": [
+                            {"connection_id": 7, "endpoint_id": 1}
+                        ],
+                    },
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4.1",
+                        "model_type": "native",
+                        "connections": [
+                            {"connection_id": 7, "endpoint_id": 1}
+                        ],
+                    },
+                ],
+            }
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_import(data)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Duplicate connection_id: 7"
+
+    def test_config_version_6_roundtrip(self):
+        """Config export/import roundtrip with version 6 and recovery fields."""
         from app.schemas.schemas import (
             ConfigConnectionExport,
             ConfigExportResponse,
@@ -957,7 +1002,7 @@ class TestFailoverRecoveryFieldValidation:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=5,
+            version=6,
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -999,7 +1044,7 @@ class TestFailoverRecoveryFieldValidation:
         exported = config.model_dump(mode="json")
         reimported = ConfigImportRequest(**exported)
 
-        assert reimported.version == 5
+        assert reimported.version == 6
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.lb_strategy == "failover"
@@ -1398,7 +1443,7 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=5,
+            version=6,
             exported_at=datetime.now(timezone.utc),
             providers=[],
             endpoints=[],
@@ -2019,7 +2064,6 @@ class TestDEF016_MapToOutputFallback:
     @staticmethod
     def _build_connection(
         *,
-        pricing_unit: str,
         input_price: str,
         output_price: str,
         cached_input_price: str | None,
@@ -2039,7 +2083,6 @@ class TestDEF016_MapToOutputFallback:
             model_config_id=1,
             endpoint_id=1,
             pricing_enabled=True,
-            pricing_unit=pricing_unit,
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -2060,7 +2103,6 @@ class TestDEF016_MapToOutputFallback:
         )
 
         connection, endpoint = self._build_connection(
-            pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
             cached_input_price=None,
@@ -2102,7 +2144,6 @@ class TestDEF017_ZeroCostFallback:
     @staticmethod
     def _build_connection(
         *,
-        pricing_unit: str,
         input_price: str,
         output_price: str,
         cached_input_price: str | None,
@@ -2122,7 +2163,6 @@ class TestDEF017_ZeroCostFallback:
             model_config_id=1,
             endpoint_id=1,
             pricing_enabled=True,
-            pricing_unit=pricing_unit,
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -2143,7 +2183,6 @@ class TestDEF017_ZeroCostFallback:
         )
 
         connection, endpoint = self._build_connection(
-            pricing_unit="PER_1M",
             input_price="2",
             output_price="4",
             cached_input_price=None,
@@ -2431,6 +2470,7 @@ class TestDEF021_StreamingCancellationResilience:
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
 
+
     @pytest.mark.asyncio
     async def test_stream_generator_close_triggers_detached_finalize_without_error(
         self, caplog
@@ -2529,3 +2569,188 @@ class TestDEF021_StreamingCancellationResilience:
             audit_mock.assert_awaited_once()
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
+
+class TestDEF022_PricingUnitMigration:
+    """DEF-022 (P0): dropping pricing_unit must preserve PER_1K economics."""
+
+    @pytest.mark.asyncio
+    async def test_drop_pricing_unit_converts_per_1k_prices_and_recreates_indexes(self):
+        from sqlalchemy import text
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        from app.main import _drop_connections_pricing_unit_if_needed
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("CREATE TABLE model_configs (id INTEGER PRIMARY KEY)"))
+                await conn.execute(text("CREATE TABLE endpoints (id INTEGER PRIMARY KEY)"))
+                await conn.execute(text("INSERT INTO model_configs (id) VALUES (1), (2)"))
+                await conn.execute(text("INSERT INTO endpoints (id) VALUES (1), (2)"))
+                await conn.execute(
+                    text(
+                        """
+                        CREATE TABLE connections (
+                            id INTEGER PRIMARY KEY,
+                            model_config_id INTEGER NOT NULL,
+                            endpoint_id INTEGER,
+                            is_active BOOLEAN,
+                            priority INTEGER,
+                            description TEXT,
+                            auth_type VARCHAR(50),
+                            custom_headers TEXT,
+                            health_status VARCHAR(20),
+                            health_detail TEXT,
+                            last_health_check DATETIME,
+                            pricing_enabled BOOLEAN,
+                            pricing_unit VARCHAR(10),
+                            pricing_currency_code VARCHAR(3),
+                            input_price VARCHAR(20),
+                            output_price VARCHAR(20),
+                            cached_input_price VARCHAR(20),
+                            cache_creation_price VARCHAR(20),
+                            reasoning_price VARCHAR(20),
+                            missing_special_token_price_policy VARCHAR(20),
+                            pricing_config_version INTEGER,
+                            forward_stream_options BOOLEAN,
+                            created_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+                await conn.execute(
+                    text(
+                        """
+                        INSERT INTO connections (
+                            id,
+                            model_config_id,
+                            endpoint_id,
+                            is_active,
+                            priority,
+                            description,
+                            pricing_enabled,
+                            pricing_unit,
+                            pricing_currency_code,
+                            input_price,
+                            output_price,
+                            cached_input_price,
+                            cache_creation_price,
+                            reasoning_price,
+                            missing_special_token_price_policy,
+                            pricing_config_version,
+                            forward_stream_options
+                        ) VALUES (
+                            :id,
+                            :model_config_id,
+                            :endpoint_id,
+                            :is_active,
+                            :priority,
+                            :description,
+                            :pricing_enabled,
+                            :pricing_unit,
+                            :pricing_currency_code,
+                            :input_price,
+                            :output_price,
+                            :cached_input_price,
+                            :cache_creation_price,
+                            :reasoning_price,
+                            :missing_special_token_price_policy,
+                            :pricing_config_version,
+                            :forward_stream_options
+                        )
+                        """
+                    ),
+                    [
+                        {
+                            "id": 1,
+                            "model_config_id": 1,
+                            "endpoint_id": 1,
+                            "is_active": 1,
+                            "priority": 0,
+                            "description": "legacy-per-1k",
+                            "pricing_enabled": 1,
+                            "pricing_unit": "PER_1K",
+                            "pricing_currency_code": "USD",
+                            "input_price": "2.5",
+                            "output_price": "10",
+                            "cached_input_price": "1.25",
+                            "cache_creation_price": "5",
+                            "reasoning_price": "20",
+                            "missing_special_token_price_policy": "MAP_TO_OUTPUT",
+                            "pricing_config_version": 3,
+                            "forward_stream_options": 0,
+                        },
+                        {
+                            "id": 2,
+                            "model_config_id": 2,
+                            "endpoint_id": 2,
+                            "is_active": 1,
+                            "priority": 1,
+                            "description": "already-per-1m",
+                            "pricing_enabled": 1,
+                            "pricing_unit": "PER_1M",
+                            "pricing_currency_code": "USD",
+                            "input_price": "1.5",
+                            "output_price": "6",
+                            "cached_input_price": "0.75",
+                            "cache_creation_price": "3",
+                            "reasoning_price": "12",
+                            "missing_special_token_price_policy": "ZERO_COST",
+                            "pricing_config_version": 4,
+                            "forward_stream_options": 1,
+                        },
+                    ],
+                )
+
+                await _drop_connections_pricing_unit_if_needed(conn)
+
+                columns = (
+                    await conn.execute(text("PRAGMA table_info(connections)"))
+                ).fetchall()
+                column_names = {row[1] for row in columns}
+                assert "pricing_unit" not in column_names
+
+                rows = (
+                    await conn.execute(
+                        text(
+                            """
+                            SELECT
+                                id,
+                                input_price,
+                                output_price,
+                                cached_input_price,
+                                cache_creation_price,
+                                reasoning_price
+                            FROM connections
+                            ORDER BY id
+                            """
+                        )
+                    )
+                ).mappings().all()
+
+                assert rows[0]["input_price"] == "2500"
+                assert rows[0]["output_price"] == "10000"
+                assert rows[0]["cached_input_price"] == "1250"
+                assert rows[0]["cache_creation_price"] == "5000"
+                assert rows[0]["reasoning_price"] == "20000"
+
+                assert rows[1]["input_price"] == "1.5"
+                assert rows[1]["output_price"] == "6"
+                assert rows[1]["cached_input_price"] == "0.75"
+                assert rows[1]["cache_creation_price"] == "3"
+                assert rows[1]["reasoning_price"] == "12"
+
+                index_rows = (
+                    await conn.execute(text("PRAGMA index_list(connections)"))
+                ).fetchall()
+                index_names = {row[1] for row in index_rows}
+                assert {
+                    "idx_connections_model_config_id",
+                    "idx_connections_endpoint_id",
+                    "idx_connections_is_active",
+                    "idx_connections_priority",
+                }.issubset(index_names)
+        finally:
+            await engine.dispose()
+

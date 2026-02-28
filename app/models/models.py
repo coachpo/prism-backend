@@ -124,7 +124,6 @@ class Connection(Base):
     pricing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
-    pricing_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)
     pricing_currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
     input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
     output_price: Mapped[str | None] = mapped_column(String(20), nullable=True)

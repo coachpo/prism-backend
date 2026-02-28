@@ -90,7 +90,6 @@ class ConnectionBase(BaseModel):
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
     pricing_enabled: bool = False
-    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
     pricing_currency_code: str | None = None
     input_price: str | None = None
     output_price: str | None = None
@@ -151,10 +150,6 @@ class ConnectionBase(BaseModel):
                 raise ValueError(
                     "pricing_currency_code is required when pricing_enabled is true"
                 )
-            if not self.pricing_unit:
-                raise ValueError(
-                    "pricing_unit is required when pricing_enabled is true"
-                )
         return self
 
 class ConnectionCreate(ConnectionBase):
@@ -182,7 +177,6 @@ class ConnectionUpdate(BaseModel):
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
     pricing_enabled: bool | None = None
-    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
     pricing_currency_code: str | None = None
     input_price: str | None = None
     output_price: str | None = None
@@ -246,8 +240,6 @@ class ConnectionUpdate(BaseModel):
             raise ValueError(
                 "pricing_currency_code is required when pricing_enabled is true"
             )
-        if self.pricing_enabled is True and not self.pricing_unit:
-            raise ValueError("pricing_unit is required when pricing_enabled is true")
         return self
 
 class ConnectionResponse(BaseModel):
@@ -264,7 +256,6 @@ class ConnectionResponse(BaseModel):
     auth_type: str | None
     custom_headers: dict[str, str] | None
     pricing_enabled: bool
-    pricing_unit: Literal["PER_1K", "PER_1M"] | None
     pricing_currency_code: str | None
     input_price: str | None
     output_price: str | None
@@ -627,7 +618,6 @@ class ConfigConnectionExport(BaseModel):
     auth_type: str | None = None
     custom_headers: dict[str, str] | None = None
     pricing_enabled: bool = False
-    pricing_unit: Literal["PER_1K", "PER_1M"] | None = None
     pricing_currency_code: str | None = None
     input_price: str | None = None
     output_price: str | None = None
@@ -690,7 +680,7 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[5] = 5
+    version: Literal[6] = 6
     exported_at: datetime
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
@@ -700,7 +690,7 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[5]
+    version: Literal[6]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]

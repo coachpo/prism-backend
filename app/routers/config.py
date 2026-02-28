@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Annotated, Literal, cast
+from typing import Annotated
 import json
 import logging
 
@@ -111,23 +111,16 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
                     if connection.custom_headers is not None
                     else None,
                     pricing_enabled=connection.pricing_enabled,
-                    pricing_unit=cast(
-                        Literal["PER_1K", "PER_1M"] | None,
-                        connection.pricing_unit
-                        if connection.pricing_unit in ("PER_1K", "PER_1M")
-                        else None,
-                    ),
                     pricing_currency_code=connection.pricing_currency_code,
                     input_price=connection.input_price,
                     output_price=connection.output_price,
                     cached_input_price=connection.cached_input_price,
                     cache_creation_price=connection.cache_creation_price,
                     reasoning_price=connection.reasoning_price,
-                    missing_special_token_price_policy=cast(
-                        Literal["MAP_TO_OUTPUT", "ZERO_COST"],
+                    missing_special_token_price_policy=(
                         "ZERO_COST"
                         if connection.missing_special_token_price_policy == "ZERO_COST"
-                        else "MAP_TO_OUTPUT",
+                        else "MAP_TO_OUTPUT"
                     ),
                     pricing_config_version=connection.pricing_config_version,
                     forward_stream_options=connection.forward_stream_options,
@@ -158,7 +151,7 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
     )
 
     data = ConfigExportResponse(
-        version=5,
+        version=6,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         endpoints=exported_endpoints,
@@ -214,10 +207,10 @@ async def export_config(db: Annotated[AsyncSession, Depends(get_db)]):
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version != 5:
+    if data.version != 6:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 5",
+            detail=f"Unsupported config version: {data.version}. Expected: 6",
         )
 
     if not data.providers:
@@ -245,7 +238,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
         if endpoint.endpoint_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="Each endpoint in config version 5 must include endpoint_id",
+                detail="Each endpoint in config version 6 must include endpoint_id",
             )
         if endpoint.endpoint_id in endpoint_ids_in_file:
             raise HTTPException(
@@ -314,7 +307,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "Each connection in config version 5 must include connection_id "
+                        "Each connection in config version 6 must include connection_id "
                         f"(model '{model.model_id}')"
                     ),
                 )
@@ -336,24 +329,14 @@ def _validate_import(data: ConfigImportRequest) -> None:
 
             connection_pairs.add((model.model_id, connection.endpoint_id))
 
-            if connection.pricing_enabled:
-                if connection.pricing_unit is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Connection for model '{model.model_id}' has pricing_enabled=true "
-                            "but pricing_unit is missing"
-                        ),
-                    )
-                if connection.pricing_currency_code is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Connection for model '{model.model_id}' has pricing_enabled=true "
-                            "but pricing_currency_code is missing"
-                        ),
-                    )
-
+            if connection.pricing_enabled and connection.pricing_currency_code is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Connection for model '{model.model_id}' has pricing_enabled=true "
+                        "but pricing_currency_code is missing"
+                    ),
+                )
     for model in data.models:
         if model.model_type == "proxy":
             if not model.redirect_to or model.redirect_to not in native_models:
@@ -437,7 +420,7 @@ async def import_config(
         if endpoint_data.endpoint_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="Each endpoint in config version 5 must include endpoint_id",
+                detail="Each endpoint in config version 6 must include endpoint_id",
             )
 
         normalized_url = normalize_base_url(endpoint_data.base_url)
@@ -497,7 +480,6 @@ async def import_config(
                 if connection_data.custom_headers is not None
                 else None,
                 pricing_enabled=connection_data.pricing_enabled,
-                pricing_unit=connection_data.pricing_unit,
                 pricing_currency_code=connection_data.pricing_currency_code,
                 input_price=connection_data.input_price,
                 output_price=connection_data.output_price,

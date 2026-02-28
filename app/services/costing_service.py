@@ -11,10 +11,6 @@ from app.models.models import Connection, Endpoint, EndpointFxRateSetting, UserS
 
 SIX_DP = Decimal("0.000001")
 MICRO_FACTOR = Decimal("1000000")
-UNIT_FACTORS: dict[str, Decimal] = {
-    "PER_1K": Decimal("1000"),
-    "PER_1M": Decimal("1000000"),
-}
 
 
 @dataclass
@@ -216,10 +212,6 @@ def compute_cost_fields(
         result["unpriced_reason"] = "PRICING_DISABLED"
         return result
 
-    if not connection.pricing_unit or connection.pricing_unit not in UNIT_FACTORS:
-        result["unpriced_reason"] = "MISSING_PRICE_DATA"
-        return result
-
     if not connection.pricing_currency_code:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
@@ -283,7 +275,7 @@ def compute_cost_fields(
     else:  # ZERO_COST
         reasoning_price = Decimal("0")
 
-    factor = UNIT_FACTORS[connection.pricing_unit]
+    factor = Decimal("1000000")
     input_cost = (Decimal(input_count) / factor) * input_price
     output_cost = (Decimal(output_count) / factor) * output_price
     cached_cost = (Decimal(cached_cost_count) / factor) * cached_price
@@ -312,7 +304,7 @@ def compute_cost_fields(
             "total_cost_original_micros": decimal_to_micros(total_original),
             "total_cost_user_currency_micros": decimal_to_micros(total_user_currency),
             "currency_code_original": connection.pricing_currency_code,
-            "pricing_snapshot_unit": connection.pricing_unit,
+            "pricing_snapshot_unit": "PER_1M",
             "pricing_snapshot_input": _normalize_decimal_string(input_price),
             "pricing_snapshot_output": _normalize_decimal_string(output_price),
             "pricing_snapshot_cache_read_input": _normalize_decimal_string(
