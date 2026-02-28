@@ -1,28 +1,16 @@
-from sqlalchemy.ext.asyncio import (
-    create_async_engine,
-    async_sessionmaker,
-    AsyncSession,
-)
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import StaticPool
 
-from app.core.config import settings
+from app.core.config import settings, ensure_postgresql_database_url
 
+ensure_postgresql_database_url(settings.database_url)
 
-def _make_engine():
-    _is_sqlite = settings.database_url.startswith("sqlite")
-    return create_async_engine(
-        settings.database_url,
-        echo=False,
-        **(
-            {"poolclass": StaticPool}
-            if _is_sqlite
-            else {"pool_pre_ping": True, "pool_recycle": 300}
-        ),
-    )
-
-
-engine = _make_engine()
+engine = create_async_engine(
+    settings.database_url,
+    echo=False,
+    pool_pre_ping=True,
+    pool_recycle=300,
+)
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

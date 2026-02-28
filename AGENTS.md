@@ -2,7 +2,7 @@
 
 ## OVERVIEW
 
-FastAPI async API server — proxy engine for LLM requests with SQLite persistence, failover load balancing, audit logging, per-request costing, and telemetry.
+FastAPI async API server — proxy engine for LLM requests with PostgreSQL persistence, failover load balancing, audit logging, per-request costing, and telemetry.
 
 ## STRUCTURE
 
@@ -31,10 +31,9 @@ app/
 │   ├── audit_service.py # Audit log recording, header redaction, body capture/truncation — 111 lines
 │   └── costing_service.py # Cost computation (5 token types × prices), FX conversion, pricing snapshots — 300 lines
 ├── data/
-│   └── gateway.db       # SQLite database (auto-created on first run)
 └── tests/
-    ├── conftest.py      # In-memory SQLite, session-scoped event loop
-    └── test_smoke_defect_regressions.py  # Defect-driven regression tests (1230 lines)
+    ├── conftest.py      # PostgreSQL testcontainer bootstrap + session-scoped event loop
+    └── test_smoke_defect_regressions.py  # Defect-driven regression tests (2571 lines)
 ```
 
 ## WHERE TO LOOK
@@ -43,7 +42,7 @@ app/
 |------|----------|-------|
 | Add new provider type | `main.py` (seed), `proxy_service.py` (PROVIDER_AUTH), frontend dropdowns | Must update all three |
 | Change timeout defaults | `core/config.py` | `connect_timeout=10`, `read_timeout=120`, `write_timeout=30` |
-| Add DB column | `models/models.py` + `_add_missing_columns()` in `main.py` | No Alembic — manual ALTER TABLE via PRAGMA |
+| Add DB column | `models/models.py` + new Alembic revision in `alembic/versions/` | Alembic is source of truth |
 | Failover behavior | `proxy_service.py` (`FAILOVER_STATUS_CODES`) + `loadbalancer.py` | 403, 429, 500, 502, 503, 529 |
 | Failover recovery | `loadbalancer.py` | `_recovery_state` dict, `build_attempt_plan()`, cooldown-based probing |
 | Health check logic | `routers/endpoints.py` | Sends real chat completion with `max_tokens=1` |
@@ -72,7 +71,8 @@ app/
 - `log_request()` uses an independent `AsyncSessionLocal()` — never the request-scoped session
 - Costs stored as micros (int64) — `total_cost_micros / 1_000_000 = decimal amount`
 - Pricing snapshots stored in request_logs for audit trail (unit, prices, policy, config version)
-- Config export/import version 3 — includes user_settings, endpoint_fx_mappings, header_blocklist_rules
+- Config export/import version 6 — includes user_settings, endpoint_fx_mappings, header_blocklist_rules
+- Startup applies Alembic migrations programmatically (`run_migrations()` in `core/migrations.py`)
 
 ## ANTI-PATTERNS
 
@@ -106,5 +106,5 @@ app/
   - `TestEndpointOwnerRoute` — endpoint owner route
   - `TestHeaderBlocklist` — header blocklist feature
 - Pattern: async tests with `@pytest.mark.asyncio`, mock DB sessions and HTTP clients
-- `conftest.py`: sets `DATABASE_URL` to in-memory SQLite, provides session-scoped event loop, sys.path injection
+- `conftest.py`: starts postgres testcontainer, sets `DATABASE_URL`, runs Alembic `upgrade head`, provides session-scoped event loop
 - No integration or e2e tests — manual smoke testing via `docs/SMOKE_TEST_PLAN.md`

@@ -1754,33 +1754,18 @@ class TestDEF011_RuntimeEndpointActivityCheck:
 
 class TestDEF012_RuntimeEndpointToggleFailoverE2E:
     @pytest.mark.asyncio
-    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(
-        self, tmp_path
-    ):
-        import sqlite3
-
+    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(self):
         import httpx
         from fastapi import FastAPI
-        from sqlalchemy import select
-        from sqlalchemy.ext.asyncio import (
-            AsyncSession,
-            async_sessionmaker,
-            create_async_engine,
-        )
+        from sqlalchemy import select, update
         from starlette.requests import Request
 
-        from app.core.database import Base
+        from app.core.database import AsyncSessionLocal
         from app.models.models import Connection, Endpoint, ModelConfig, Provider
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
             _recovery_state,
             build_attempt_plan as real_build_attempt_plan,
-        )
-
-        db_file = tmp_path / "def012_runtime_toggle.db"
-        engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
-        session_factory = async_sessionmaker(
-            engine, expire_on_commit=False, class_=AsyncSession
         )
 
         class DummyHttpClient:
@@ -1814,10 +1799,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 )
 
         try:
-            async with engine.begin() as conn:
-                await conn.run_sync(Base.metadata.create_all)
-
-            async with session_factory() as seed_db:
+            async with AsyncSessionLocal() as seed_db:
                 provider = Provider(
                     name="OpenAI DEF012",
                     provider_type="openai",
@@ -1876,7 +1858,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 primary_id = primary.id
                 secondary_id = secondary.id
 
-            async with session_factory() as db:
+            async with AsyncSessionLocal() as db:
                 client = DummyHttpClient()
                 app = FastAPI()
                 app.state.http_client = client
@@ -1906,21 +1888,39 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     }
                 ).encode("utf-8")
 
-                def build_plan_and_disable_primary(model_config, now_mono):
+                toggle_applied = False
+
+                def build_plan_with_assert(model_config, now_mono):
                     plan = real_build_attempt_plan(model_config, now_mono)
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
-                    with sqlite3.connect(db_file) as conn:
-                        conn.execute(
-                            "UPDATE connections SET is_active = 0 WHERE id = ?",
-                            (primary_id,),
-                        )
-                        conn.commit()
                     return plan
+
+                async def runtime_active_check(current_db, endpoint_id):
+                    nonlocal toggle_applied
+                    if endpoint_id == primary_id and not toggle_applied:
+                        await current_db.execute(
+                            update(Connection)
+                            .where(Connection.id == primary_id)
+                            .values(is_active=False)
+                        )
+                        await current_db.flush()
+                        toggle_applied = True
+                        return False
+
+                    row = await current_db.execute(
+                        select(Connection.is_active).where(Connection.id == endpoint_id)
+                    )
+                    active = row.scalar_one_or_none()
+                    return bool(active) if active is not None else False
 
                 with (
                     patch(
                         "app.routers.proxy.build_attempt_plan",
-                        side_effect=build_plan_and_disable_primary,
+                        side_effect=build_plan_with_assert,
+                    ),
+                    patch(
+                        "app.routers.proxy._endpoint_is_active_now",
+                        AsyncMock(side_effect=runtime_active_check),
                     ),
                     patch("app.routers.proxy.log_request", AsyncMock(return_value=123)),
                 ):
@@ -1945,7 +1945,6 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 assert secondary_row.scalar_one() is True
         finally:
             _recovery_state.clear()
-            await engine.dispose()
 
 
 class TestDEF013_AnthropicTopLevelCacheReadTokens:

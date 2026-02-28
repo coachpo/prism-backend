@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = "sqlite+aiosqlite:///./data/gateway.db"
+    database_url: str = "postgresql+asyncpg://prism:prism@localhost:5432/prism"
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
@@ -16,6 +16,14 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+
+
+def ensure_postgresql_database_url(database_url: str) -> None:
+    if not database_url.lower().startswith("postgresql"):
+        raise ValueError(
+            "DATABASE_URL must be a PostgreSQL DSN, for example "
+            "postgresql+asyncpg://prism:prism@localhost:5432/prism"
+        )
 
 
 settings = Settings()

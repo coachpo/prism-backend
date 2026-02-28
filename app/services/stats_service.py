@@ -3,7 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, func, case, and_, literal, or_, desc
+from sqlalchemy import String, and_, case, cast, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import RequestLog, UserSetting
@@ -834,11 +834,11 @@ async def get_spending_report(
 
     group_expr = None
     if group_by == "day":
-        group_expr = func.strftime("%Y-%m-%d", RequestLog.created_at)
+        group_expr = func.to_char(RequestLog.created_at, "YYYY-MM-DD")
     elif group_by == "week":
-        group_expr = func.strftime("%Y-W%W", RequestLog.created_at)
+        group_expr = func.to_char(func.date_trunc("week", RequestLog.created_at), 'IYYY-"W"IW')
     elif group_by == "month":
-        group_expr = func.strftime("%Y-%m", RequestLog.created_at)
+        group_expr = func.to_char(RequestLog.created_at, "YYYY-MM")
     elif group_by == "provider":
         group_expr = RequestLog.provider_type
     elif group_by == "model":
@@ -850,10 +850,10 @@ async def get_spending_report(
             literal("unknown_endpoint"),
         )
     elif group_by == "model_endpoint":
-        group_expr = func.printf(
-            "%s#%s",
+        group_expr = func.concat(
             RequestLog.model_id,
-            func.coalesce(RequestLog.endpoint_id, literal(-1)),
+            literal("#"),
+            func.coalesce(cast(RequestLog.endpoint_id, String), literal("-1")),
         )
 
     groups: list[dict] = []

@@ -9,7 +9,7 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 ## Architecture
 
 - **Framework**: FastAPI with async/await throughout
-- **Database**: SQLite with async SQLAlchemy (aiosqlite)
+- **Database**: PostgreSQL with async SQLAlchemy (`asyncpg`) + Alembic migrations
 - **HTTP Client**: httpx.AsyncClient for upstream requests
 - **Streaming**: SSE pass-through with async generators
 
@@ -21,7 +21,7 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 backend/
 ├── app/
 │   ├── main.py                      # FastAPI app + startup/shutdown + schema migrations
-│   ├── database.py                  # SQLAlchemy async engine + session factory
+│   ├── core/database.py             # SQLAlchemy async engine + session factory
 │   ├── models/
 │   │   └── models.py                # ORM models (Provider, ModelConfig, Endpoint, Connection, etc.)
 │   ├── routers/
@@ -37,9 +37,11 @@ backend/
 │       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
 │       └── audit_service.py         # Audit log writing with header redaction
+├── alembic/                         # Alembic migration env + revisions
+├── alembic.ini                      # Alembic configuration
+├── docker-compose.yml               # Local PostgreSQL provisioning
 ├── tests/                           # Pytest test suite
 ├── requirements.txt                 # Python dependencies
-├── gateway.db                       # SQLite database (auto-created)
 └── AGENTS.md                        # Backend knowledge base
 ```
 
@@ -99,15 +101,17 @@ pytest tests/test_proxy.py -v
 ### Environment Variables
 
 - `BACKEND_PORT` - Server port (default: 8000)
-- `DATABASE_URL` - SQLite database path (default: `gateway.db`)
+- `DATABASE_URL` - PostgreSQL DSN (default: `postgresql+asyncpg://prism:prism@localhost:5432/prism`)
 
 ### Database
 
-The SQLite database is created automatically on first run. Schema migrations are handled manually via `_add_missing_columns()` in `main.py`.
+Schema migrations are managed with Alembic and applied automatically on backend startup (`upgrade head`).
 
-**Database files:**
-- `gateway.db` - Main database
-- `gateway_smoke.db` - Separate database for smoke testing
+For local development, run PostgreSQL via Docker Compose:
+
+```bash
+docker compose up -d postgres
+```
 
 ---
 
@@ -172,10 +176,7 @@ All `/v1/*` requests are forwarded to the appropriate upstream provider based on
 ### Load Balancing Strategies
 
 - **single**: Always use the first active connection (priority 0)
-- **round_robin**: Rotate through active connections (deprecated, auto-migrated to failover)
 - **failover**: Try connections in priority order until one succeeds
-- **round_robin**: Rotate through active endpoints
-- **failover**: Try endpoints in priority order until one succeeds
 
 ### Success Rate Tracking
 
@@ -212,15 +213,15 @@ Provider-specific auth headers are built in `proxy_service.py`:
 
 ### Schema Migrations
 
-Manual migrations via `_add_missing_columns()` in `main.py`. Add new columns with `ALTER TABLE` statements and handle `OperationalError` for existing columns.
+Alembic migrations are the source of truth. Create revisions with `alembic revision --autogenerate -m "message"` and apply with `alembic upgrade head`.
 
 ---
 
 ## Troubleshooting
 
-### Database Locked
+### Database Connection Errors
 
-If you see "database is locked" errors, ensure only one process is accessing the database at a time. SQLite doesn't support high concurrency.
+If startup fails to connect to PostgreSQL, verify your `DATABASE_URL` and ensure the Postgres service is healthy (`docker compose ps`).
 
 ### Import Errors
 
