@@ -1,114 +1,86 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-
-FastAPI async API server — proxy engine for LLM requests with PostgreSQL persistence, failover load balancing, audit logging, per-request costing, and telemetry.
+FastAPI async API server for Prism's management plane (`/api/*`) and data plane (`/v1/*`, `/v1beta/*`).
+Persists state in PostgreSQL via async SQLAlchemy, applies Alembic migrations on startup, and provides failover routing, costing, telemetry, and audit logging.
 
 ## STRUCTURE
-
 ```
 app/
-├── main.py              # App factory, lifespan (DB init, httpx pool, seed), CORS, 10 router mounts, /health endpoint (213 lines)
-├── dependencies.py      # get_db() — async session with auto-commit/rollback
-├── core/
-│   ├── config.py        # pydantic-settings: timeouts, DB URL, LB config (reads .env)
-│   └── database.py      # Async engine + session factory + Base
-├── models/models.py     # 10 ORM models (477 lines): Profile, Provider, ModelConfig, Endpoint, Connection, RequestLog, UserSetting, EndpointFxRateSetting, HeaderBlocklistRule, AuditLog
-├── schemas/schemas.py   # Pydantic request/response schemas (736 lines, mirrors models/)
-├── routers/             # 10 API route handlers
-│   ├── providers.py     # CRUD /api/providers (list, get, update audit settings) — 47 lines
-│   ├── profiles.py      # CRUD /api/profiles (list, get active, create, update, delete, activate) — 211 lines
-│   ├── models.py        # CRUD /api/models (list with health stats, get, create, update, delete) — 276 lines
-│   ├── endpoints.py     # CRUD /api/models/{id}/endpoints + health check + owner route — 318 lines
-│   ├── connections.py   # CRUD /api/models/{id}/connections + health check + owner route — 514 lines
-│   ├── stats.py         # /api/stats/* — request logs, summary, endpoint success rates, spending report, batch delete — 159 lines
-│   ├── audit.py         # /api/audit/* — audit log list, detail, batch delete — 126 lines
-│   ├── config.py        # /api/config/* — config export/import (v2/v3) + header blocklist CRUD — 628 lines
-│   ├── settings.py      # /api/settings/costing — currency + FX rate mappings — 125 lines
-│   └── proxy.py         # /v1/{path} + /v1beta/{path} catch-all — core proxy + costing logic — 662 lines
-├── services/            # Business logic (1826 lines total)
-│   ├── proxy_service.py # URL building, auth headers, header blocklist, streaming, body parsing — 312 lines
-│   ├── loadbalancer.py  # Strategy selection, proxy→native resolution, failover recovery — 116 lines
-│   ├── stats_service.py # Request logging, token extraction (SSE + JSON), spending reports — 918 lines
-│   ├── audit_service.py # Audit log recording, header redaction, body capture/truncation — 111 lines
-│   └── costing_service.py # Cost computation (5 token types × prices), FX conversion, pricing snapshots — 300 lines
-├── data/
-└── tests/
-    ├── conftest.py      # PostgreSQL testcontainer bootstrap + session-scoped event loop
-    └── test_smoke_defect_regressions.py  # Defect-driven regression tests (2571 lines)
+|- main.py                 # Lifespan startup: validate DB URL, run migrations, seed providers/settings/blocklist, create shared httpx client
+|- dependencies.py         # DB session dependency + active/effective profile dependencies
+|- core/
+|  |- config.py            # Environment-backed settings and timeout values
+|  |- database.py          # Async engine/session factory/Base
+|  `- migrations.py        # Programmatic Alembic runner used at startup
+|- models/models.py        # ORM models: Profile, Provider, ModelConfig, Endpoint, Connection, RequestLog, UserSetting, EndpointFxRateSetting, HeaderBlocklistRule, AuditLog
+|- schemas/schemas.py      # Pydantic request/response contracts
+|- routers/
+|  |- profiles.py          # /api/profiles CRUD + CAS activation
+|  |- providers.py         # /api/providers list/get/patch audit flags
+|  |- models.py            # /api/models CRUD + /by-endpoint/{endpoint_id}
+|  |- endpoints.py         # /api/endpoints CRUD + /api/endpoints/connections
+|  |- connections.py       # /api/models/{id}/connections CRUD + health-check + owner
+|  |- stats.py             # /api/stats requests/summary/success-rates/spending + batch delete
+|  |- audit.py             # /api/audit/logs list/detail/batch delete
+|  |- settings.py          # /api/settings/costing get/update
+|  |- config.py            # /api/config export/import + header blocklist CRUD
+|  `- proxy.py             # /v1/{path} and /v1beta/{path} catch-all proxy handlers
+|- services/
+|  |- loadbalancer.py      # Model resolution, connection selection, failover recovery state
+|  |- proxy_service.py     # URL/header construction, blocklist application, upstream forwarding helpers
+|  |- stats_service.py     # Request log persistence + token extraction + aggregate/spending queries
+|  |- costing_service.py   # Micros-based costing and FX conversion
+|  `- audit_service.py     # Audit logging + header redaction + body truncation
+`- tests/
+   |- conftest.py          # PostgreSQL test bootstrap + migrations
+   `- test_smoke_defect_regressions.py
 ```
 
-## WHERE TO LOOK
+## RUNTIME SEMANTICS
+- Management endpoints (`/api/*`) use effective profile scope: `X-Profile-Id` when present, otherwise active-profile fallback.
+- Proxy endpoints (`/v1/*`, `/v1beta/*`) always use active profile scope via `get_active_profile_id`.
+- Profiles are soft-deletable only when inactive; create is capped at 10 non-deleted profiles; activation is CAS-guarded.
+- Providers are global shared seed rows (`openai`, `anthropic`, `gemini`) and not profile-scoped.
 
-| Task | Location | Notes |
-|------|----------|-------|
-| Add new provider type | `main.py` (seed), `proxy_service.py` (PROVIDER_AUTH), frontend dropdowns | Must update all three |
-| Change timeout defaults | `core/config.py` | `connect_timeout=10`, `read_timeout=120`, `write_timeout=30` |
-| Add DB column | `models/models.py` + new Alembic revision in `alembic/versions/` | Alembic is source of truth |
-| Failover behavior | `proxy_service.py` (`FAILOVER_STATUS_CODES`) + `loadbalancer.py` | 403, 429, 500, 502, 503, 529 |
-| Failover recovery | `loadbalancer.py` | `_recovery_state` dict, `build_attempt_plan()`, cooldown-based probing |
-| Health check logic | `routers/endpoints.py` | Sends real chat completion with `max_tokens=1` |
-| Request logging | `services/stats_service.py` | `log_request()` returns ID + stores `endpoint_description` + costing fields |
-| Token extraction | `services/stats_service.py` | `extract_token_usage()` — handles SSE + JSON for OpenAI/Anthropic/Gemini |
-| Cost computation | `services/costing_service.py` | `compute_cost_fields()` — 5 token types, FX conversion, pricing snapshots |
-| Spending reports | `routers/stats.py` + `services/stats_service.py` | `/api/stats/spending` with 7 group-by modes + time presets |
-| Costing settings | `routers/settings.py` | `/api/settings/costing` — report currency + per-endpoint FX rates |
-| Audit logging | `services/audit_service.py` | `record_audit_log()` — called from `proxy.py` after each request |
-| Audit toggle | `routers/providers.py` | `PATCH /api/providers/{id}` — `audit_enabled`, `audit_capture_bodies` |
-|| Config backup | `routers/config.py` | Export v1: providers + models + ref-only endpoints/connections + user_settings + blocklist rules + FX mappings |
-| Batch delete logs | `routers/stats.py` + `routers/audit.py` | `DELETE` with `older_than_days` (≥1) or `delete_all=true`; audit also supports `before` |
-| Gemini path rewrite | `services/proxy_service.py` | Gemini uses model-in-path pattern (`/models/{model}:generateContent`) |
-| Header blocklist | `routers/config.py` + `proxy_service.py` | System (seeded) + user rules; auth headers protected from blocklist |
-| Endpoint owner | `routers/endpoints.py` | `GET /api/endpoints/{id}/owner` — returns model_id for endpoint navigation |
-|| Connection management | `routers/connections.py` | Model-scoped routing config, health checks, pricing |
-|| Profile management | `routers/profiles.py` | CRUD for profiles, activate/deactivate, soft delete (max 10) |
+## KEY BACKEND FACTS
+- Startup order in lifespan: validate PostgreSQL URL -> run migrations -> seed providers -> seed user settings -> seed system header blocklist rules -> create shared `httpx.AsyncClient`.
+- Failover trigger statuses are `403, 429, 500, 502, 503, 529` (`FAILOVER_STATUS_CODES`).
+- Failover recovery state is in-memory and keyed by `(profile_id, connection_id)`; resets on process restart.
+- Config export/import canonical contract is `version: 1` with logical references (`endpoint_ref`, `connection_ref`) and replace-mode import.
+- Spending API supports `group_by`: `none`, `day`, `week`, `month`, `provider`, `model`, `endpoint`, `model_endpoint`.
+- Costing stores integer micros in logs (`*_micros`), with pricing snapshot fields for auditability.
+- FX mappings are keyed by `(model_id, endpoint_id)` in backend settings APIs.
+- `Connection.description` is a synonym-backed field over the `description` column (ORM attribute is `name` with synonym).
+- `request_logs` and `audit_logs` both persist `endpoint_id` plus endpoint snapshot fields.
+- `user_settings` includes `timezone_preference` and report currency settings.
+
+## WHERE TO LOOK
+- Proxy routing flow: `app/routers/proxy.py`, `app/services/loadbalancer.py`, `app/services/proxy_service.py`
+- Profile semantics: `app/dependencies.py`, `app/routers/profiles.py`
+- Config export/import and blocklist: `app/routers/config.py`
+- Costing and spending: `app/routers/settings.py`, `app/routers/stats.py`, `app/services/costing_service.py`, `app/services/stats_service.py`
+- Health checks and ownership routes: `app/routers/connections.py`, `app/routers/endpoints.py`
+- Audit capture: `app/services/audit_service.py`, `app/routers/audit.py`
 
 ## CONVENTIONS
-
-- All DB operations are async (`await session.execute(...)`)
-- `selectinload()` for eager loading relationships — never lazy load
-- Pydantic schemas in `schemas/` must stay in sync with ORM models in `models/`
-- Router prefix pattern: `/api/{resource}` for CRUD, `/v1/{path}` + `/v1beta/{path}` for proxy
-- `httpx.AsyncClient` lives on `app.state.http_client` — created in lifespan, shared across requests (20 max connections, 5s pool timeout, `follow_redirects=True`)
-- Failover recovery state is in-memory (`_recovery_state` dict) — resets on restart
-- Audit bodies truncated at 64KB with `[TRUNCATED]` marker
-- `log_request()` uses an independent `AsyncSessionLocal()` — never the request-scoped session
-- Costs stored as micros (int64) — `total_cost_micros / 1_000_000 = decimal amount`
-- Pricing snapshots stored in request_logs for audit trail (unit, prices, policy, config version)
-- Config export/import version 1 — includes user_settings, endpoint_fx_mappings, header_blocklist_rules (ref-only, replace-mode)
-- Startup applies Alembic migrations programmatically (`run_migrations()` in `core/migrations.py`)
+- Keep request handlers and services async end-to-end.
+- Use `selectinload` for relationship-heavy fetches in routers/services.
+- Do not rely on request-scoped DB sessions in streaming finalization; streaming cleanup uses independent sessions in services.
+- Normalize endpoint base URLs on create/update and validate against repeated `/vN/vN` segments.
+- Apply blocklist sanitization after custom header merge so blocked headers cannot be reintroduced.
+- Treat schema contracts in `schemas/schemas.py` as source-of-truth for API docs and frontend types.
 
 ## ANTI-PATTERNS
-
-- Never use the request-scoped `db` session inside a `StreamingResponse` generator — it's closed after the route returns. Use `AsyncSessionLocal()` directly.
-- Never add `content-length` or hop-by-hop headers to upstream requests — `HOP_BY_HOP_HEADERS` frozenset handles this
-- `base_url` must not end with `/` — `normalize_base_url()` strips it on create/update
-- Don't chain proxy aliases — `get_model_config_with_connections()` does exactly one redirect lookup
-- Proxy models cannot have connections — blocked at connection creation and config import
-- Native models cannot have `redirect_to` — only proxy models use this field
-- Never log raw auth headers — `audit_service.py` redacts `authorization`, `x-api-key`, `x-goog-api-key` and any header matching `key|secret|token|auth` pattern
-- Don't use `round_robin` LB strategy — removed, auto-migrated to `failover` on startup
-- Don't store costs as floats — always micros (int64) to avoid precision loss
+- Do not add unsupported providers without coordinated backend+frontend updates.
+- Do not reintroduce `round_robin` load balancing behavior.
+- Do not store monetary values as floats; use micros integer fields only.
+- Do not allow proxy chaining (`proxy -> proxy`) or proxy connections.
+- Do not leak raw secrets in audit headers; redaction rules must remain enforced.
 
 ## TESTING
-
 ```bash
 ./venv/bin/python -m pytest tests/ -v
 ```
-- Framework: pytest + pytest-asyncio (installed in venv, not in requirements.txt)
-- Tests: `tests/test_smoke_defect_regressions.py` — 12 test classes (1651 lines):
-  - `TestDEF001_LogsSurviveFailoverRollback` — streaming session isolation
-  - `TestDEF002_ModelIdRewriting` — proxy alias model field rewrite
-  - `TestDEF003_AuthHeaderPerEndpoint` — per-endpoint auth_type override
-  - `TestDEF004_FrontendDeleteErrorHandling` — API error propagation
-  - `TestDEF005_GeminiPathModelRewrite` — Gemini model-in-path rewriting
-  - `TestDEF006_ConfigExportImportFieldCoverage` — config export/import field preservation
-  - `TestDEF007_EndpointIdentityInLogs` — log_request returns ID and stores endpoint_description
-  - `TestDEF008_CacheCreationPricing` — cache creation pricing computation
-  - `TestBatchDeleteValidation` — stats + audit batch delete modes
-  - `TestFailoverRecoveryFieldValidation` — failover recovery field validation
-  - `TestEndpointOwnerRoute` — endpoint owner route
-  - `TestHeaderBlocklist` — header blocklist feature
-- Pattern: async tests with `@pytest.mark.asyncio`, mock DB sessions and HTTP clients
-- `conftest.py`: starts postgres testcontainer, sets `DATABASE_URL`, runs Alembic `upgrade head`, provides session-scoped event loop
-- No integration or e2e tests — manual smoke testing via `docs/SMOKE_TEST_PLAN.md`
+- Test suite is defect-regression heavy and runs against PostgreSQL test setup in `tests/conftest.py`.
+- For manual behavior validation, follow scenarios in `docs/SMOKE_TEST_PLAN.md`.

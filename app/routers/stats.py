@@ -25,6 +25,14 @@ from app.services.stats_service import (
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
 
+def _normalize_datetime_filter(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
 @router.get("/requests", response_model=RequestLogListResponse)
 async def list_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -40,6 +48,9 @@ async def list_request_logs(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
+    normalized_from_time = _normalize_datetime_filter(from_time)
+    normalized_to_time = _normalize_datetime_filter(to_time)
+
     items, total = await get_request_logs(
         db,
         model_id=model_id,
@@ -47,8 +58,8 @@ async def list_request_logs(
         provider_type=provider_type,
         status_code=status_code,
         success=success,
-        from_time=from_time,
-        to_time=to_time,
+        from_time=normalized_from_time,
+        to_time=normalized_to_time,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
         limit=limit,
@@ -77,11 +88,14 @@ async def stats_summary(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ):
+    normalized_from_time = _normalize_datetime_filter(from_time)
+    normalized_to_time = _normalize_datetime_filter(to_time)
+
     result = await get_stats_summary(
         db,
-        from_time=from_time,
+        from_time=normalized_from_time,
         profile_id=profile_id,
-        to_time=to_time,
+        to_time=normalized_to_time,
         group_by=group_by,
         model_id=model_id,
         provider_type=provider_type,
@@ -100,11 +114,14 @@ async def connection_success_rates(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ):
+    normalized_from_time = _normalize_datetime_filter(from_time)
+    normalized_to_time = _normalize_datetime_filter(to_time)
+
     return await get_connection_success_rates(
         db,
         profile_id=profile_id,
-        from_time=from_time,
-        to_time=to_time,
+        from_time=normalized_from_time,
+        to_time=normalized_to_time,
     )
 
 
@@ -127,12 +144,15 @@ async def spending_report(
     offset: int = Query(default=0, ge=0),
     top_n: int = Query(default=5, ge=1, le=50),
 ):
+    normalized_from_time = _normalize_datetime_filter(from_time)
+    normalized_to_time = _normalize_datetime_filter(to_time)
+
     return await get_spending_report(
         db,
         preset=preset,
-        from_time=from_time,
+        from_time=normalized_from_time,
         profile_id=profile_id,
-        to_time=to_time,
+        to_time=normalized_to_time,
         provider_type=provider_type,
         model_id=model_id,
         endpoint_id=endpoint_id,
