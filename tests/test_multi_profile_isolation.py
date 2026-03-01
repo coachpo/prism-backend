@@ -533,7 +533,7 @@ class TestConfigExportImportIsolation:
         payload = json.loads(config.body.decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 7
+        assert payload["version"] == 1
         assert len(payload["endpoints"]) == 1
         assert len(payload["models"]) == 1
 

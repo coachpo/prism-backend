@@ -55,7 +55,7 @@ app/
 | Costing settings | `routers/settings.py` | `/api/settings/costing` — report currency + per-endpoint FX rates |
 | Audit logging | `services/audit_service.py` | `record_audit_log()` — called from `proxy.py` after each request |
 | Audit toggle | `routers/providers.py` | `PATCH /api/providers/{id}` — `audit_enabled`, `audit_capture_bodies` |
-|| Config backup | `routers/config.py` | Export v6: providers + models + endpoints + connections + user_settings + blocklist rules + FX mappings |
+|| Config backup | `routers/config.py` | Export v1: providers + models + ref-only endpoints/connections + user_settings + blocklist rules + FX mappings |
 | Batch delete logs | `routers/stats.py` + `routers/audit.py` | `DELETE` with `older_than_days` (≥1) or `delete_all=true`; audit also supports `before` |
 | Gemini path rewrite | `services/proxy_service.py` | Gemini uses model-in-path pattern (`/models/{model}:generateContent`) |
 | Header blocklist | `routers/config.py` + `proxy_service.py` | System (seeded) + user rules; auth headers protected from blocklist |
@@ -75,7 +75,7 @@ app/
 - `log_request()` uses an independent `AsyncSessionLocal()` — never the request-scoped session
 - Costs stored as micros (int64) — `total_cost_micros / 1_000_000 = decimal amount`
 - Pricing snapshots stored in request_logs for audit trail (unit, prices, policy, config version)
-- Config export/import version 6 — includes user_settings, endpoint_fx_mappings, header_blocklist_rules
+- Config export/import version 1 — includes user_settings, endpoint_fx_mappings, header_blocklist_rules (ref-only, replace-mode)
 - Startup applies Alembic migrations programmatically (`run_migrations()` in `core/migrations.py`)
 
 ## ANTI-PATTERNS

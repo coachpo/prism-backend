@@ -44,14 +44,6 @@ VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
 DEFAULT_CONFIG_IMPORT_MODE = "replace"
 
 
-def _legacy_endpoint_ref(endpoint_id: int) -> str:
-    return f"legacy-endpoint-id:{endpoint_id}"
-
-
-def _legacy_connection_ref(connection_id: int) -> str:
-    return f"legacy-connection-id:{connection_id}"
-
-
 def _normalize_optional_ref(value: str | None) -> str | None:
     if value is None:
         return None
@@ -59,29 +51,17 @@ def _normalize_optional_ref(value: str | None) -> str | None:
     return normalized or None
 
 
-def _resolve_endpoint_source_ref(*, endpoint_ref: str | None, endpoint_id: int | None) -> str | None:
-    normalized_ref = _normalize_optional_ref(endpoint_ref)
-    if normalized_ref is not None:
-        return normalized_ref
-    if endpoint_id is not None:
-        return _legacy_endpoint_ref(endpoint_id)
-    return None
+def _resolve_endpoint_source_ref(*, endpoint_ref: str | None) -> str | None:
+    return _normalize_optional_ref(endpoint_ref)
 
 
-def _resolve_connection_source_ref(*, connection_ref: str | None, connection_id: int | None) -> str | None:
-    normalized_ref = _normalize_optional_ref(connection_ref)
-    if normalized_ref is not None:
-        return normalized_ref
-    if connection_id is not None:
-        return _legacy_connection_ref(connection_id)
-    return None
+def _resolve_connection_source_ref(*, connection_ref: str | None) -> str | None:
+    return _normalize_optional_ref(connection_ref)
 
 
 def _build_export_endpoint_ref(endpoint: Endpoint) -> str:
-    endpoint_name = endpoint.name.strip()
-    if endpoint_name:
-        return f"endpoint:{endpoint_name}"
-    return _legacy_endpoint_ref(endpoint.id)
+    endpoint_name = endpoint.name.strip() or str(endpoint.id)
+    return f"endpoint:{endpoint_name}"
 
 
 def _build_export_connection_ref(
@@ -96,8 +76,6 @@ def _build_export_connection_ref(
         f"connection:{model_id}:{endpoint_ref}:{connection.priority}:"
         f"{connection_name}:{ordinal}"
     )
-
-
 
 
 @router.get("/export")
@@ -169,10 +147,7 @@ async def export_config(
         )
         exported_connections: list[ConfigConnectionExport] = []
         for ordinal, connection in enumerate(sorted_connections):
-            endpoint_ref = endpoint_ref_by_id.get(
-                connection.endpoint_id,
-                _legacy_endpoint_ref(connection.endpoint_id),
-            )
+            endpoint_ref = endpoint_ref_by_id[connection.endpoint_id]
             exported_connections.append(
                 ConfigConnectionExport(
                     connection_ref=_build_export_connection_ref(
@@ -244,7 +219,7 @@ async def export_config(
     )
 
     data = ConfigExportResponse(
-        version=7,
+        version=1,
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         endpoints=exported_endpoints,
@@ -263,10 +238,7 @@ async def export_config(
             endpoint_fx_mappings=[
                 ConfigEndpointFxRateExport(
                     model_id=row.model_id,
-                    endpoint_ref=endpoint_ref_by_id.get(
-                        row.endpoint_id,
-                        _legacy_endpoint_ref(row.endpoint_id),
-                    ),
+                    endpoint_ref=endpoint_ref_by_id[row.endpoint_id],
                     fx_rate=row.fx_rate,
                 )
                 for row in fx_mappings
@@ -308,28 +280,28 @@ async def export_config(
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.version not in (6, 7):
+    if data.mode not in (None, DEFAULT_CONFIG_IMPORT_MODE):
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported config version: {data.version}. Expected: 6 or 7",
+            detail="Unsupported import mode. Use 'replace'.",
         )
 
     if not data.providers:
         raise HTTPException(status_code=400, detail="At least one provider is required")
 
     seen_provider_types: set[str] = set()
-    for p in data.providers:
-        if p.provider_type not in VALID_PROVIDER_TYPES:
+    for provider in data.providers:
+        if provider.provider_type not in VALID_PROVIDER_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown provider type: '{p.provider_type}'",
+                detail=f"Unknown provider type: '{provider.provider_type}'",
             )
-        if p.provider_type in seen_provider_types:
+        if provider.provider_type in seen_provider_types:
             raise HTTPException(
                 status_code=400,
-                detail=f"Duplicate provider type: '{p.provider_type}'",
+                detail=f"Duplicate provider type: '{provider.provider_type}'",
             )
-        seen_provider_types.add(p.provider_type)
+        seen_provider_types.add(provider.provider_type)
 
     provider_types_in_file = {provider.provider_type for provider in data.providers}
 
@@ -338,12 +310,11 @@ def _validate_import(data: ConfigImportRequest) -> None:
     for endpoint in data.endpoints:
         endpoint_source_ref = _resolve_endpoint_source_ref(
             endpoint_ref=endpoint.endpoint_ref,
-            endpoint_id=endpoint.endpoint_id,
         )
         if endpoint_source_ref is None:
             raise HTTPException(
                 status_code=400,
-                detail="Each endpoint must include endpoint_ref (v7) or endpoint_id (v6)",
+                detail="Each endpoint must include endpoint_ref",
             )
         if endpoint_source_ref in endpoint_refs_in_file:
             raise HTTPException(
@@ -410,14 +381,12 @@ def _validate_import(data: ConfigImportRequest) -> None:
         for connection in model.connections:
             endpoint_source_ref = _resolve_endpoint_source_ref(
                 endpoint_ref=connection.endpoint_ref,
-                endpoint_id=connection.endpoint_id,
             )
             if endpoint_source_ref is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Connection for model '{model.model_id}' must include endpoint_ref "
-                        "(v7) or endpoint_id (v6)"
+                        f"Connection for model '{model.model_id}' must include endpoint_ref"
                     ),
                 )
             if endpoint_source_ref not in endpoint_refs_in_file:
@@ -431,14 +400,12 @@ def _validate_import(data: ConfigImportRequest) -> None:
 
             connection_source_ref = _resolve_connection_source_ref(
                 connection_ref=connection.connection_ref,
-                connection_id=connection.connection_id,
             )
             if connection_source_ref is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Connection for model '{model.model_id}' must include connection_ref "
-                        "(v7) or connection_id (v6)"
+                        f"Connection for model '{model.model_id}' must include connection_ref"
                     ),
                 )
             if connection_source_ref in connection_ref_seen:
@@ -458,6 +425,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         "but pricing_currency_code is missing"
                     ),
                 )
+
     for model in data.models:
         if model.model_type == "proxy":
             if not model.redirect_to or model.redirect_to not in native_models:
@@ -490,13 +458,12 @@ def _validate_import(data: ConfigImportRequest) -> None:
         for mapping in data.user_settings.endpoint_fx_mappings:
             endpoint_source_ref = _resolve_endpoint_source_ref(
                 endpoint_ref=mapping.endpoint_ref,
-                endpoint_id=mapping.endpoint_id,
             )
             if endpoint_source_ref is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        "FX mapping must include endpoint_ref (v7) or endpoint_id (v6): "
+                        "FX mapping must include endpoint_ref: "
                         f"model_id='{mapping.model_id}'"
                     ),
                 )
@@ -518,7 +485,6 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         f"model_id='{mapping.model_id}', endpoint_ref='{endpoint_source_ref}'"
                     ),
                 )
-
 @router.post("/import", response_model=ConfigImportResponse)
 async def import_config(
     data: ConfigImportRequest,
@@ -545,11 +511,13 @@ async def import_config(
     await db.flush()
 
     provider_map: dict[str, int] = {}
-    for p in data.providers:
+    for provider_data in data.providers:
         provider = (
             (
                 await db.execute(
-                    select(Provider).where(Provider.provider_type == p.provider_type)
+                    select(Provider).where(
+                        Provider.provider_type == provider_data.provider_type
+                    )
                 )
             )
             .scalars()
@@ -557,32 +525,31 @@ async def import_config(
         )
         if provider is None:
             provider = Provider(
-                name=p.name,
-                provider_type=p.provider_type,
-                description=p.description,
-                audit_enabled=p.audit_enabled,
-                audit_capture_bodies=p.audit_capture_bodies,
+                name=provider_data.name,
+                provider_type=provider_data.provider_type,
+                description=provider_data.description,
+                audit_enabled=provider_data.audit_enabled,
+                audit_capture_bodies=provider_data.audit_capture_bodies,
             )
             db.add(provider)
             await db.flush()
         else:
-            provider.name = p.name
-            provider.description = p.description
-            provider.audit_enabled = p.audit_enabled
-            provider.audit_capture_bodies = p.audit_capture_bodies
-        provider_map[p.provider_type] = provider.id
+            provider.name = provider_data.name
+            provider.description = provider_data.description
+            provider.audit_enabled = provider_data.audit_enabled
+            provider.audit_capture_bodies = provider_data.audit_capture_bodies
+        provider_map[provider_data.provider_type] = provider.id
 
     endpoint_ref_map: dict[str, int] = {}
     endpoints_count = 0
     for endpoint_data in data.endpoints:
         endpoint_source_ref = _resolve_endpoint_source_ref(
             endpoint_ref=endpoint_data.endpoint_ref,
-            endpoint_id=endpoint_data.endpoint_id,
         )
         if endpoint_source_ref is None:
             raise HTTPException(
                 status_code=400,
-                detail="Each endpoint must include endpoint_ref (v7) or endpoint_id (v6)",
+                detail="Each endpoint must include endpoint_ref",
             )
 
         normalized_url = normalize_base_url(endpoint_data.base_url)
@@ -601,36 +568,34 @@ async def import_config(
     connections_count = 0
     imported_connection_pairs: set[tuple[str, str]] = set()
 
-    native_models = [m for m in data.models if m.model_type == "native"]
-    proxy_models = [m for m in data.models if m.model_type == "proxy"]
+    native_models = [model for model in data.models if model.model_type == "native"]
+    proxy_models = [model for model in data.models if model.model_type == "proxy"]
 
-    for m in native_models:
-        mc = ModelConfig(
-            provider_id=provider_map[m.provider_type],
+    for model in native_models:
+        model_config = ModelConfig(
+            provider_id=provider_map[model.provider_type],
             profile_id=profile_id,
-            model_id=m.model_id,
-            display_name=m.display_name,
-            model_type=m.model_type,
-            redirect_to=m.redirect_to,
-            lb_strategy=m.lb_strategy,
-            failover_recovery_enabled=m.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=m.failover_recovery_cooldown_seconds,
-            is_enabled=m.is_enabled,
+            model_id=model.model_id,
+            display_name=model.display_name,
+            model_type=model.model_type,
+            redirect_to=model.redirect_to,
+            lb_strategy=model.lb_strategy,
+            failover_recovery_enabled=model.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
+            is_enabled=model.is_enabled,
         )
-        db.add(mc)
+        db.add(model_config)
         await db.flush()
 
-        for connection_data in m.connections:
+        for connection_data in model.connections:
             endpoint_source_ref = _resolve_endpoint_source_ref(
                 endpoint_ref=connection_data.endpoint_ref,
-                endpoint_id=connection_data.endpoint_id,
             )
             if endpoint_source_ref is None:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Connection for model '{m.model_id}' must include endpoint_ref "
-                        "(v7) or endpoint_id (v6)"
+                        f"Connection for model '{model.model_id}' must include endpoint_ref"
                     ),
                 )
             mapped_endpoint_id = endpoint_ref_map.get(endpoint_source_ref)
@@ -638,13 +603,13 @@ async def import_config(
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Connection for model '{m.model_id}' references unknown "
+                        f"Connection for model '{model.model_id}' references unknown "
                         f"endpoint reference '{endpoint_source_ref}'"
                     ),
                 )
 
             connection = Connection(
-                model_config_id=mc.id,
+                model_config_id=model_config.id,
                 profile_id=profile_id,
                 endpoint_id=mapped_endpoint_id,
                 is_active=connection_data.is_active,
@@ -667,22 +632,22 @@ async def import_config(
             )
             db.add(connection)
             connections_count += 1
-            imported_connection_pairs.add((m.model_id, endpoint_source_ref))
+            imported_connection_pairs.add((model.model_id, endpoint_source_ref))
 
-    for m in proxy_models:
-        mc = ModelConfig(
-            provider_id=provider_map[m.provider_type],
+    for model in proxy_models:
+        model_config = ModelConfig(
+            provider_id=provider_map[model.provider_type],
             profile_id=profile_id,
-            model_id=m.model_id,
-            display_name=m.display_name,
-            model_type=m.model_type,
-            redirect_to=m.redirect_to,
-            lb_strategy=m.lb_strategy,
-            failover_recovery_enabled=m.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=m.failover_recovery_cooldown_seconds,
-            is_enabled=m.is_enabled,
+            model_id=model.model_id,
+            display_name=model.display_name,
+            model_type=model.model_type,
+            redirect_to=model.redirect_to,
+            lb_strategy=model.lb_strategy,
+            failover_recovery_enabled=model.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
+            is_enabled=model.is_enabled,
         )
-        db.add(mc)
+        db.add(model_config)
 
     await db.flush()
 
@@ -708,7 +673,6 @@ async def import_config(
         for mapping in data.user_settings.endpoint_fx_mappings:
             endpoint_source_ref = _resolve_endpoint_source_ref(
                 endpoint_ref=mapping.endpoint_ref,
-                endpoint_id=mapping.endpoint_id,
             )
             if endpoint_source_ref is None:
                 continue
@@ -765,7 +729,7 @@ async def import_config(
                 ).scalar_one_or_none()
                 if existing:
                     existing.enabled = rule_data.enabled
-                    existing.updated_at = datetime.now(timezone.utc)
+                    existing.updated_at = datetime.utcnow()
             else:
                 db.add(
                     HeaderBlocklistRule(

@@ -636,18 +636,14 @@ class SpendingReportResponse(BaseModel):
 
 
 class ConfigEndpointExport(BaseModel):
-    endpoint_id: int | None = None
-    endpoint_ref: str | None = None
+    endpoint_ref: str
     name: str
     base_url: str
     api_key: str
 
-
 class ConfigConnectionExport(BaseModel):
-    connection_id: int | None = None
-    connection_ref: str | None = None
-    endpoint_id: int | None = None
-    endpoint_ref: str | None = None
+    connection_ref: str
+    endpoint_ref: str
     is_active: bool = True
     priority: int = 0
     name: str | None = None
@@ -706,8 +702,7 @@ class ConfigProviderExport(BaseModel):
 
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
-    endpoint_id: int | None = None
-    endpoint_ref: str | None = None
+    endpoint_ref: str
     fx_rate: str
 
 
@@ -718,7 +713,7 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[6, 7] = 6
+    version: Literal[1] = 1
     exported_at: datetime
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
@@ -728,14 +723,14 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    version: Literal[6, 7]
+    version: Literal[1]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
-    mode: Literal["replace", "merge"] | None = None
+    mode: Literal["replace"] | None = None
 
 
 class ConfigImportResponse(BaseModel):
