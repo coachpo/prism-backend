@@ -61,8 +61,9 @@ async def get_effective_profile(
     x_profile_id: Annotated[str | None, Header(alias=PROFILE_ID_HEADER)] = None,
  ) -> Profile:
     if x_profile_id is None:
-        return await get_active_profile(db)
-
+        raise HTTPException(
+            status_code=400, detail=f"{PROFILE_ID_HEADER} header is required"
+        )
     try:
         profile_id = int(x_profile_id)
     except (TypeError, ValueError) as exc:

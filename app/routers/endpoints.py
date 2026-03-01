@@ -177,7 +177,6 @@ async def delete_endpoint(
                             else None
                         ),
                         "name": connection.name,
-                        "description": connection.name,
                     }
                     for connection in in_use_rows
                 ],

@@ -34,7 +34,7 @@ async def get_model_config_with_connections(
         target_result = await db.execute(
             select(ModelConfig)
             .options(
-            selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+                selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
                 selectinload(ModelConfig.provider),
             )
             .where(
@@ -77,9 +77,12 @@ def build_attempt_plan(*args) -> list[Connection]:
         profile_id, model_config, now_mono = args
     elif len(args) == 2:
         model_config, now_mono = args
-        profile_id = getattr(model_config, "profile_id", None) or 1
+        profile_id = 1
     else:
-        raise TypeError("build_attempt_plan expects (profile_id, model_config, now_mono) or (model_config, now_mono)")
+        raise TypeError(
+            "build_attempt_plan expects either (profile_id, model_config, now_mono) "
+            "or (model_config, now_mono)"
+        )
 
     active = get_active_connections(model_config)
     if not active:
@@ -126,12 +129,13 @@ def build_attempt_plan(*args) -> list[Connection]:
     )
     return healthy + probe_eligible
 
+
 def mark_connection_failed(
     profile_id: int,
     connection_id: int,
     cooldown_seconds: float,
     now_mono: float,
- ) -> None:
+) -> None:
     blocked_until = now_mono + cooldown_seconds
     _recovery_state[(profile_id, connection_id)] = (blocked_until, cooldown_seconds)
     logger.info(
@@ -152,30 +156,11 @@ def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
             profile_id,
             connection_id,
         )
-    if profile_id == 1 and connection_id in _recovery_state:
-        del _recovery_state[connection_id]
 
 
-async def get_model_config_with_endpoints(
-    db: AsyncSession, profile_id: int, model_id: str
-) -> ModelConfig | None:
-    return await get_model_config_with_connections(db, profile_id, model_id)
+def mark_endpoint_failed(connection_id: int, cooldown_seconds: float, now_mono: float) -> None:
+    mark_connection_failed(1, connection_id, cooldown_seconds, now_mono)
 
 
-def get_active_endpoints(model_config: ModelConfig) -> list[Connection]:
-    return get_active_connections(model_config)
-
-
-def mark_endpoint_failed(
-    endpoint_id: int, cooldown_seconds: float, now_mono: float, profile_id: int = 1
-) -> None:
-    key = (profile_id, endpoint_id)
-    mark_connection_failed(profile_id, endpoint_id, cooldown_seconds, now_mono)
-    if profile_id == 1:
-        _recovery_state[endpoint_id] = _recovery_state[key]
-
-
-def mark_endpoint_recovered(endpoint_id: int, profile_id: int = 1) -> None:
-    mark_connection_recovered(profile_id, endpoint_id)
-    if profile_id == 1 and endpoint_id in _recovery_state:
-        del _recovery_state[endpoint_id]
+def mark_endpoint_recovered(connection_id: int) -> None:
+    mark_connection_recovered(1, connection_id)

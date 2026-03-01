@@ -198,9 +198,7 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_request_logs(
-            db=mock_db, older_than_days=45, delete_all=False
-        )
+        response = await delete_request_logs(db=mock_db, profile_id=1, older_than_days=45, delete_all=False)
         assert response.deleted_count == 5
         mock_db.execute.assert_awaited_once()
 
@@ -216,9 +214,7 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_request_logs(
-            db=mock_db, older_than_days=None, delete_all=True
-        )
+        response = await delete_request_logs(db=mock_db, profile_id=1, older_than_days=None, delete_all=True)
         assert response.deleted_count == 100
 
     @pytest.mark.asyncio
@@ -228,7 +224,7 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_request_logs(db=mock_db, older_than_days=7, delete_all=True)
+            await delete_request_logs(db=mock_db, profile_id=1, older_than_days=7, delete_all=True)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -238,9 +234,7 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_request_logs(
-                db=mock_db, older_than_days=None, delete_all=False
-            )
+            await delete_request_logs(db=mock_db, profile_id=1, older_than_days=None, delete_all=False)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -255,9 +249,7 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_audit_logs(
-            db=mock_db, before=None, older_than_days=45, delete_all=False
-        )
+        response = await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=45, delete_all=False)
         assert response.deleted_count == 10
 
     @pytest.mark.asyncio
@@ -272,9 +264,7 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_audit_logs(
-            db=mock_db, before=None, older_than_days=None, delete_all=True
-        )
+        response = await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=True)
         assert response.deleted_count == 50
 
     @pytest.mark.asyncio
@@ -291,9 +281,7 @@ class TestBatchDeleteValidation:
         mock_db.flush = AsyncMock()
 
         cutoff = datetime(2025, 1, 1)
-        response = await delete_audit_logs(
-            db=mock_db, before=cutoff, older_than_days=None, delete_all=False
-        )
+        response = await delete_audit_logs(db=mock_db, profile_id=1, before=cutoff, older_than_days=None, delete_all=False)
         assert response.deleted_count == 3
 
     @pytest.mark.asyncio
@@ -306,29 +294,17 @@ class TestBatchDeleteValidation:
 
         # before + older_than_days
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(
-                db=mock_db,
-                before=datetime(2025, 1, 1),
-                older_than_days=7,
-                delete_all=False,
-            )
+            await delete_audit_logs(db=mock_db, profile_id=1, before=datetime(2025, 1, 1), older_than_days=7, delete_all=False)
         assert exc_info.value.status_code == 400
 
         # older_than_days + delete_all
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(
-                db=mock_db, before=None, older_than_days=7, delete_all=True
-            )
+            await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=7, delete_all=True)
         assert exc_info.value.status_code == 400
 
         # all three
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(
-                db=mock_db,
-                before=datetime(2025, 1, 1),
-                older_than_days=7,
-                delete_all=True,
-            )
+            await delete_audit_logs(db=mock_db, profile_id=1, before=datetime(2025, 1, 1), older_than_days=7, delete_all=True)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -338,9 +314,7 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(
-                db=mock_db, before=None, older_than_days=None, delete_all=False
-            )
+            await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=False)
         assert exc_info.value.status_code == 400
 
 
@@ -413,7 +387,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "is_active",
             "priority",
             "name",
-            "description",
+            "name",
             "auth_type",
             "custom_headers",
             "forward_stream_options",
@@ -508,7 +482,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=1,
+            config_version="1",
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -552,6 +526,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ],
         )
         exported = config.model_dump(mode="json")
+        exported["mode"] = "replace"
         reimported = ConfigImportRequest(**exported)
 
         assert len(reimported.providers) == 1
@@ -898,13 +873,14 @@ class TestFailoverRecoveryFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 1,
+                "config_version": "1",
                 "providers": [],
                 "endpoints": [],
                 "models": [],
+                "mode": "replace",
             }
         )
-        assert validation.version == 1
+        assert validation.config_version == "1"
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
         from app.schemas.schemas import ConfigImportRequest
@@ -913,7 +889,7 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 1,
+                    "config_version": "1",
                     "providers": [],
                     "endpoints": [
                         {
@@ -939,6 +915,7 @@ class TestFailoverRecoveryFieldValidation:
                             ],
                         }
                     ],
+                    "mode": "replace",
                 }
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
@@ -950,7 +927,7 @@ class TestFailoverRecoveryFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 1,
+                "config_version": "1",
                 "providers": [
                     {
                         "name": "OpenAI",
@@ -989,6 +966,7 @@ class TestFailoverRecoveryFieldValidation:
                         ],
                     },
                 ],
+                "mode": "replace",
             }
         )
 
@@ -1011,7 +989,7 @@ class TestFailoverRecoveryFieldValidation:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=1,
+            config_version="1",
             exported_at=datetime.now(timezone.utc),
             providers=[
                 ConfigProviderExport(
@@ -1052,9 +1030,10 @@ class TestFailoverRecoveryFieldValidation:
             ],
         )
         exported = config.model_dump(mode="json")
+        exported["mode"] = "replace"
         reimported = ConfigImportRequest(**exported)
 
-        assert reimported.version == 1
+        assert reimported.config_version == "1"
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.lb_strategy == "failover"
@@ -1210,7 +1189,6 @@ class TestEndpointOwnerRoute:
             "model_config_id",
             "model_id",
             "connection_name",
-            "connection_description",
             "endpoint_id",
             "endpoint_name",
             "endpoint_base_url",
@@ -1241,12 +1219,11 @@ class TestEndpointOwnerRoute:
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
 
-        response = await get_connection_owner(connection_id=7, db=mock_db)
+        response = await get_connection_owner(connection_id=7, db=mock_db, profile_id=1)
 
         assert response.connection_id == 7
         assert response.model_config_id == 3
         assert response.model_id == "gpt-4"
-        assert response.connection_description == "PackyCode"
         assert response.connection_name == "PackyCode"
         assert response.endpoint_id == 13
         assert response.endpoint_name == "primary"
@@ -1263,7 +1240,7 @@ class TestEndpointOwnerRoute:
         mock_db.execute = AsyncMock(return_value=mock_result)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_connection_owner(connection_id=9999, db=mock_db)
+            await get_connection_owner(connection_id=9999, db=mock_db, profile_id=1)
 
         assert exc_info.value.status_code == 404
 
@@ -1452,7 +1429,7 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            version=1,
+            config_version="1",
             exported_at=datetime.now(timezone.utc),
             providers=[],
             endpoints=[],
@@ -1643,9 +1620,11 @@ class TestDEF009_StreamOptionsCompatibility:
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
         mock_db.get = AsyncMock(return_value=model)
-        mock_db.execute = AsyncMock(
-            return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-        )
+        model_result = MagicMock()
+        model_result.scalar_one_or_none.return_value = model
+        no_conflict_result = MagicMock()
+        no_conflict_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(side_effect=[model_result, no_conflict_result])
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
@@ -1664,6 +1643,7 @@ class TestDEF009_StreamOptionsCompatibility:
                     forward_stream_options=True,
                 ),
                 db=mock_db,
+                profile_id=1,
             )
 
         assert connection.forward_stream_options is True
@@ -1689,7 +1669,7 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
 
         connection = self._make_connection(401)
         mark_endpoint_failed(connection.id, 60, 10.0)
-        assert connection.id in _recovery_state
+        assert (1, connection.id) in _recovery_state
 
         mock_db = AsyncMock()
         mock_db.get = AsyncMock(return_value=connection)
@@ -1705,11 +1685,12 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
                 connection_id=connection.id,
                 body=ConnectionUpdate(is_active=False),
                 db=mock_db,
+                profile_id=1,
             )
             assert connection.is_active is False
-            assert connection.id not in _recovery_state
+            assert (1, connection.id) not in _recovery_state
         finally:
-            _recovery_state.pop(connection.id, None)
+            _recovery_state.pop((1, connection.id), None)
 
     @pytest.mark.asyncio
     async def test_delete_endpoint_clears_recovery_state(self):
@@ -1718,18 +1699,18 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
 
         connection = self._make_connection(402)
         mark_endpoint_failed(connection.id, 60, 10.0)
-        assert connection.id in _recovery_state
+        assert (1, connection.id) in _recovery_state
 
         mock_db = AsyncMock()
-        mock_db.get = AsyncMock(return_value=connection)
+        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=connection)))
         mock_db.delete = AsyncMock()
 
         try:
-            await delete_connection(connection_id=connection.id, db=mock_db)
-            assert connection.id not in _recovery_state
+            await delete_connection(connection_id=connection.id, db=mock_db, profile_id=1)
+            assert (1, connection.id) not in _recovery_state
             mock_db.delete.assert_awaited_once_with(connection)
         finally:
-            _recovery_state.pop(connection.id, None)
+            _recovery_state.pop((1, connection.id), None)
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:
@@ -1900,8 +1881,8 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
                 toggle_applied = False
 
-                def build_plan_with_assert(model_config, now_mono):
-                    plan = real_build_attempt_plan(model_config, now_mono)
+                def build_plan_with_assert(*args):
+                    plan = real_build_attempt_plan(*args)
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
                     return plan
 
@@ -2350,7 +2331,7 @@ class TestDEF021_StreamingCancellationResilience:
         connection.id = 101
         connection.endpoint_id = 201
         connection.auth_type = None
-        connection.description = "primary"
+        connection.name = "primary"
         connection.forward_stream_options = False
         connection.endpoint_rel = endpoint
 
@@ -2610,7 +2591,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 1,
+                "config_version": "1",
                 "providers": [{"name": "OpenAI", "provider_type": "openai"}],
                 "endpoints": [
                     {
@@ -2642,6 +2623,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         }
                     ]
                 },
+                "mode": "replace",
             }
         )
 
@@ -2653,7 +2635,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 1,
+                "config_version": "1",
                 "providers": [{"name": "OpenAI", "provider_type": "openai"}],
                 "endpoints": [
                     {
@@ -2687,6 +2669,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         ],
                     },
                 ],
+                "mode": "replace",
             }
         )
 
@@ -2717,7 +2700,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_ref = f"connection:{model_id}:{endpoint_name}:0:{connection_name}:0"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
+                "config_version": "1",
                 "providers": [
                     {
                         "name": "OpenAI",
@@ -2757,6 +2740,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         }
                     ],
                 },
+                "mode": "replace",
             }
         )
 
@@ -2801,7 +2785,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             export_response = await export_config(db=db, profile_id=1)
             exported = json.loads(export_response.body)
 
-        assert exported["version"] == 1
+        assert exported["config_version"] == "1"
         exported_endpoint = next(
             e for e in exported["endpoints"] if e["name"] == endpoint_name
         )
@@ -2844,7 +2828,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
 
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 1,
+                    "config_version": "1",
                     "providers": [
                         {
                             "name": "OpenAI",
@@ -2867,6 +2851,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                             "is_system": True,
                         }
                     ],
+                    "mode": "replace",
                 }
             )
 

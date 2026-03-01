@@ -198,6 +198,7 @@ class Connection(Base):
     custom_headers: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # JSON object of custom HTTP headers
+    forward_stream_options: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy
@@ -217,9 +218,6 @@ class Connection(Base):
     )
     pricing_config_version: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
-    )
-    forward_stream_options: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

@@ -167,7 +167,7 @@ async def spending_report(
 @router.delete("/requests", response_model=BatchDeleteResponse)
 async def delete_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
 ):

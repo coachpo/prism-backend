@@ -41,8 +41,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
-DEFAULT_CONFIG_IMPORT_MODE = "replace"
-
 
 def _normalize_optional_ref(value: str | None) -> str | None:
     if value is None:
@@ -177,7 +175,6 @@ async def export_config(
                         else "MAP_TO_OUTPUT"
                     ),
                     pricing_config_version=connection.pricing_config_version,
-                    forward_stream_options=connection.forward_stream_options,
                 )
             )
         exported_models.append(
@@ -219,7 +216,8 @@ async def export_config(
     )
 
     data = ConfigExportResponse(
-        version=1,
+        config_version="1",
+        mode="replace",
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
         endpoints=exported_endpoints,
@@ -280,12 +278,6 @@ async def export_config(
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if data.mode not in (None, DEFAULT_CONFIG_IMPORT_MODE):
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported import mode. Use 'replace'.",
-        )
-
     if not data.providers:
         raise HTTPException(status_code=400, detail="At least one provider is required")
 
@@ -493,13 +485,6 @@ async def import_config(
 ):
     _validate_import(data)
 
-    mode = data.mode or DEFAULT_CONFIG_IMPORT_MODE
-    if mode != DEFAULT_CONFIG_IMPORT_MODE:
-        raise HTTPException(
-            status_code=400,
-            detail="Unsupported import mode. Use 'replace'.",
-        )
-
     await db.execute(
         delete(EndpointFxRateSetting).where(
             EndpointFxRateSetting.profile_id == profile_id
@@ -628,7 +613,6 @@ async def import_config(
                 reasoning_price=connection_data.reasoning_price,
                 missing_special_token_price_policy=connection_data.missing_special_token_price_policy,
                 pricing_config_version=connection_data.pricing_config_version,
-                forward_stream_options=connection_data.forward_stream_options,
             )
             db.add(connection)
             connections_count += 1

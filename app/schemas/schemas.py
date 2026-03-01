@@ -51,6 +51,9 @@ class ProfileActivateRequest(BaseModel):
     expected_active_profile_version: int
 
 
+AuthType = Literal["openai", "anthropic", "gemini"]
+
+
 class ProviderBase(BaseModel):
     name: str
     provider_type: str
@@ -114,9 +117,9 @@ class ConnectionBase(BaseModel):
     is_active: bool = True
     priority: int = 0
     name: str | None = None
-    description: str | None = None
-    auth_type: str | None = None
+    auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
+    forward_stream_options: bool = False
     pricing_enabled: bool = False
     pricing_currency_code: str | None = None
     input_price: str | None = None
@@ -127,24 +130,6 @@ class ConnectionBase(BaseModel):
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
-    forward_stream_options: bool = False
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_connection_name_fields(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-
-        normalized = dict(data)
-        if normalized.get("name") is None and normalized.get("description") is not None:
-            normalized["name"] = normalized["description"]
-        if (
-            normalized.get("description") is None
-            and normalized.get("name") is not None
-        ):
-            normalized["description"] = normalized["name"]
-        return normalized
-
     @field_validator(
         "input_price",
         "output_price",
@@ -201,9 +186,9 @@ class ConnectionUpdate(BaseModel):
     is_active: bool | None = None
     priority: int | None = None
     name: str | None = None
-    description: str | None = None
-    auth_type: str | None = None
+    auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
+    forward_stream_options: bool | None = None
     pricing_enabled: bool | None = None
     pricing_currency_code: str | None = None
     input_price: str | None = None
@@ -214,24 +199,6 @@ class ConnectionUpdate(BaseModel):
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = (
         None
     )
-    forward_stream_options: bool | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_connection_name_fields(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-
-        normalized = dict(data)
-        if normalized.get("name") is None and normalized.get("description") is not None:
-            normalized["name"] = normalized["description"]
-        if (
-            normalized.get("description") is None
-            and normalized.get("name") is not None
-        ):
-            normalized["description"] = normalized["name"]
-        return normalized
-
     @field_validator(
         "input_price",
         "output_price",
@@ -281,9 +248,9 @@ class ConnectionResponse(BaseModel):
     is_active: bool
     priority: int
     name: str | None
-    description: str | None
-    auth_type: str | None
+    auth_type: AuthType | None
     custom_headers: dict[str, str] | None
+    forward_stream_options: bool
     pricing_enabled: bool
     pricing_currency_code: str | None
     input_price: str | None
@@ -293,7 +260,6 @@ class ConnectionResponse(BaseModel):
     reasoning_price: str | None
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
     pricing_config_version: int
-    forward_stream_options: bool
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
@@ -323,7 +289,6 @@ class ConnectionOwnerResponse(BaseModel):
     model_config_id: int
     model_id: str
     connection_name: str | None
-    connection_description: str | None
     endpoint_id: int
     endpoint_name: str
     endpoint_base_url: str
@@ -647,9 +612,9 @@ class ConfigConnectionExport(BaseModel):
     is_active: bool = True
     priority: int = 0
     name: str | None = None
-    description: str | None = None
-    auth_type: str | None = None
+    auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
+    forward_stream_options: bool = False
     pricing_enabled: bool = False
     pricing_currency_code: str | None = None
     input_price: str | None = None
@@ -661,23 +626,7 @@ class ConfigConnectionExport(BaseModel):
         "MAP_TO_OUTPUT"
     )
     pricing_config_version: int = 0
-    forward_stream_options: bool = False
 
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_connection_name_fields(cls, data: object) -> object:
-        if not isinstance(data, dict):
-            return data
-
-        normalized = dict(data)
-        if normalized.get("name") is None and normalized.get("description") is not None:
-            normalized["name"] = normalized["description"]
-        if (
-            normalized.get("description") is None
-            and normalized.get("name") is not None
-        ):
-            normalized["description"] = normalized["name"]
-        return normalized
 
 class ConfigModelExport(BaseModel):
     provider_type: str
@@ -713,7 +662,8 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[1] = 1
+    config_version: Literal["1"] = "1"
+    mode: Literal["replace"] = "replace"
     exported_at: datetime
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
@@ -722,15 +672,17 @@ class ConfigExportResponse(BaseModel):
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = []
 
 
+
 class ConfigImportRequest(BaseModel):
-    version: Literal[1]
+    config_version: Literal["1"]
     exported_at: datetime | None = None
     providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
-    mode: Literal["replace"] | None = None
+    mode: Literal["replace"]
+
 
 
 class ConfigImportResponse(BaseModel):
@@ -903,7 +855,6 @@ class ConnectionDropdownItem(BaseModel):
     id: int
     endpoint_id: int
     name: str | None
-    description: str | None
 
 
 class ConnectionDropdownResponse(BaseModel):

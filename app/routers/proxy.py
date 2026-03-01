@@ -27,7 +27,6 @@ from app.services.proxy_service import (
     extract_stream_flag,
     filter_response_headers,
     rewrite_model_in_body,
-    inject_stream_options,
 )
 from app.services.stats_service import log_request, extract_token_usage
 from app.services.costing_service import (
@@ -56,7 +55,7 @@ def _track_detached_task(task: asyncio.Task[None], *, name: str) -> None:
     task.add_done_callback(_on_done)
 
 
-# Gemini URL pattern: /v1beta/models/{model_id}:{action}
+# Gemini-style URL pattern: /models/{model_id}:{action}
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
 
 
@@ -170,7 +169,7 @@ async def _handle_proxy(
         )
 
     now_mono = time.monotonic()
-    endpoints_to_try = build_attempt_plan(model_config, now_mono)
+    endpoints_to_try = build_attempt_plan(profile_id, model_config, now_mono)
     if not endpoints_to_try:
         raise HTTPException(
             status_code=503,
@@ -242,10 +241,7 @@ async def _handle_proxy(
         )
         ep_desc = ep.description
         endpoint_body = raw_body
-        if endpoint_body:
-            endpoint_body = inject_stream_options(
-                endpoint_body, provider_type, ep.forward_stream_options
-            )
+
 
         start_time = time.monotonic()
 
@@ -753,9 +749,7 @@ async def proxy_catch_all(
     return await _handle_proxy(request, db, raw_body, f"/v1/{path}", profile_id)
 
 
-@router.api_route(
-    "/v1beta/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
-)
+@router.api_route("/v1beta/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy_catch_all_v1beta(
     request: Request,
     path: str,

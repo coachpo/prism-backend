@@ -1,5 +1,5 @@
 from datetime import datetime
-import asyncio
+
 import json
 import logging
 import time
@@ -159,7 +159,7 @@ async def create_connection(
     model_config_id: int,
     body: ConnectionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     model_result = await db.execute(
         select(ModelConfig).where(
@@ -169,12 +169,7 @@ async def create_connection(
     )
     model = model_result.scalar_one_or_none()
     if model is None:
-        model = await db.get(ModelConfig, model_config_id)
-        if model is None:
-            raise HTTPException(status_code=404, detail="Model configuration not found")
-        model_profile_id = getattr(model, "profile_id", None)
-        if model_profile_id is not None and model_profile_id != profile_id:
-            raise HTTPException(status_code=404, detail="Model configuration not found")
+        raise HTTPException(status_code=404, detail="Model configuration not found")
     if model.model_type == "proxy":
         raise HTTPException(
             status_code=400, detail="Cannot add connections to a proxy model"
@@ -215,6 +210,7 @@ async def create_connection(
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
+        forward_stream_options=body.forward_stream_options,
         pricing_enabled=body.pricing_enabled,
         pricing_currency_code=body.pricing_currency_code,
         input_price=body.input_price,
@@ -223,7 +219,6 @@ async def create_connection(
         cache_creation_price=body.cache_creation_price,
         reasoning_price=body.reasoning_price,
         missing_special_token_price_policy=body.missing_special_token_price_policy,
-        forward_stream_options=body.forward_stream_options,
         pricing_config_version=1 if body.pricing_enabled else 0,
     )
     db.add(connection)
@@ -241,7 +236,7 @@ async def update_connection(
     connection_id: int,
     body: ConnectionUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     connection = await _load_connection_or_404(
         db,
@@ -312,7 +307,7 @@ async def update_connection(
 async def delete_connection(
     connection_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     connection_result = await db.execute(
         select(Connection).where(
@@ -320,20 +315,12 @@ async def delete_connection(
             Connection.profile_id == profile_id,
         )
     )
-    scalar_one_or_none = connection_result.scalar_one_or_none()
-    if asyncio.iscoroutine(scalar_one_or_none):
-        scalar_one_or_none = await scalar_one_or_none
-    connection = scalar_one_or_none
-    if connection is None or not isinstance(connection, Connection):
-        legacy_connection = await db.get(Connection, connection_id)
-        if legacy_connection is None:
-            raise HTTPException(status_code=404, detail="Connection not found")
-        legacy_profile_id = getattr(legacy_connection, "profile_id", None)
-        if legacy_profile_id is not None and legacy_profile_id != profile_id:
-            raise HTTPException(status_code=404, detail="Connection not found")
-        connection = legacy_connection
+    connection = connection_result.scalar_one_or_none()
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Connection not found")
     mark_connection_recovered(profile_id, connection.id)
     await db.delete(connection)
+    await db.flush()
 @router.post(
     "/api/connections/{connection_id}/health-check",
     response_model=HealthCheckResponse,
@@ -342,7 +329,7 @@ async def health_check_connection(
     connection_id: int,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     result = await db.execute(
         select(Connection)
@@ -483,7 +470,7 @@ async def health_check_connection(
 async def get_connection_owner(
     connection_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     result = await db.execute(
         select(Connection)
@@ -507,7 +494,6 @@ async def get_connection_owner(
         model_config_id=connection.model_config_id,
         model_id=connection.model_config_rel.model_id,
         connection_name=connection.name,
-        connection_description=connection.name,
         endpoint_id=connection.endpoint_rel.id,
         endpoint_name=connection.endpoint_rel.name,
         endpoint_base_url=connection.endpoint_rel.base_url,

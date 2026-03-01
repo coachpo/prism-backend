@@ -107,7 +107,7 @@ async def get_audit_log(
 @router.delete("/logs", response_model=AuditLogDeleteResponse)
 async def delete_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)] = 1,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
     before: datetime | None = None,
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),

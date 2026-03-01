@@ -30,6 +30,7 @@ PROVIDER_AUTH = {
 }
 
 FAILOVER_STATUS_CODES = {403, 429, 500, 502, 503, 529}
+_DOUBLE_SEGMENT_RE = re.compile(r"/(v\d+)/(?:\1)(?:/|$)")
 
 # Hop-by-hop headers that MUST NOT be forwarded (RFC 2616 §13.5.1)
 HOP_BY_HOP_HEADERS = frozenset(
@@ -56,7 +57,7 @@ CLIENT_AUTH_HEADERS = frozenset(
 )
 
 
-_DOUBLE_SEGMENT_RE = re.compile(r"(/v\d+)\1")
+
 
 
 def normalize_base_url(raw_url: str) -> str:
@@ -109,17 +110,6 @@ def build_upstream_url(
     else:
         final_path = f"{base_path}{req_path}"
 
-    if _DOUBLE_SEGMENT_RE.search(final_path):
-        fixed_path = _DOUBLE_SEGMENT_RE.sub(r"\1", final_path)
-        logger.warning(
-            "Double version segment detected in URL path: %s -> auto-corrected to %s "
-            "(base_url=%s, request_path=%s)",
-            final_path,
-            fixed_path,
-            endpoint_obj.base_url,
-            request_path,
-        )
-        final_path = fixed_path
 
     return str(parsed.copy_with(path=final_path))
 
@@ -141,8 +131,9 @@ def build_upstream_headers(
     5. Blocklist sanitization applied twice: on client headers and on final merged result
     """
     auth_key = getattr(connection, "auth_type", None) or provider_type
-    config = PROVIDER_AUTH.get(auth_key, PROVIDER_AUTH["openai"])
-
+    config = PROVIDER_AUTH.get(auth_key)
+    if config is None:
+        raise ValueError(f"Unsupported auth_type: {auth_key}")
     endpoint_obj = endpoint or connection
     api_key = getattr(endpoint_obj, "api_key", None)
     custom_headers = getattr(connection, "custom_headers", None)
@@ -299,6 +290,24 @@ def rewrite_model_in_body(raw_body: bytes | None, target_model_id: str) -> bytes
         return raw_body
 
 
+def inject_stream_options(
+    raw_body: bytes | None,
+    provider_type: str,
+    *,
+    forward_stream_options: bool = False,
+ ) -> bytes | None:
+    if not raw_body or forward_stream_options:
+        return raw_body
+    try:
+        parsed = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return raw_body
+    if not isinstance(parsed, dict) or "stream_options" not in parsed:
+        return raw_body
+    parsed.pop("stream_options", None)
+    return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
+
+
 def extract_stream_flag(raw_body: bytes) -> bool:
     try:
         parsed = json.loads(raw_body)
@@ -307,32 +316,4 @@ def extract_stream_flag(raw_body: bytes) -> bool:
         return False
 
 
-def inject_stream_options(
-    raw_body: bytes | None, provider_type: str, forward_stream_options: bool = False
-) -> bytes | None:
-    """Strip OpenAI SDK stream_options for cross-provider compatibility.
 
-    Some upstreams (including OpenAI-compatible hosts) reject stream_options.
-    Prism accepts OpenAI-shaped payloads, so this proxy layer removes the field
-    before forwarding regardless of provider type/streaming mode.
-
-    If forward_stream_options is True, the body is returned unchanged.
-    """
-    _ = provider_type
-    if forward_stream_options:
-        return raw_body
-    if not raw_body:
-        return raw_body
-
-    try:
-        parsed = json.loads(raw_body)
-        if not isinstance(parsed, dict):
-            return raw_body
-
-        if "stream_options" not in parsed:
-            return raw_body
-
-        parsed.pop("stream_options", None)
-        return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return raw_body
