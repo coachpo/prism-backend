@@ -436,15 +436,6 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         f"'{model.redirect_to}'"
                     ),
                 )
-        if model.lb_strategy == "round_robin":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Model '{model.model_id}' uses unsupported lb_strategy "
-                    "'round_robin'. Use 'single' or 'failover'."
-                ),
-            )
-
     if data.user_settings is not None:
         seen_fx: set[tuple[str, str]] = set()
         for mapping in data.user_settings.endpoint_fx_mappings:

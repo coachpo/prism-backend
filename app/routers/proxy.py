@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["proxy"])
 
-MODEL_ID_HEADER = "x-model-id"
 
 
 def _track_detached_task(task: asyncio.Task[None], *, name: str) -> None:
@@ -95,9 +94,6 @@ def _resolve_model_id(
         model_id = extract_model_from_body(raw_body)
         if model_id:
             return model_id
-    header_id = request.headers.get(MODEL_ID_HEADER)
-    if header_id:
-        return header_id
     # Gemini-style: model is in the URL path, not the body
     return _extract_model_from_path(request_path)
 
@@ -115,10 +111,9 @@ async def _handle_proxy(
             status_code=400,
             detail=(
                 "Cannot determine model for routing. "
-                "Include 'model' in the request body or set the X-Model-Id header."
+                "Include 'model' in the request body or use a Gemini-style model path."
             ),
         )
-
     model_config = await get_model_config_with_connections(db, profile_id, model_id)
     if not model_config:
         logger.warning(
@@ -239,7 +234,7 @@ async def _handle_proxy(
             blocklist_rules,
             endpoint=ep.endpoint_rel,
         )
-        ep_desc = ep.description
+        ep_desc = ep.name
         endpoint_body = raw_body
 
 

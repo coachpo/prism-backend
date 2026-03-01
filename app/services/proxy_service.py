@@ -290,23 +290,6 @@ def rewrite_model_in_body(raw_body: bytes | None, target_model_id: str) -> bytes
         return raw_body
 
 
-def inject_stream_options(
-    raw_body: bytes | None,
-    provider_type: str,
-    *,
-    forward_stream_options: bool = False,
- ) -> bytes | None:
-    if not raw_body or forward_stream_options:
-        return raw_body
-    try:
-        parsed = json.loads(raw_body)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return raw_body
-    if not isinstance(parsed, dict) or "stream_options" not in parsed:
-        return raw_body
-    parsed.pop("stream_options", None)
-    return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
-
 
 def extract_stream_flag(raw_body: bytes) -> bool:
     try:

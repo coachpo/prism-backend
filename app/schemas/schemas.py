@@ -119,7 +119,6 @@ class ConnectionBase(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
-    forward_stream_options: bool = False
     pricing_enabled: bool = False
     pricing_currency_code: str | None = None
     input_price: str | None = None
@@ -188,7 +187,6 @@ class ConnectionUpdate(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
-    forward_stream_options: bool | None = None
     pricing_enabled: bool | None = None
     pricing_currency_code: str | None = None
     input_price: str | None = None
@@ -250,7 +248,6 @@ class ConnectionResponse(BaseModel):
     name: str | None
     auth_type: AuthType | None
     custom_headers: dict[str, str] | None
-    forward_stream_options: bool
     pricing_enabled: bool
     pricing_currency_code: str | None
     input_price: str | None
@@ -614,7 +611,6 @@ class ConfigConnectionExport(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
-    forward_stream_options: bool = False
     pricing_enabled: bool = False
     pricing_currency_code: str | None = None
     input_price: str | None = None

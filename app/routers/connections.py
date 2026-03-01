@@ -210,7 +210,6 @@ async def create_connection(
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
-        forward_stream_options=body.forward_stream_options,
         pricing_enabled=body.pricing_enabled,
         pricing_currency_code=body.pricing_currency_code,
         input_price=body.input_price,

@@ -170,12 +170,10 @@ def _extract_special_usage(
     prompt_details = (
         usage.get("prompt_tokens_details")
         or usage.get("input_tokens_details")
-        or usage.get("input_token_details")
     )
     completion_details = (
         usage.get("completion_tokens_details")
         or usage.get("output_tokens_details")
-        or usage.get("output_token_details")
     )
 
     cache_read_input_tokens = None
@@ -722,7 +720,7 @@ def resolve_time_preset(
     preset: str | None,
     from_time: datetime | None,
     to_time: datetime | None,
-) -> tuple[datetime | None, datetime | None]:
+ ) -> tuple[datetime | None, datetime | None]:
     if preset in (None, "", "custom"):
         return from_time, to_time
 

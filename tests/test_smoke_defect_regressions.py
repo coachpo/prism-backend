@@ -11,7 +11,6 @@ from app.services.proxy_service import (
     rewrite_model_in_body,
     extract_model_from_body,
     build_upstream_headers,
-    inject_stream_options,
 )
 from app.services.stats_service import log_request
 
@@ -387,10 +386,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "is_active",
             "priority",
             "name",
-            "name",
             "auth_type",
             "custom_headers",
-            "forward_stream_options",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -1449,163 +1446,23 @@ class TestHeaderBlocklist:
         assert config.header_blocklist_rules[0].pattern == "x-custom-"
 
 
-class TestDEF009_StreamOptionsCompatibility:
-    def test_inject_stream_options_for_official_openai_host(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_inject_stream_options_for_all_openai_upstreams(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_non_openai_provider_body_is_unchanged(self):
-        body = json.dumps(
-            {
-                "model": "claude-sonnet",
-                "stream": True,
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "anthropic")
-        assert result == body
-
-    def test_strip_stream_options_for_non_openai_provider(self):
-        body = json.dumps(
-            {
-                "model": "claude-sonnet",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "anthropic")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_strip_stream_options_even_when_stream_is_false(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": False,
-                "stream_options": {"include_usage": True},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_inject_stream_options_for_azure_openai_host(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "stream_options": {"custom_flag": "preserve-me"},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_inject_stream_options_keeps_additional_keys_on_openai(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "stream_options": {"include_usage": False, "trace_id": "abc123"},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_forward_stream_options_true_preserves_body(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai", forward_stream_options=True)
-        assert result == body
-
-    def test_forward_stream_options_false_strips(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai", forward_stream_options=False)
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_forward_stream_options_no_stream_options_unchanged(self):
-        body = json.dumps(
-            {
-                "model": "gpt-4o-mini",
-                "stream": True,
-                "messages": [{"role": "user", "content": "hi"}],
-            }
-        ).encode("utf-8")
-
-        result = inject_stream_options(body, "openai", forward_stream_options=True)
-        assert result == body
-
-    def test_config_export_includes_forward_stream_options(self):
+class TestDEF009_ConnectionDefaultsPersist:
+    """DEF-009 (P1): connection schema defaults and creation path remain intact."""
+    def test_config_export_connection_defaults(self):
         from app.schemas.schemas import ConfigConnectionExport
 
         export = ConfigConnectionExport(
             endpoint_ref="endpoint:1",
             connection_ref="connection:stream:1",
-            forward_stream_options=True,
+            pricing_enabled=True,
         )
-        assert export.forward_stream_options is True
+        assert export.pricing_enabled is True
 
         export_default = ConfigConnectionExport(connection_ref="connection:stream:2", endpoint_ref="endpoint:1")
-        assert export_default.forward_stream_options is False
+        assert export_default.pricing_enabled is False
 
     @pytest.mark.asyncio
-    async def test_create_endpoint_persists_forward_stream_options(self):
+    async def test_create_endpoint_persists_pricing_enabled(self):
         from app.models.models import ModelConfig
         from app.routers.connections import create_connection
         from app.schemas.schemas import ConnectionCreate, EndpointCreate
@@ -1630,7 +1487,7 @@ class TestDEF009_StreamOptionsCompatibility:
 
         with patch(
             "app.routers.connections._load_connection_or_404",
-            AsyncMock(return_value=MagicMock(forward_stream_options=True)),
+            AsyncMock(return_value=MagicMock(pricing_enabled=True)),
         ):
             connection = await create_connection(
                 model_config_id=77,
@@ -1640,13 +1497,14 @@ class TestDEF009_StreamOptionsCompatibility:
                         base_url="https://api.example.com/v1",
                         api_key="sk-test",
                     ),
-                    forward_stream_options=True,
+                    pricing_enabled=True,
+                    pricing_currency_code="USD",
                 ),
                 db=mock_db,
                 profile_id=1,
             )
 
-        assert connection.forward_stream_options is True
+        assert connection.pricing_enabled is True
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
@@ -1665,10 +1523,10 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
     async def test_update_endpoint_disable_clears_recovery_state(self):
         from app.routers.connections import update_connection
         from app.schemas.schemas import ConnectionUpdate
-        from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
+        from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(401)
-        mark_endpoint_failed(connection.id, 60, 10.0)
+        mark_connection_failed(1, connection.id, 60, 10.0)
         assert (1, connection.id) in _recovery_state
 
         mock_db = AsyncMock()
@@ -1695,10 +1553,10 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
     @pytest.mark.asyncio
     async def test_delete_endpoint_clears_recovery_state(self):
         from app.routers.connections import delete_connection
-        from app.services.loadbalancer import _recovery_state, mark_endpoint_failed
+        from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(402)
-        mark_endpoint_failed(connection.id, 60, 10.0)
+        mark_connection_failed(1, connection.id, 60, 10.0)
         assert (1, connection.id) in _recovery_state
 
         mock_db = AsyncMock()
@@ -1881,8 +1739,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
                 toggle_applied = False
 
-                def build_plan_with_assert(*args):
-                    plan = real_build_attempt_plan(*args)
+                def build_plan_with_assert(profile_id, model_config, now_mono):
+                    plan = real_build_attempt_plan(
+                        profile_id, model_config, now_mono
+                    )
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
                     return plan
 
@@ -2232,38 +2092,6 @@ class TestDEF018_SpecialTokensNeverCopiedFromOutput:
         assert usage["reasoning_tokens"] == 0
 
 
-class TestDEF019_StripStreamOptionsHostAgnostic:
-    """DEF-019: stream_options is stripped for any host when provider_type is openai."""
-
-    def test_inject_for_openai_provider_type(self):
-        body = json.dumps({"model": "gpt-4", "stream": True}).encode("utf-8")
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_no_inject_for_anthropic_provider_type(self):
-        body = json.dumps({"model": "claude-3", "stream": True}).encode("utf-8")
-        result = inject_stream_options(body, "anthropic")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-    def test_strip_for_third_party_openai_compatible_host(self):
-        """Third-party host using openai provider_type should strip stream_options."""
-        body = json.dumps(
-            {
-                "model": "custom-model",
-                "stream": True,
-                "stream_options": {"include_usage": True},
-            }
-        ).encode("utf-8")
-        result = inject_stream_options(body, "openai")
-        assert result is not None
-        parsed = json.loads(result)
-        assert "stream_options" not in parsed
-
-
 class TestDEF020_FrontendBuildTypeCheck:
     """DEF-020: Frontend build confirms renamed snapshot policy field compiles."""
 
@@ -2324,15 +2152,13 @@ class TestDEF021_StreamingCancellationResilience:
         endpoint.base_url = "https://api.openai.com/v1"
         endpoint.api_key = "sk-test"
         endpoint.auth_type = None
-        endpoint.description = "primary"
-        endpoint.forward_stream_options = False
+        endpoint.name = "primary"
 
         connection = MagicMock()
         connection.id = 101
         connection.endpoint_id = 201
         connection.auth_type = None
         connection.name = "primary"
-        connection.forward_stream_options = False
         connection.endpoint_rel = endpoint
 
         model_config = MagicMock()

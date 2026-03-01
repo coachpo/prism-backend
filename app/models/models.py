@@ -13,7 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
  )
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 
@@ -191,14 +191,12 @@ class Connection(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column("description", Text, nullable=True)
-    description = synonym("name")
     auth_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # null=use provider default; "openai", "anthropic" to override
     custom_headers: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # JSON object of custom HTTP headers
-    forward_stream_options: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy

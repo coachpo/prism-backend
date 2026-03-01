@@ -237,7 +237,7 @@ def compute_cost_fields(
         result["unpriced_reason"] = "MISSING_TOKEN_USAGE"
         return result
 
-    policy = connection.missing_special_token_price_policy or "MAP_TO_OUTPUT"
+    policy = connection.missing_special_token_price_policy
     input_count = max(input_tokens or 0, 0)
     output_count = max(output_tokens or 0, 0)
 

@@ -72,18 +72,9 @@ def get_active_connections(model_config: ModelConfig) -> list[Connection]:
     return sorted(active_connections, key=lambda connection: connection.priority)
 
 
-def build_attempt_plan(*args) -> list[Connection]:
-    if len(args) == 3:
-        profile_id, model_config, now_mono = args
-    elif len(args) == 2:
-        model_config, now_mono = args
-        profile_id = 1
-    else:
-        raise TypeError(
-            "build_attempt_plan expects either (profile_id, model_config, now_mono) "
-            "or (model_config, now_mono)"
-        )
-
+def build_attempt_plan(
+    profile_id: int, model_config: ModelConfig, now_mono: float
+ ) -> list[Connection]:
     active = get_active_connections(model_config)
     if not active:
         logger.warning(
@@ -158,9 +149,3 @@ def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
         )
 
 
-def mark_endpoint_failed(connection_id: int, cooldown_seconds: float, now_mono: float) -> None:
-    mark_connection_failed(1, connection_id, cooldown_seconds, now_mono)
-
-
-def mark_endpoint_recovered(connection_id: int) -> None:
-    mark_connection_recovered(1, connection_id)
