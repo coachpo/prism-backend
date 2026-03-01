@@ -38,7 +38,7 @@ app/
 ```
 
 ## RUNTIME SEMANTICS
-- Management endpoints (`/api/*`) use effective profile scope: `X-Profile-Id` when present, otherwise active-profile fallback.
+- Management endpoints (`/api/*`) use effective profile scope: explicit `X-Profile-Id` on profile-scoped routes (`/api/profiles/*` are global).
 - Proxy endpoints (`/v1/*`, `/v1beta/*`) always use active profile scope via `get_active_profile_id`.
 - Profiles are soft-deletable only when inactive; create is capped at 10 non-deleted profiles; activation is CAS-guarded.
 - Providers are global shared seed rows (`openai`, `anthropic`, `gemini`) and not profile-scoped.
