@@ -166,12 +166,12 @@ class TestProfileCRUDAndLifecycle:
 
         result = await activate_profile(profile_id=2, body=body, db=mock_db)
 
-        # Verify atomic switch
+        # Verify atomic switch in two phases (deactivate flush -> activate flush)
         assert current_active.is_active is False
         assert current_active.version == 6
         assert target_profile.is_active is True
         assert target_profile.version == 4
-
+        assert mock_db.flush.await_count == 2
     @pytest.mark.asyncio
     async def test_activate_profile_with_stale_cas_fails(self):
         """Profile activation fails with stale CAS payload."""
@@ -198,6 +198,41 @@ class TestProfileCRUDAndLifecycle:
         assert exc_info.value.status_code == 409
         assert "version mismatch" in exc_info.value.detail
 
+    @pytest.mark.asyncio
+    async def test_activate_profile_conflict_returns_409(self):
+        """IntegrityError during activation becomes 409 conflict."""
+        mock_db = AsyncMock()
+
+        current_active = MagicMock()
+        current_active.id = 1
+        current_active.version = 5
+        current_active.is_active = True
+
+        active_result = MagicMock()
+        active_result.scalar_one_or_none.return_value = current_active
+
+        target_profile = MagicMock()
+        target_profile.id = 2
+        target_profile.is_active = False
+        target_profile.version = 3
+
+        target_result = MagicMock()
+        target_result.scalar_one_or_none.return_value = target_profile
+
+        mock_db.execute.side_effect = [active_result, target_result]
+        mock_db.flush = AsyncMock()
+        from sqlalchemy.exc import IntegrityError
+        mock_db.flush.side_effect = [None, IntegrityError("stmt", "params", Exception("dup"))]
+
+        body = ProfileActivateRequest(
+            expected_active_profile_id=1, expected_active_profile_version=5
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await activate_profile(profile_id=2, body=body, db=mock_db)
+
+        assert exc_info.value.status_code == 409
+        assert "conflict" in exc_info.value.detail.lower()
     @pytest.mark.asyncio
     async def test_delete_active_profile_fails(self):
         """Active profile cannot be deleted."""

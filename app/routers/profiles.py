@@ -3,6 +3,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
@@ -172,16 +173,23 @@ async def activate_profile(
     if target_profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
-    # Perform atomic switch
+    # Deactivate first to avoid transient unique-index violations.
     current_active.is_active = False
     current_active.version += 1
     current_active.updated_at = datetime.utcnow()
-
-    target_profile.is_active = True
-    target_profile.version += 1
-    target_profile.updated_at = datetime.utcnow()
-
     await db.flush()
+
+    try:
+        target_profile.is_active = True
+        target_profile.version += 1
+        target_profile.updated_at = datetime.utcnow()
+        await db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Profile activation conflict. Please retry.",
+        ) from exc
+
     await db.refresh(target_profile)
     return target_profile
 
