@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def log_request(
     *,
     model_id: str,
-    profile_id: int = 1,
+    profile_id: int,
     provider_type: str,
     endpoint_id: int | None,
     connection_id: int | None,
@@ -964,10 +964,7 @@ async def get_spending_report(
     unpriced_reason_rows = (
         await db.execute(
             select(
-                func.coalesce(
-                    RequestLog.unpriced_reason,
-                    literal("LEGACY_NO_COST_DATA"),
-                ).label("reason"),
+                RequestLog.unpriced_reason.label("reason"),
                 func.count().label("reason_count"),
             )
             .where(
@@ -995,7 +992,10 @@ async def get_spending_report(
     for row in unpriced_reason_rows:
         reason = row[0]
         reason_count = row[1]
-        unpriced_breakdown[str(reason)] = int(reason_count or 0)
+        key = str(reason or "UNKNOWN")
+        unpriced_breakdown[key] = unpriced_breakdown.get(key, 0) + int(
+            reason_count or 0
+        )
 
     return {
         "summary": {

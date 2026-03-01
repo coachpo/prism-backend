@@ -103,7 +103,7 @@ async def _handle_proxy(
     db: AsyncSession,
     raw_body: bytes | None,
     request_path: str,
-    profile_id: int = 1,
+    profile_id: int,
  ):
     model_id = _resolve_model_id(request, raw_body, request_path)
     if not model_id:

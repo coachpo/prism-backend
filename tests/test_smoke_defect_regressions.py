@@ -34,6 +34,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
         ):
             await log_request(
                 model_id="test-model",
+                profile_id=1,
                 provider_type="openai",
                 endpoint_id=1,
                 connection_id=1,
@@ -64,6 +65,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
         ):
             await log_request(
                 model_id="test-model",
+                profile_id=1,
                 provider_type="openai",
                 endpoint_id=1,
                 connection_id=1,
@@ -1066,6 +1068,7 @@ class TestDEF007_EndpointIdentityInLogs:
 
             result = await log_request(
                 model_id="test-model",
+                profile_id=1,
                 provider_type="openai",
                 endpoint_id=1,
                 connection_id=1,
@@ -1094,6 +1097,7 @@ class TestDEF007_EndpointIdentityInLogs:
         ):
             result = await log_request(
                 model_id="test-model",
+                profile_id=1,
                 provider_type="openai",
                 endpoint_id=1,
                 connection_id=1,
@@ -1118,6 +1122,7 @@ class TestDEF007_EndpointIdentityInLogs:
         ):
             result = await log_request(
                 model_id="test-model",
+                profile_id=1,
                 provider_type="openai",
                 endpoint_id=1,
                 connection_id=1,
@@ -1144,6 +1149,7 @@ class TestDEF007_EndpointIdentityInLogs:
         ):
             await record_audit_log(
                 request_log_id=1,
+                profile_id=1,
                 provider_id=1,
                 model_id="gpt-4o-mini",
                 request_method="POST",
@@ -1610,7 +1616,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         from starlette.requests import Request
 
         from app.core.database import AsyncSessionLocal
-        from app.models.models import Connection, Endpoint, ModelConfig, Provider
+        from app.models.models import Connection, Endpoint, ModelConfig, Profile, Provider
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
             _recovery_state,
@@ -1649,6 +1655,11 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
         try:
             async with AsyncSessionLocal() as seed_db:
+                profile = Profile(
+                    name="DEF012 Profile",
+                    is_active=False,
+                    version=0,
+                )
                 provider = Provider(
                     name="OpenAI DEF012",
                     provider_type="openai",
@@ -1657,6 +1668,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 )
                 model = ModelConfig(
                     provider=provider,
+                    profile=profile,
                     model_id="gpt-4o-mini-def012",
                     display_name="GPT-4o Mini DEF012",
                     model_type="native",
@@ -1667,26 +1679,28 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 )
                 primary_endpoint = Endpoint(
                     name="primary",
+                    profile=profile,
                     base_url="https://primary.example.com/v1",
                     api_key="sk-primary",
                 )
                 secondary_endpoint = Endpoint(
                     name="secondary",
+                    profile=profile,
                     base_url="https://secondary.example.com/v1",
                     api_key="sk-secondary",
                 )
                 primary = Connection(
                     model_config_rel=model,
+                    profile=profile,
                     endpoint_rel=primary_endpoint,
                     is_active=True,
-                    endpoint_id=1,
                     priority=0,
                     name="primary",
                 )
                 secondary = Connection(
                     model_config_rel=model,
+                    profile=profile,
                     endpoint_rel=secondary_endpoint,
-                    endpoint_id=2,
                     is_active=True,
                     priority=1,
                     name="secondary",
@@ -1694,6 +1708,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 seed_db.add_all(
                     [
                         provider,
+                        profile,
                         model,
                         primary_endpoint,
                         secondary_endpoint,
@@ -1704,6 +1719,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 await seed_db.commit()
                 await seed_db.refresh(primary)
                 await seed_db.refresh(secondary)
+                profile_id = profile.id
                 primary_id = primary.id
                 secondary_id = secondary.id
 
@@ -1780,6 +1796,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                         db=db,
                         raw_body=raw_body,
                         request_path="/v1/chat/completions",
+                        profile_id=profile_id,
                     )
 
                 assert response.status_code == 200
@@ -2265,6 +2282,7 @@ class TestDEF021_StreamingCancellationResilience:
                 db=mock_db,
                 raw_body=raw_body,
                 request_path="/v1/responses",
+                profile_id=1,
             )
 
             assert response.status_code == 200
@@ -2366,6 +2384,7 @@ class TestDEF021_StreamingCancellationResilience:
                 db=mock_db,
                 raw_body=raw_body,
                 request_path="/v1/responses",
+                profile_id=1,
             )
 
             assert response.status_code == 200
@@ -2511,7 +2530,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
     async def test_import_v1_roundtrip_preserves_logical_refs(self):
         from sqlalchemy import select
         from app.core.database import AsyncSessionLocal, engine
-        from app.models.models import Connection, Endpoint, EndpointFxRateSetting
+        from app.models.models import Connection, Endpoint, EndpointFxRateSetting, Profile
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
 
@@ -2571,6 +2590,17 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         )
 
         async with AsyncSessionLocal() as db:
+            existing_profile = await db.get(Profile, 1)
+            if existing_profile is None:
+                db.add(
+                    Profile(
+                        id=1,
+                        name="DEF024 Profile",
+                        is_active=False,
+                        version=0,
+                    )
+                )
+                await db.flush()
             response = await import_config(data=payload, db=db, profile_id=1)
             await db.commit()
             assert response.endpoints_imported == 1
@@ -2649,9 +2679,21 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
 
         async with AsyncSessionLocal() as db:
             from app.main import SYSTEM_BLOCKLIST_DEFAULTS
+            from app.models.models import Profile
 
             system_rule = SYSTEM_BLOCKLIST_DEFAULTS[0]
 
+            existing_profile = await db.get(Profile, 1)
+            if existing_profile is None:
+                db.add(
+                    Profile(
+                        id=1,
+                        name="DEF026 Profile",
+                        is_active=False,
+                        version=0,
+                    )
+                )
+                await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
                     "config_version": "1",
@@ -2689,6 +2731,8 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             assert response.connections_imported == 0
 
             await db.rollback()
+
+
 class TestDEF025_ModelHealthStatsProfileScope:
     @pytest.mark.asyncio
     async def test_list_models_passes_profile_id_to_health_stats(self):

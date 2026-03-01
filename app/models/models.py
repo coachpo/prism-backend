@@ -104,7 +104,7 @@ class ModelConfig(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), nullable=False)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
@@ -145,7 +145,7 @@ class Endpoint(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -180,7 +180,7 @@ class Connection(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     model_config_id: Mapped[int] = mapped_column(
         ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False
@@ -249,7 +249,7 @@ class RequestLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -333,7 +333,7 @@ class UserSetting(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     report_currency_code: Mapped[str] = mapped_column(
         String(3), default="USD", nullable=False
@@ -370,7 +370,7 @@ class EndpointFxRateSetting(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     endpoint_id: Mapped[int] = mapped_column(
@@ -438,7 +438,7 @@ class AuditLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True, default=1
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     request_log_id: Mapped[int | None] = mapped_column(
         Integer,
