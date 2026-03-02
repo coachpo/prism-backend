@@ -15,7 +15,9 @@ from app.models import models  # noqa: F401
 config = context.config
 
 if config.config_file_name is not None and config.get_section("formatters") is not None:
-    fileConfig(config.config_file_name)
+    # Keep existing application loggers (e.g., uvicorn) when Alembic config is loaded
+    # during runtime startup migrations.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 if config.get_main_option("script_location") == "":
     config.set_main_option("script_location", str(Path(__file__).resolve().parent))
