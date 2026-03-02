@@ -573,6 +573,206 @@ class TestDEF005_GeminiPathModelRewrite:
         )
 
 
+class TestDEF059_HealthCheckRequestBuilder:
+    """DEF-059 (P0): health checks must use provider-native paths and payloads."""
+
+    def test_openai_health_check_uses_responses_endpoint(self):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request("openai", "gpt-4o-mini")
+
+        assert path == "/v1/responses"
+        assert body == {"model": "gpt-4o-mini", "input": "hi"}
+
+    def test_gemini_health_check_uses_generate_content_endpoint(self):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request(
+            "gemini", "gemini-3.1-pro-preview"
+        )
+
+        assert path == "/v1beta/models/gemini-3.1-pro-preview:generateContent"
+        assert body["contents"][0]["parts"][0]["text"] == "hi"
+        assert body["generationConfig"]["maxOutputTokens"] == 1
+
+    def test_cross_provider_model_id_still_uses_provider_native_path(self):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request(
+            "anthropic", "gemini-3.1-pro-preview"
+        )
+
+        assert path == "/v1/messages"
+        assert body["model"] == "gemini-3.1-pro-preview"
+
+
+class TestDEF060_ProxyProviderPathValidation:
+    """DEF-060 (P0): proxy must fail fast on provider/path mismatch."""
+
+    @staticmethod
+    def _build_request(path: str):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        app = FastAPI()
+        app.state.http_client = AsyncMock()
+        return Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": path,
+                "raw_path": path.encode("utf-8"),
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+    def test_validation_rejects_gemini_native_path_for_anthropic(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_path_compatibility(
+                "anthropic",
+                "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+
+    def test_validation_rejects_anthropic_messages_path_for_openai(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_path_compatibility(
+                "openai",
+                "/v1/messages",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'openai'" in exc_info.value.detail
+
+    def test_validation_rejects_generic_openai_path_for_anthropic(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_path_compatibility(
+                "anthropic",
+                "/v1/chat/completions",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+
+    def test_validation_allows_gemini_native_path_for_gemini(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        _validate_provider_path_compatibility(
+            "gemini",
+            "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
+        )
+
+
+    @pytest.mark.asyncio
+    async def test_handle_proxy_fails_before_upstream_attempt_on_mismatch(self):
+        from app.routers.proxy import _handle_proxy
+
+        request_path = "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent"
+        request = self._build_request(request_path)
+        raw_body = json.dumps(
+            {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "anthropic"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gemini-3.1-pro-preview"
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan") as attempt_plan_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await _handle_proxy(
+                    request=request,
+                    db=AsyncMock(),
+                    raw_body=raw_body,
+                    request_path=request_path,
+                    profile_id=1,
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+        attempt_plan_mock.assert_not_called()
+
+
+class TestDEF061_ConnectionResponseEndpointMapping:
+    """DEF-061 (P1): ConnectionResponse should map endpoint_rel to endpoint."""
+
+    def test_connection_response_maps_endpoint_rel_attribute(self):
+        from datetime import datetime
+        from types import SimpleNamespace
+        from app.schemas.schemas import ConnectionResponse
+
+        now = datetime.utcnow()
+        endpoint = SimpleNamespace(
+            id=3,
+            profile_id=1,
+            name="primary-endpoint",
+            base_url="https://api.openai.com/v1",
+            api_key="sk-test",
+            created_at=now,
+            updated_at=now,
+        )
+        connection = SimpleNamespace(
+            id=9,
+            profile_id=1,
+            model_config_id=2,
+            endpoint_id=3,
+            endpoint_rel=endpoint,
+            is_active=True,
+            priority=0,
+            name="primary",
+            auth_type=None,
+            custom_headers=None,
+            pricing_enabled=False,
+            pricing_currency_code=None,
+            input_price=None,
+            output_price=None,
+            cached_input_price=None,
+            cache_creation_price=None,
+            reasoning_price=None,
+            missing_special_token_price_policy="MAP_TO_OUTPUT",
+            pricing_config_version=0,
+            health_status="unknown",
+            health_detail=None,
+            last_health_check=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        response = ConnectionResponse.model_validate(connection, from_attributes=True)
+
+        assert response.endpoint is not None
+        assert response.endpoint.id == 3
+        assert response.endpoint.name == "primary-endpoint"
+
+
 class TestDEF006_ConfigExportImportFieldCoverage:
     """DEF-006 (P0): config export/import must preserve all mutable fields including custom_headers."""
 

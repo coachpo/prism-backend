@@ -43,6 +43,31 @@ PRICING_FIELDS = {
     "missing_special_token_price_policy",
 }
 
+def _build_health_check_request(
+    provider_type: str, model_id: str
+ ) -> tuple[str, dict[str, object]]:
+    if provider_type == "openai":
+        return "/v1/responses", {
+            "model": model_id,
+            "input": "hi",
+        }
+    if provider_type == "anthropic":
+        return "/v1/messages", {
+            "model": model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    if provider_type == "gemini":
+        return f"/v1beta/models/{model_id}:generateContent", {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "hi"}],
+                }
+            ],
+            "generationConfig": {"maxOutputTokens": 1},
+        }
+    raise ValueError(f"Unsupported provider type '{provider_type}' for health check")
 
 async def _ensure_unique_endpoint_name(
     db: AsyncSession,
@@ -352,16 +377,7 @@ async def health_check_connection(
     provider_type = provider.provider_type
     model_id = connection.model_config_rel.model_id
 
-    effective_auth = connection.auth_type or provider_type
-    if effective_auth == "anthropic":
-        request_path = "/v1/messages"
-    else:
-        request_path = "/v1/chat/completions"
-    body = {
-        "model": model_id,
-        "max_tokens": 1,
-        "messages": [{"role": "user", "content": "hi"}],
-    }
+    request_path, body = _build_health_check_request(provider_type, model_id)
 
     upstream_url = build_upstream_url(connection, request_path, endpoint=endpoint)
     blocklist_rules = list(

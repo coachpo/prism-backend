@@ -2,7 +2,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 import json
 
 _HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
@@ -243,7 +243,7 @@ class ConnectionResponse(BaseModel):
     profile_id: int
     model_config_id: int
     endpoint_id: int
-    endpoint: EndpointResponse | None = None
+    endpoint: EndpointResponse | None = Field(default=None, validation_alias=AliasChoices("endpoint", "endpoint_rel"))
     is_active: bool
     priority: int
     name: str | None

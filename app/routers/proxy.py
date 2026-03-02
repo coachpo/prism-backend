@@ -43,7 +43,10 @@ router = APIRouter(tags=["proxy"])
 
 # Gemini-style URL pattern: /models/{model_id}:{action}
 _GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
-
+_GEMINI_NATIVE_PATH_RE = re.compile(
+    r"^/v1(?:beta)?/models/[^/:]+:(?:generateContent|streamGenerateContent)/?$"
+ )
+_ANTHROPIC_MESSAGES_PATH_RE = re.compile(r"^/v1/messages(?:/count_tokens)?/?$")
 
 
 def _track_detached_task(task: asyncio.Task[None], *, name: str) -> None:
@@ -93,8 +96,41 @@ def _resolve_model_id(raw_body: bytes | None, request_path: str) -> str | None:
     model_id = extract_model_from_body(raw_body)
     if model_id:
         return model_id
-    # Gemini-style: model is in the URL path, not the body.
+    # Gemini-style requests can carry model in path instead of JSON body.
     return _extract_model_from_path(request_path)
+
+
+def _classify_request_path(request_path: str) -> str:
+    if _GEMINI_NATIVE_PATH_RE.match(request_path):
+        return "gemini_native"
+    if _ANTHROPIC_MESSAGES_PATH_RE.match(request_path):
+        return "anthropic_messages"
+    return "generic"
+
+
+_PROVIDER_PATH_FAMILIES: dict[str, set[str]] = {
+    "openai": {"generic"},
+    "anthropic": {"anthropic_messages"},
+    "gemini": {"generic", "gemini_native"},
+}
+
+
+def _validate_provider_path_compatibility(provider_type: str, request_path: str) -> None:
+    allowed_path_families = _PROVIDER_PATH_FAMILIES.get(provider_type)
+    if allowed_path_families is None:
+        return
+
+    path_family = _classify_request_path(request_path)
+    if path_family in allowed_path_families:
+        return
+
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Path '{request_path}' is incompatible with provider '{provider_type}'. "
+            "Use a provider-native path."
+        ),
+    )
 
 
 def _rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
@@ -139,6 +175,7 @@ async def _handle_proxy(
         )
 
     provider_type = model_config.provider.provider_type
+    _validate_provider_path_compatibility(provider_type, request_path)
     audit_enabled = model_config.provider.audit_enabled
     audit_capture_bodies = model_config.provider.audit_capture_bodies
     provider_id = model_config.provider.id
