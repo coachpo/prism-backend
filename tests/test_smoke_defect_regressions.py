@@ -464,18 +464,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
-    def test_export_schema_includes_all_provider_fields(self):
-        from app.schemas.schemas import ConfigProviderExport
-
-        fields = set(ConfigProviderExport.model_fields.keys())
-        expected = {
-            "name",
-            "provider_type",
-            "description",
-            "audit_enabled",
-            "audit_capture_bodies",
-        }
-        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
     def test_export_schema_includes_all_model_fields(self):
         from app.schemas.schemas import ConfigModelExport
@@ -547,22 +535,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ConfigExportResponse,
             ConfigImportRequest,
             ConfigModelExport,
-            ConfigProviderExport,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
             config_version="1",
             exported_at=datetime.now(timezone.utc),
-            providers=[
-                ConfigProviderExport(
-                    name="OpenAI",
-                    provider_type="openai",
-                    description="Main provider",
-                    audit_enabled=True,
-                    audit_capture_bodies=False,
-                )
-            ],
             endpoints=[
                 ConfigEndpointExport(
                     endpoint_ref="endpoint:openai-main",
@@ -599,9 +577,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         exported["mode"] = "replace"
         reimported = ConfigImportRequest(**exported)
 
-        assert len(reimported.providers) == 1
-        assert reimported.providers[0].audit_enabled is True
-        assert reimported.providers[0].audit_capture_bodies is False
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.model_id == "gpt-4o"
@@ -1054,22 +1029,12 @@ class TestFailoverRecoveryFieldValidation:
             ConfigExportResponse,
             ConfigImportRequest,
             ConfigModelExport,
-            ConfigProviderExport,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
             config_version="1",
             exported_at=datetime.now(timezone.utc),
-            providers=[
-                ConfigProviderExport(
-                    name="OpenAI",
-                    provider_type="openai",
-                    description="Main provider",
-                    audit_enabled=True,
-                    audit_capture_bodies=False,
-                )
-            ],
             endpoints=[
                 ConfigEndpointExport(
                     endpoint_ref="endpoint:openai-main",
@@ -1483,7 +1448,6 @@ class TestHeaderBlocklist:
             match_type="prefix",
             pattern="x-custom-",
             enabled=True,
-            is_system=False,
         )
         exported = rule.model_dump(mode="json")
         reimported = HeaderBlocklistRuleExport(**exported)
@@ -1492,7 +1456,6 @@ class TestHeaderBlocklist:
         assert reimported.match_type == "prefix"
         assert reimported.pattern == "x-custom-"
         assert reimported.enabled is True
-        assert reimported.is_system is False
 
     def test_config_export_response_includes_header_blocklist_rules(self):
         """HBL-012 (P1): ConfigExportResponse schema includes header_blocklist_rules field."""
@@ -1505,7 +1468,6 @@ class TestHeaderBlocklist:
         config = ConfigExportResponse(
             config_version="1",
             exported_at=datetime.now(timezone.utc),
-            providers=[],
             endpoints=[],
             models=[],
             header_blocklist_rules=[
@@ -1514,7 +1476,6 @@ class TestHeaderBlocklist:
                     match_type="prefix",
                     pattern="x-custom-",
                     enabled=True,
-                    is_system=False,
                 )
             ],
         )
@@ -1686,7 +1647,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         from sqlalchemy import select, update
         from starlette.requests import Request
 
-        from app.core.database import AsyncSessionLocal
+        from app.core.database import AsyncSessionLocal, get_engine
         from app.models.models import Connection, Endpoint, ModelConfig, Profile, Provider
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
@@ -1694,6 +1655,8 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
             build_attempt_plan as real_build_attempt_plan,
         )
 
+        # Prevent cross-loop pooled asyncpg connections from previous tests.
+        await get_engine().dispose()
         class DummyHttpClient:
             def __init__(self):
                 self.sent_urls: list[str] = []
@@ -2508,7 +2471,6 @@ class TestDEF023_ConfigImportReferenceValidation:
         data = ConfigImportRequest.model_validate(
             {
                 "config_version": "1",
-                "providers": [{"name": "OpenAI", "provider_type": "openai"}],
                 "endpoints": [
                     {
                         "endpoint_ref": "endpoint:openai-main",
@@ -2552,7 +2514,6 @@ class TestDEF023_ConfigImportReferenceValidation:
         data = ConfigImportRequest.model_validate(
             {
                 "config_version": "1",
-                "providers": [{"name": "OpenAI", "provider_type": "openai"}],
                 "endpoints": [
                     {
                         "endpoint_ref": "endpoint:openai-main",
@@ -2600,13 +2561,13 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
     @pytest.mark.asyncio
     async def test_import_v1_roundtrip_preserves_logical_refs(self):
         from sqlalchemy import select
-        from app.core.database import AsyncSessionLocal, engine
+        from app.core.database import AsyncSessionLocal, get_engine
         from app.models.models import Connection, Endpoint, EndpointFxRateSetting, Profile
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
 
         # Prevent cross-loop pooled asyncpg connections from previous tests.
-        await engine.dispose()
+        await get_engine().dispose()
 
         suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
         endpoint_name = f"def024-endpoint-{suffix}"
@@ -2617,12 +2578,6 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         payload = ConfigImportRequest.model_validate(
             {
                 "config_version": "1",
-                "providers": [
-                    {
-                        "name": "OpenAI",
-                        "provider_type": "openai",
-                    }
-                ],
                 "endpoints": [
                     {
                         "endpoint_ref": endpoint_ref,
@@ -2742,11 +2697,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
 class TestDEF026_ConfigImportSystemRuleTimestamp:
     @pytest.mark.asyncio
     async def test_import_updates_system_rules_without_timezone_errors(self):
-        from app.core.database import AsyncSessionLocal, engine
+        from app.core.database import AsyncSessionLocal, get_engine
         from app.routers.config import import_config
         from app.schemas.schemas import ConfigImportRequest
 
-        await engine.dispose()
+        # Prevent cross-loop pooled asyncpg connections from previous tests.
+        await get_engine().dispose()
 
         async with AsyncSessionLocal() as db:
             from app.main import SYSTEM_BLOCKLIST_DEFAULTS
@@ -2768,12 +2724,6 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             payload = ConfigImportRequest.model_validate(
                 {
                     "config_version": "1",
-                    "providers": [
-                        {
-                            "name": "OpenAI",
-                            "provider_type": "openai",
-                        }
-                    ],
                     "endpoints": [],
                     "models": [],
                     "user_settings": {
@@ -2787,7 +2737,6 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                             "match_type": system_rule["match_type"],
                             "pattern": system_rule["pattern"],
                             "enabled": True,
-                            "is_system": True,
                         }
                     ],
                     "mode": "replace",
@@ -2796,9 +2745,9 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
 
             response = await import_config(data=payload, db=db, profile_id=1)
 
-            assert response.providers_imported == 1
             assert response.endpoints_imported == 0
             assert response.models_imported == 0
+            assert response.connections_imported == 0
             assert response.connections_imported == 0
 
             await db.rollback()

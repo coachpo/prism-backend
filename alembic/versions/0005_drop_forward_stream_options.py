@@ -26,6 +26,8 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column("is_default", sa.Boolean(), nullable=False),
+        sa.Column("is_editable", sa.Boolean(), nullable=False),
         sa.Column("deleted_at", sa.DateTime(), nullable=True),
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
@@ -39,6 +41,13 @@ def upgrade() -> None:
         ["is_active"],
         unique=True,
         postgresql_where=sa.text("is_active = true"),
+    )
+    op.create_index(
+        "uq_profiles_single_default",
+        "profiles",
+        ["is_default"],
+        unique=True,
+        postgresql_where=sa.text("is_default = true"),
     )
 
     op.create_table(
@@ -470,5 +479,6 @@ def downgrade() -> None:
     op.drop_table("providers")
 
     op.drop_index("uq_profiles_single_active", table_name="profiles")
+    op.drop_index("uq_profiles_single_default", table_name="profiles")
     op.drop_index("idx_profiles_deleted_at", table_name="profiles")
     op.drop_table("profiles")

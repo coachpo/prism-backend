@@ -27,6 +27,12 @@ class Profile(Base):
             unique=True,
             postgresql_where=text("is_active = true"),
         ),
+        Index(
+            "uq_profiles_single_default",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default = true"),
+        ),
         Index("idx_profiles_deleted_at", "deleted_at"),
     )
 
@@ -34,6 +40,8 @@ class Profile(Base):
     name: Mapped[str] = mapped_column(String(200), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_editable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -7,10 +7,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
-from app.core.config import settings, ensure_postgresql_database_url
-from app.core.database import engine
+from app.core.config import ensure_postgresql_database_url, get_settings
+from app.core.database import get_engine
 from app.core.migrations import run_migrations
 from app.models.models import Profile, Provider, HeaderBlocklistRule, UserSetting
+from app.services.profile_invariants import ensure_profile_invariants
 from app.routers import (
     profiles,
     providers,
@@ -99,6 +100,13 @@ async def seed_providers():
             await session.commit()
             logger.info("Seeded default providers")
 
+async def seed_profile_invariants():
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        await ensure_profile_invariants(session)
+        await session.commit()
+        logger.info("Ensured default profile invariants")
 
 async def seed_header_blocklist_rules():
     from app.core.database import AsyncSessionLocal
@@ -176,6 +184,7 @@ async def seed_user_settings():
 
 
 async def run_startup_migrations() -> None:
+    settings = get_settings()
     ensure_postgresql_database_url(settings.database_url)
     await asyncio.to_thread(run_migrations, settings.database_url)
     logger.info("Applied database migrations")
@@ -185,9 +194,11 @@ async def lifespan(app: FastAPI):
     # Startup: validate DB config, run migrations, seed data, init HTTP client
     await run_startup_migrations()
     await seed_providers()
+    await seed_profile_invariants()
     await seed_user_settings()
     await seed_header_blocklist_rules()
 
+    settings = get_settings()
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=settings.connect_timeout,
@@ -203,7 +214,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     await app.state.http_client.aclose()
-    await engine.dispose()
+    await get_engine().dispose()
 
 
 app = FastAPI(

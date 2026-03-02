@@ -26,4 +26,5 @@ def ensure_postgresql_database_url(database_url: str) -> None:
         )
 
 
-settings = Settings()
+def get_settings() -> Settings:
+    return Settings()

@@ -2,7 +2,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Literal
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import json
 
 _HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
@@ -40,6 +40,8 @@ class ProfileResponse(ProfileBase):
 
     id: int
     is_active: bool
+    is_default: bool
+    is_editable: bool
     version: int
     deleted_at: datetime | None
     created_at: datetime
@@ -637,13 +639,6 @@ class ConfigModelExport(BaseModel):
     connections: list[ConfigConnectionExport] = []
 
 
-class ConfigProviderExport(BaseModel):
-    name: str
-    provider_type: str
-    description: str | None = None
-    audit_enabled: bool = False
-    audit_capture_bodies: bool = True
-
 
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
@@ -661,28 +656,25 @@ class ConfigExportResponse(BaseModel):
     config_version: Literal["1"] = "1"
     mode: Literal["replace"] = "replace"
     exported_at: datetime
-    providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
-    header_blocklist_rules: list["HeaderBlocklistRuleExport"] = []
+    header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(default_factory=list)
 
 
 
 class ConfigImportRequest(BaseModel):
     config_version: Literal["1"]
     exported_at: datetime | None = None
-    providers: list[ConfigProviderExport]
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
-    header_blocklist_rules: list["HeaderBlocklistRuleExport"] | None = None
+    header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(default_factory=list)
     mode: Literal["replace"]
 
 
 
 class ConfigImportResponse(BaseModel):
-    providers_imported: int
     endpoints_imported: int
     models_imported: int
     connections_imported: int
@@ -836,14 +828,8 @@ class HeaderBlocklistRuleResponse(BaseModel):
     updated_at: datetime
 
 
-class HeaderBlocklistRuleExport(BaseModel):
-    name: str
-    match_type: str
-    pattern: str
-    enabled: bool
-    is_system: bool
-    profile_id: int | None = None
-
+class HeaderBlocklistRuleExport(HeaderBlocklistRuleCreate):
+    pass
 
 class ConnectionDropdownItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)

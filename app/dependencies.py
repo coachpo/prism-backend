@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import Profile
+from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +44,8 @@ async def _get_non_deleted_profile(
 
 async def get_active_profile(
     db: Annotated[AsyncSession, Depends(get_db)],
- ) -> Profile:
-    result = await db.execute(
-        select(Profile)
-        .where(Profile.is_active.is_(True), Profile.deleted_at.is_(None))
-        .order_by(Profile.id.asc())
-        .limit(1)
-    )
-    profile = result.scalar_one_or_none()
-    if profile is None:
-        raise HTTPException(status_code=503, detail="No active profile configured")
+) -> Profile:
+    profile = await ensure_profile_invariants(db)
     return profile
 
 

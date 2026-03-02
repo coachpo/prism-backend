@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from sqlalchemy import select, func
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.models.models import (
     Profile,
@@ -81,14 +81,20 @@ class TestProfileCRUDAndLifecycle:
         mock_db.refresh = AsyncMock()
 
         body = ProfileCreate(name="Test Profile", description="Test")
-
-        profile = await create_profile(body=body, db=mock_db)
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = MagicMock()
+            await create_profile(body=body, db=mock_db)
 
         assert mock_db.add.called
         added_profile = mock_db.add.call_args[0][0]
         assert added_profile.name == "Test Profile"
         assert added_profile.is_active is False
         assert added_profile.version == 0
+        assert added_profile.is_default is False
+        assert added_profile.is_editable is True
 
     @pytest.mark.asyncio
     async def test_create_profile_at_capacity_fails(self):
@@ -163,8 +169,12 @@ class TestProfileCRUDAndLifecycle:
         body = ProfileActivateRequest(
             expected_active_profile_id=1, expected_active_profile_version=5
         )
-
-        result = await activate_profile(profile_id=2, body=body, db=mock_db)
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = current_active
+            await activate_profile(profile_id=2, body=body, db=mock_db)
 
         # Verify atomic switch in two phases (deactivate flush -> activate flush)
         assert current_active.is_active is False
@@ -191,9 +201,13 @@ class TestProfileCRUDAndLifecycle:
             expected_active_profile_id=1,
             expected_active_profile_version=5,  # Stale version
         )
-
-        with pytest.raises(HTTPException) as exc_info:
-            await activate_profile(profile_id=2, body=body, db=mock_db)
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = current_active
+            with pytest.raises(HTTPException) as exc_info:
+                await activate_profile(profile_id=2, body=body, db=mock_db)
 
         assert exc_info.value.status_code == 409
         assert "version mismatch" in exc_info.value.detail
@@ -227,9 +241,13 @@ class TestProfileCRUDAndLifecycle:
         body = ProfileActivateRequest(
             expected_active_profile_id=1, expected_active_profile_version=5
         )
-
-        with pytest.raises(HTTPException) as exc_info:
-            await activate_profile(profile_id=2, body=body, db=mock_db)
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = current_active
+            with pytest.raises(HTTPException) as exc_info:
+                await activate_profile(profile_id=2, body=body, db=mock_db)
 
         assert exc_info.value.status_code == 409
         assert "conflict" in exc_info.value.detail.lower()
@@ -241,6 +259,7 @@ class TestProfileCRUDAndLifecycle:
         # Mock active profile
         profile = MagicMock()
         profile.is_active = True
+        profile.is_default = False
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = profile
@@ -254,6 +273,49 @@ class TestProfileCRUDAndLifecycle:
         assert "Cannot delete active profile" in exc_info.value.detail
 
     @pytest.mark.asyncio
+    async def test_delete_default_profile_fails(self):
+        """Default profile cannot be deleted even when inactive."""
+        mock_db = AsyncMock()
+
+        profile = MagicMock()
+        profile.is_default = True
+        profile.is_active = False
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = result
+
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_profile(profile_id=1, db=mock_db)
+
+        assert exc_info.value.status_code == 400
+        assert "Default profile cannot be deleted" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_update_default_profile_name_fails(self):
+        """Default profile name is immutable."""
+        mock_db = AsyncMock()
+
+        profile = MagicMock()
+        profile.id = 1
+        profile.name = "Default"
+        profile.is_default = True
+        profile.is_editable = True
+
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = profile
+        mock_db.execute.return_value = result
+
+        with pytest.raises(HTTPException) as exc_info:
+            await update_profile(
+                profile_id=1,
+                body=ProfileUpdate(name="Renamed Default"),
+                db=mock_db,
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "immutable" in exc_info.value.detail
+    @pytest.mark.asyncio
     async def test_delete_inactive_profile_soft_deletes(self):
         """Inactive profile is soft-deleted."""
         mock_db = AsyncMock()
@@ -262,6 +324,7 @@ class TestProfileCRUDAndLifecycle:
         profile = MagicMock()
         profile.is_active = False
         profile.deleted_at = None
+        profile.is_default = False
 
         result = MagicMock()
         result.scalar_one_or_none.return_value = profile
@@ -504,14 +567,6 @@ class TestConfigExportImportIsolation:
         mock_db = AsyncMock()
 
         now = datetime.utcnow()
-        provider = SimpleNamespace(
-            id=1,
-            name="OpenAI",
-            provider_type="openai",
-            description="OpenAI provider",
-            audit_enabled=True,
-            audit_capture_bodies=False,
-        )
         endpoint = SimpleNamespace(
             id=10,
             profile_id=1,
@@ -537,9 +592,6 @@ class TestConfigExportImportIsolation:
         )
 
         # Mock query results
-        provider_result = MagicMock()
-        provider_result.scalars.return_value.all.return_value = [provider]
-
         endpoint_result = MagicMock()
         endpoint_result.scalars.return_value.all.return_value = [endpoint]
 
@@ -555,10 +607,13 @@ class TestConfigExportImportIsolation:
         blocklist_result = MagicMock()
         blocklist_result.scalars.return_value.all.return_value = []
 
+        providers_result = MagicMock()
+        providers_result.scalars.return_value.all.return_value = []
+
         mock_db.execute.side_effect = [
-            provider_result,
             endpoint_result,
             model_result,
+            providers_result,
             user_settings_result,
             fx_result,
             blocklist_result,
@@ -571,14 +626,390 @@ class TestConfigExportImportIsolation:
         assert payload["config_version"] == "1"
         assert len(payload["endpoints"]) == 1
         assert len(payload["models"]) == 1
+        assert "providers" not in payload
 
     @pytest.mark.asyncio
     async def test_import_config_replaces_target_profile_only(self):
-        """Config import replaces only the target profile's data."""
-        # This is a complex integration test that would require
-        # full database setup. The key assertion is that import
-        # deletes and recreates data filtered by profile_id.
-        pass  # Placeholder for full integration test
+        """Config import replace mode mutates only the target profile's rows."""
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.routers.config import import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        target_profile_name = f"import-target-{suffix}"
+        other_profile_name = f"import-other-{suffix}"
+
+        old_target_endpoint_name = f"target-endpoint-old-{suffix}"
+        old_target_model_id = f"target-model-old-{suffix}"
+        old_target_connection_name = f"target-connection-old-{suffix}"
+        old_target_rule_pattern = f"x-target-old-{suffix}"
+
+        other_endpoint_name = f"other-endpoint-{suffix}"
+        other_model_id = f"other-model-{suffix}"
+        other_connection_name = f"other-connection-{suffix}"
+        other_rule_pattern = f"x-other-{suffix}"
+
+        new_endpoint_name = f"target-endpoint-new-{suffix}"
+        new_endpoint_ref = f"endpoint:{new_endpoint_name}"
+        new_model_id = f"target-model-new-{suffix}"
+        new_connection_name = f"target-connection-new-{suffix}"
+        new_connection_ref = (
+            f"connection:{new_model_id}:{new_endpoint_ref}:0:{new_connection_name}:0"
+        )
+        new_rule_pattern = f"x-target-new-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            provider = (
+                await db.execute(
+                    select(Provider).where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                provider = Provider(
+                    name=f"OpenAI {suffix}",
+                    provider_type="openai",
+                )
+                db.add(provider)
+                await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for replace import",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            other_profile = Profile(
+                name=other_profile_name,
+                description="Control profile that must stay unchanged",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add_all([target_profile, other_profile])
+            await db.flush()
+
+            target_endpoint = Endpoint(
+                profile_id=target_profile.id,
+                name=old_target_endpoint_name,
+                base_url="https://api.openai.com/v1",
+                api_key="sk-target-old",
+            )
+            other_endpoint = Endpoint(
+                profile_id=other_profile.id,
+                name=other_endpoint_name,
+                base_url="https://api.openai.com/v1",
+                api_key="sk-other",
+            )
+            db.add_all([target_endpoint, other_endpoint])
+            await db.flush()
+
+            target_model = ModelConfig(
+                profile_id=target_profile.id,
+                provider_id=provider.id,
+                model_id=old_target_model_id,
+                model_type="native",
+                lb_strategy="single",
+                failover_recovery_enabled=True,
+                failover_recovery_cooldown_seconds=60,
+                is_enabled=True,
+            )
+            other_model = ModelConfig(
+                profile_id=other_profile.id,
+                provider_id=provider.id,
+                model_id=other_model_id,
+                model_type="native",
+                lb_strategy="single",
+                failover_recovery_enabled=True,
+                failover_recovery_cooldown_seconds=60,
+                is_enabled=True,
+            )
+            db.add_all([target_model, other_model])
+            await db.flush()
+
+            db.add_all(
+                [
+                    Connection(
+                        profile_id=target_profile.id,
+                        model_config_id=target_model.id,
+                        endpoint_id=target_endpoint.id,
+                        is_active=True,
+                        priority=0,
+                        name=old_target_connection_name,
+                    ),
+                    Connection(
+                        profile_id=other_profile.id,
+                        model_config_id=other_model.id,
+                        endpoint_id=other_endpoint.id,
+                        is_active=True,
+                        priority=0,
+                        name=other_connection_name,
+                    ),
+                    UserSetting(
+                        profile_id=target_profile.id,
+                        report_currency_code="USD",
+                        report_currency_symbol="$",
+                    ),
+                    UserSetting(
+                        profile_id=other_profile.id,
+                        report_currency_code="EUR",
+                        report_currency_symbol="EUR",
+                    ),
+                    EndpointFxRateSetting(
+                        profile_id=target_profile.id,
+                        model_id=old_target_model_id,
+                        endpoint_id=target_endpoint.id,
+                        fx_rate="1.10",
+                    ),
+                    EndpointFxRateSetting(
+                        profile_id=other_profile.id,
+                        model_id=other_model_id,
+                        endpoint_id=other_endpoint.id,
+                        fx_rate="1.50",
+                    ),
+                    HeaderBlocklistRule(
+                        profile_id=target_profile.id,
+                        name=f"target-rule-old-{suffix}",
+                        match_type="exact",
+                        pattern=old_target_rule_pattern,
+                        enabled=True,
+                        is_system=False,
+                    ),
+                    HeaderBlocklistRule(
+                        profile_id=other_profile.id,
+                        name=f"other-rule-{suffix}",
+                        match_type="exact",
+                        pattern=other_rule_pattern,
+                        enabled=True,
+                        is_system=False,
+                    ),
+                ]
+            )
+            await db.commit()
+
+            target_profile_id = target_profile.id
+            other_profile_id = other_profile.id
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "config_version": "1",
+                "mode": "replace",
+                "endpoints": [
+                    {
+                        "endpoint_ref": new_endpoint_ref,
+                        "name": new_endpoint_name,
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-target-new",
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": new_model_id,
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "connection_ref": new_connection_ref,
+                                "endpoint_ref": new_endpoint_ref,
+                                "name": new_connection_name,
+                                "priority": 0,
+                                "is_active": True,
+                            }
+                        ],
+                    }
+                ],
+                "user_settings": {
+                    "report_currency_code": "GBP",
+                    "report_currency_symbol": "GBP",
+                    "endpoint_fx_mappings": [
+                        {
+                            "model_id": new_model_id,
+                            "endpoint_ref": new_endpoint_ref,
+                            "fx_rate": "1.25",
+                        }
+                    ],
+                },
+                "header_blocklist_rules": [
+                    {
+                        "name": f"target-rule-new-{suffix}",
+                        "match_type": "exact",
+                        "pattern": new_rule_pattern,
+                        "enabled": True,
+                    }
+                ],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            response = await import_config(
+                data=payload,
+                db=db,
+                profile_id=target_profile_id,
+            )
+            await db.commit()
+
+            assert response.endpoints_imported == 1
+            assert response.models_imported == 1
+            assert response.connections_imported == 1
+
+        async with AsyncSessionLocal() as db:
+            target_endpoints = (
+                (
+                    await db.execute(
+                        select(Endpoint).where(Endpoint.profile_id == target_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_models = (
+                (
+                    await db.execute(
+                        select(ModelConfig).where(ModelConfig.profile_id == target_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_connections = (
+                (
+                    await db.execute(
+                        select(Connection).where(Connection.profile_id == target_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_fx_rows = (
+                (
+                    await db.execute(
+                        select(EndpointFxRateSetting).where(
+                            EndpointFxRateSetting.profile_id == target_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_rules = (
+                (
+                    await db.execute(
+                        select(HeaderBlocklistRule).where(
+                            HeaderBlocklistRule.profile_id == target_profile_id,
+                            HeaderBlocklistRule.is_system == False,  # noqa: E712
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_settings = (
+                await db.execute(
+                    select(UserSetting).where(UserSetting.profile_id == target_profile_id)
+                )
+            ).scalar_one()
+
+            other_endpoints = (
+                (
+                    await db.execute(
+                        select(Endpoint).where(Endpoint.profile_id == other_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_models = (
+                (
+                    await db.execute(
+                        select(ModelConfig).where(ModelConfig.profile_id == other_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_connections = (
+                (
+                    await db.execute(
+                        select(Connection).where(Connection.profile_id == other_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_fx_rows = (
+                (
+                    await db.execute(
+                        select(EndpointFxRateSetting).where(
+                            EndpointFxRateSetting.profile_id == other_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_rules = (
+                (
+                    await db.execute(
+                        select(HeaderBlocklistRule).where(
+                            HeaderBlocklistRule.profile_id == other_profile_id,
+                            HeaderBlocklistRule.is_system == False,  # noqa: E712
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_settings = (
+                await db.execute(
+                    select(UserSetting).where(UserSetting.profile_id == other_profile_id)
+                )
+            ).scalar_one()
+
+        assert len(target_endpoints) == 1
+        assert target_endpoints[0].name == new_endpoint_name
+        assert target_endpoints[0].name != old_target_endpoint_name
+
+        assert len(target_models) == 1
+        assert target_models[0].model_id == new_model_id
+        assert target_models[0].model_id != old_target_model_id
+
+        assert len(target_connections) == 1
+        assert target_connections[0].name == new_connection_name
+
+        assert len(target_fx_rows) == 1
+        assert target_fx_rows[0].model_id == new_model_id
+        assert target_fx_rows[0].endpoint_id == target_endpoints[0].id
+
+        assert len(target_rules) == 1
+        assert target_rules[0].pattern == new_rule_pattern
+        assert target_rules[0].pattern != old_target_rule_pattern
+
+        assert target_settings.report_currency_code == "GBP"
+        assert target_settings.report_currency_symbol == "GBP"
+
+        assert len(other_endpoints) == 1
+        assert other_endpoints[0].name == other_endpoint_name
+
+        assert len(other_models) == 1
+        assert other_models[0].model_id == other_model_id
+
+        assert len(other_connections) == 1
+        assert other_connections[0].name == other_connection_name
+
+        assert len(other_fx_rows) == 1
+        assert other_fx_rows[0].model_id == other_model_id
+
+        assert len(other_rules) == 1
+        assert other_rules[0].pattern == other_rule_pattern
+
+        assert other_settings.report_currency_code == "EUR"
+        assert other_settings.report_currency_symbol == "EUR"
 
 
 class TestCostingAndSettingsIsolation:

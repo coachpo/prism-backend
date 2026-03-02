@@ -21,7 +21,6 @@ from app.models.models import (
 )
 from app.schemas.schemas import (
     ConfigExportResponse,
-    ConfigProviderExport,
     ConfigModelExport,
     ConfigConnectionExport,
     ConfigEndpointExport,
@@ -81,7 +80,6 @@ async def export_config(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    providers = (await db.execute(select(Provider))).scalars().all()
     endpoints = (
         (
             await db.execute(
@@ -110,18 +108,17 @@ async def export_config(
         .all()
     )
 
-    provider_type_map = {provider.id: provider.provider_type for provider in providers}
-
-    exported_providers = [
-        ConfigProviderExport(
-            name=provider.name,
-            provider_type=provider.provider_type,
-            description=provider.description,
-            audit_enabled=provider.audit_enabled,
-            audit_capture_bodies=provider.audit_capture_bodies,
+    provider_ids = {model.provider_id for model in model_configs}
+    provider_type_map: dict[int, str] = {}
+    if provider_ids:
+        providers = (
+            (
+                await db.execute(select(Provider).where(Provider.id.in_(provider_ids)))
+            )
+            .scalars()
+            .all()
         )
-        for provider in providers
-    ]
+        provider_type_map = {provider.id: provider.provider_type for provider in providers}
 
     endpoint_ref_by_id: dict[int, str] = {}
     exported_endpoints: list[ConfigEndpointExport] = []
@@ -214,11 +211,28 @@ async def export_config(
         .scalars()
         .all()
     )
+    header_blocklist_rules = (
+        (
+            await db.execute(
+                        select(HeaderBlocklistRule).where(
+                    HeaderBlocklistRule.is_system == False,  # noqa: E712
+                    HeaderBlocklistRule.profile_id == profile_id,
+                )
+                .order_by(
+                    HeaderBlocklistRule.match_type.asc(),
+                    HeaderBlocklistRule.pattern.asc(),
+                    HeaderBlocklistRule.name.asc(),
+                    HeaderBlocklistRule.id.asc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
 
     data = ConfigExportResponse(
         mode="replace",
         exported_at=datetime.now(timezone.utc),
-        providers=exported_providers,
         endpoints=exported_endpoints,
         models=exported_models,
         user_settings=ConfigUserSettingsExport(
@@ -247,23 +261,8 @@ async def export_config(
                 match_type=rule.match_type,
                 pattern=rule.pattern,
                 enabled=rule.enabled,
-                is_system=rule.is_system,
             )
-            for rule in (
-                await db.execute(
-                    select(HeaderBlocklistRule)
-                    .where(
-                        (HeaderBlocklistRule.is_system == True)  # noqa: E712
-                        | (HeaderBlocklistRule.profile_id == profile_id)
-                    )
-                    .order_by(
-                        HeaderBlocklistRule.is_system.desc(),
-                        HeaderBlocklistRule.id.asc(),
-                    )
-                )
-            )
-            .scalars()
-            .all()
+            for rule in header_blocklist_rules
         ],
     )
 
@@ -277,25 +276,6 @@ async def export_config(
 
 
 def _validate_import(data: ConfigImportRequest) -> None:
-    if not data.providers:
-        raise HTTPException(status_code=400, detail="At least one provider is required")
-
-    seen_provider_types: set[str] = set()
-    for provider in data.providers:
-        if provider.provider_type not in VALID_PROVIDER_TYPES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown provider type: '{provider.provider_type}'",
-            )
-        if provider.provider_type in seen_provider_types:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Duplicate provider type: '{provider.provider_type}'",
-            )
-        seen_provider_types.add(provider.provider_type)
-
-    provider_types_in_file = {provider.provider_type for provider in data.providers}
-
     endpoint_refs_in_file: set[str] = set()
     endpoint_names_in_file: set[str] = set()
     for endpoint in data.endpoints:
@@ -346,13 +326,10 @@ def _validate_import(data: ConfigImportRequest) -> None:
             )
         seen_model_ids.add(model.model_id)
 
-        if model.provider_type not in provider_types_in_file:
+        if model.provider_type not in VALID_PROVIDER_TYPES:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Model '{model.model_id}' references unknown provider type "
-                    f"'{model.provider_type}'"
-                ),
+                detail=f"Unknown provider type: '{model.provider_type}'",
             )
 
         if model.model_type == "native":
@@ -435,6 +412,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         f"'{model.redirect_to}'"
                     ),
                 )
+
     if data.user_settings is not None:
         seen_fx: set[tuple[str, str]] = set()
         for mapping in data.user_settings.endpoint_fx_mappings:
@@ -467,6 +445,21 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         f"model_id='{mapping.model_id}', endpoint_ref='{endpoint_source_ref}'"
                     ),
                 )
+
+    seen_blocklist_rules: set[tuple[str, str]] = set()
+    for rule in data.header_blocklist_rules:
+        key = (rule.match_type, rule.pattern)
+        if key in seen_blocklist_rules:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Duplicate header blocklist rule in import for "
+                    f"match_type='{rule.match_type}', pattern='{rule.pattern}'"
+                ),
+            )
+        seen_blocklist_rules.add(key)
+
+
 @router.post("/import", response_model=ConfigImportResponse)
 async def import_config(
     data: ConfigImportRequest,
@@ -483,37 +476,38 @@ async def import_config(
     await db.execute(delete(Connection).where(Connection.profile_id == profile_id))
     await db.execute(delete(Endpoint).where(Endpoint.profile_id == profile_id))
     await db.execute(delete(ModelConfig).where(ModelConfig.profile_id == profile_id))
+    await db.execute(
+        delete(HeaderBlocklistRule).where(
+            HeaderBlocklistRule.is_system == False,  # noqa: E712
+            HeaderBlocklistRule.profile_id == profile_id,
+        )
+    )
     await db.flush()
 
+    provider_types_needed = sorted({model.provider_type for model in data.models})
     provider_map: dict[str, int] = {}
-    for provider_data in data.providers:
-        provider = (
+    if provider_types_needed:
+        providers = (
             (
                 await db.execute(
-                    select(Provider).where(
-                        Provider.provider_type == provider_data.provider_type
-                    )
+                    select(Provider).where(Provider.provider_type.in_(provider_types_needed))
                 )
             )
             .scalars()
-            .first()
+            .all()
         )
-        if provider is None:
-            provider = Provider(
-                name=provider_data.name,
-                provider_type=provider_data.provider_type,
-                description=provider_data.description,
-                audit_enabled=provider_data.audit_enabled,
-                audit_capture_bodies=provider_data.audit_capture_bodies,
+        provider_map = {provider.provider_type: provider.id for provider in providers}
+        missing_provider_types = [
+            provider_type
+            for provider_type in provider_types_needed
+            if provider_type not in provider_map
+        ]
+        if missing_provider_types:
+            missing = ", ".join(sorted(missing_provider_types))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing provider types in system: {missing}",
             )
-            db.add(provider)
-            await db.flush()
-        else:
-            provider.name = provider_data.name
-            provider.description = provider_data.description
-            provider.audit_enabled = provider_data.audit_enabled
-            provider.audit_capture_bodies = provider_data.audit_capture_bodies
-        provider_map[provider_data.provider_type] = provider.id
 
     endpoint_ref_map: dict[str, int] = {}
     endpoints_count = 0
@@ -667,58 +661,23 @@ async def import_config(
         user_settings.report_currency_code = "USD"
         user_settings.report_currency_symbol = "$"
 
-    if data.header_blocklist_rules is not None:
-        from app.main import SYSTEM_BLOCKLIST_DEFAULTS
-
-        system_patterns = {
-            (d["match_type"], d["pattern"]) for d in SYSTEM_BLOCKLIST_DEFAULTS
-        }
-
-        for rule_data in data.header_blocklist_rules:
-            if rule_data.is_system:
-                if (rule_data.match_type, rule_data.pattern) not in system_patterns:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Unknown system blocklist rule: ({rule_data.match_type}, {rule_data.pattern})",
-                    )
-
-        await db.execute(
-            delete(HeaderBlocklistRule).where(
-                HeaderBlocklistRule.is_system == False,  # noqa: E712
-                HeaderBlocklistRule.profile_id == profile_id,
+    for rule_data in sorted(
+        data.header_blocklist_rules,
+        key=lambda rule: (rule.match_type, rule.pattern, rule.name),
+    ):
+        db.add(
+            HeaderBlocklistRule(
+                name=rule_data.name,
+                profile_id=profile_id,
+                match_type=rule_data.match_type,
+                pattern=rule_data.pattern,
+                enabled=rule_data.enabled,
+                is_system=False,
             )
         )
-        await db.flush()
-
-        for rule_data in data.header_blocklist_rules:
-            if rule_data.is_system:
-                existing = (
-                    await db.execute(
-                        select(HeaderBlocklistRule).where(
-                            HeaderBlocklistRule.match_type == rule_data.match_type,
-                            HeaderBlocklistRule.pattern == rule_data.pattern,
-                            HeaderBlocklistRule.is_system == True,  # noqa: E712
-                        )
-                    )
-                ).scalar_one_or_none()
-                if existing:
-                    existing.enabled = rule_data.enabled
-                    existing.updated_at = datetime.utcnow()
-            else:
-                db.add(
-                    HeaderBlocklistRule(
-                        name=rule_data.name,
-                        profile_id=profile_id,
-                        match_type=rule_data.match_type,
-                        pattern=rule_data.pattern,
-                        enabled=rule_data.enabled,
-                        is_system=False,
-                    )
-                )
-        await db.flush()
+    await db.flush()
 
     return ConfigImportResponse(
-        providers_imported=len(data.providers),
         endpoints_imported=endpoints_count,
         models_imported=len(data.models),
         connections_imported=connections_count,

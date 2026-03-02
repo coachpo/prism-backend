@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db
 from app.models.models import Profile
+from app.services.profile_invariants import DEFAULT_PROFILE_NAME, ensure_profile_invariants
 from app.schemas.schemas import (
     ProfileCreate,
     ProfileUpdate,
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/api/profiles", tags=["profiles"])
 @router.get("", response_model=list[ProfileResponse])
 async def list_profiles(db: Annotated[AsyncSession, Depends(get_db)]):
     """List all non-deleted profiles."""
+    await ensure_profile_invariants(db)
     result = await db.execute(
         select(Profile).where(Profile.deleted_at.is_(None)).order_by(Profile.id.asc())
     )
@@ -30,18 +32,8 @@ async def list_profiles(db: Annotated[AsyncSession, Depends(get_db)]):
 @router.get("/active", response_model=ProfileResponse)
 async def get_active_profile(db: Annotated[AsyncSession, Depends(get_db)]):
     """Get the currently active profile."""
-    result = await db.execute(
-        select(Profile)
-        .where(Profile.is_active.is_(True), Profile.deleted_at.is_(None))
-        .order_by(Profile.id.asc())
-        .limit(1)
-    )
-    profile = result.scalar_one_or_none()
-    if profile is None:
-        raise HTTPException(status_code=503, detail="No active profile configured")
+    profile = await ensure_profile_invariants(db)
     return profile
-
-
 @router.post("", response_model=ProfileResponse, status_code=201)
 async def create_profile(
     body: ProfileCreate,
@@ -67,11 +59,14 @@ async def create_profile(
             status_code=409,
             detail=f"Profile with name '{body.name}' already exists",
         )
+    await ensure_profile_invariants(db)
 
     profile = Profile(
         name=body.name,
         description=body.description,
         is_active=False,
+        is_default=False,
+        is_editable=True,
         version=0,
     )
     db.add(profile)
@@ -94,7 +89,19 @@ async def update_profile(
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    if profile.is_default and not profile.is_editable:
+        raise HTTPException(
+            status_code=400,
+            detail="Default profile is locked and cannot be modified.",
+        )
+
     update_data = body.model_dump(exclude_unset=True)
+
+    if profile.is_default and "name" in update_data and update_data["name"] != DEFAULT_PROFILE_NAME:
+        raise HTTPException(
+            status_code=400,
+            detail="Default profile name is immutable.",
+        )
 
     # Check for name conflict if name is being updated
     if "name" in update_data and update_data["name"] != profile.name:
@@ -107,10 +114,17 @@ async def update_profile(
                 detail=f"Profile with name '{update_data['name']}' already exists",
             )
 
+    if "name" in update_data and update_data["name"] == DEFAULT_PROFILE_NAME and not profile.is_default:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Profile with name '{DEFAULT_PROFILE_NAME}' already exists",
+        )
     for key, value in update_data.items():
         setattr(profile, key, value)
 
     profile.updated_at = datetime.utcnow()
+    if profile.is_default:
+        profile.name = DEFAULT_PROFILE_NAME
     await db.flush()
     await db.refresh(profile)
     return profile
@@ -130,6 +144,7 @@ async def activate_profile(
     """
     # Serialize activation attempts on the currently-active row so stale CAS payloads
     # deterministically become 409 conflicts rather than uniqueness races.
+    await ensure_profile_invariants(db)
     active_result = await db.execute(
         select(Profile)
         .where(Profile.is_active.is_(True), Profile.deleted_at.is_(None))
@@ -141,11 +156,7 @@ async def activate_profile(
 
     # CAS validation
     if current_active is None:
-        raise HTTPException(
-            status_code=503,
-            detail="No active profile configured",
-        )
-
+        current_active = await ensure_profile_invariants(db)
     if current_active.id != body.expected_active_profile_id:
         raise HTTPException(
             status_code=409,
@@ -193,7 +204,6 @@ async def activate_profile(
     await db.refresh(target_profile)
     return target_profile
 
-
 @router.delete("/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: int,
@@ -211,6 +221,11 @@ async def delete_profile(
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    if profile.is_default:
+        raise HTTPException(
+            status_code=400,
+            detail="Default profile cannot be deleted.",
+        )
     if profile.is_active:
         raise HTTPException(
             status_code=400,
