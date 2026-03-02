@@ -87,9 +87,7 @@ async def _endpoint_is_active_now(
     return bool(result.scalar_one_or_none())
 
 
-def _resolve_model_id(
-    request: Request, raw_body: bytes | None, request_path: str
-) -> str | None:
+def _resolve_model_id(raw_body: bytes | None, request_path: str) -> str | None:
     if raw_body:
         model_id = extract_model_from_body(raw_body)
         if model_id:
@@ -105,7 +103,7 @@ async def _handle_proxy(
     request_path: str,
     profile_id: int,
  ):
-    model_id = _resolve_model_id(request, raw_body, request_path)
+    model_id = _resolve_model_id(raw_body, request_path)
     if not model_id:
         raise HTTPException(
             status_code=400,

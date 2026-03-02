@@ -31,7 +31,6 @@ PROVIDER_AUTH = {
 
 FAILOVER_STATUS_CODES = {403, 429, 500, 502, 503, 529}
 _DOUBLE_SEGMENT_RE = re.compile(r"/(v\d+)/(?:\1)(?:/|$)")
-
 # Hop-by-hop headers that MUST NOT be forwarded (RFC 2616 §13.5.1)
 HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -55,11 +54,6 @@ CLIENT_AUTH_HEADERS = frozenset(
         "x-goog-api-key",
     }
 )
-
-
-
-
-
 def normalize_base_url(raw_url: str) -> str:
     """Strip trailing slashes from a base URL for consistent path joining."""
     return raw_url.rstrip("/")
@@ -110,10 +104,7 @@ def build_upstream_url(
     else:
         final_path = f"{base_path}{req_path}"
 
-
     return str(parsed.copy_with(path=final_path))
-
-
 def build_upstream_headers(
     connection: Connection | Endpoint,
     provider_type: str,
@@ -290,13 +281,10 @@ def rewrite_model_in_body(raw_body: bytes | None, target_model_id: str) -> bytes
         return raw_body
 
 
-
 def extract_stream_flag(raw_body: bytes) -> bool:
     try:
         parsed = json.loads(raw_body)
         return bool(parsed.get("stream", False))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return False
-
-
 
