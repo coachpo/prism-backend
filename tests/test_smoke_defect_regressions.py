@@ -223,6 +223,11 @@ class TestDEF003_AuthHeaderPerEndpoint:
         assert headers["x-api-key"] == "sk-test"
         assert "anthropic-version" in headers
 
+    def test_anthropic_provider_strips_whitespace_from_api_key(self):
+        ep = self._make_endpoint(api_key="\tmy-super-secret-password-123 \n")
+        headers = build_upstream_headers(ep, "anthropic")
+        assert headers["x-api-key"] == "my-super-secret-password-123"
+
     def test_anthropic_endpoint_with_openai_auth_override(self):
         ep = self._make_endpoint(auth_type="openai")
         headers = build_upstream_headers(ep, "anthropic")
@@ -1405,6 +1410,20 @@ class TestHeaderBlocklist:
         headers = build_upstream_headers(ep, "openai", blocklist_rules=[rule])
 
         assert headers["Authorization"] == "Bearer sk-test"
+
+    def test_build_upstream_headers_skips_invalid_custom_auth_override(self):
+        """HBL-008A (P0): invalid custom auth override must not clobber valid auth header."""
+        from app.services.proxy_service import build_upstream_headers
+
+        ep = MagicMock()
+        ep.auth_type = None
+        ep.api_key = "sk-test"
+        ep.custom_headers = '{"x-api-key":"\\tbad\\nkey","x-trace":"\\ttrace-1\\t"}'
+
+        headers = build_upstream_headers(ep, "anthropic")
+
+        assert headers["x-api-key"] == "sk-test"
+        assert headers["x-trace"] == "trace-1"
 
     def test_header_blocklist_rule_create_validates_prefix_ends_with_dash(self):
         """HBL-009 (P1): HeaderBlocklistRuleCreate validates prefix pattern must end with '-'."""

@@ -31,6 +31,7 @@ PROVIDER_AUTH = {
 
 FAILOVER_STATUS_CODES = {403, 429, 500, 502, 503, 529}
 _DOUBLE_SEGMENT_RE = re.compile(r"/(v\d+)/(?:\1)(?:/|$)")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1F\x7F]")
 # Hop-by-hop headers that MUST NOT be forwarded (RFC 2616 §13.5.1)
 HOP_BY_HOP_HEADERS = frozenset(
     {
@@ -54,6 +55,8 @@ CLIENT_AUTH_HEADERS = frozenset(
         "x-goog-api-key",
     }
 )
+
+
 def normalize_base_url(raw_url: str) -> str:
     """Strip trailing slashes from a base URL for consistent path joining."""
     return raw_url.rstrip("/")
@@ -105,6 +108,30 @@ def build_upstream_url(
         final_path = f"{base_path}{req_path}"
 
     return str(parsed.copy_with(path=final_path))
+
+
+def _normalize_header_value(value: object | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    if _CONTROL_CHAR_RE.search(normalized):
+        return None
+    return normalized
+
+
+def _normalize_header_values(headers: dict[str, object]) -> dict[str, str]:
+    normalized_headers: dict[str, str] = {}
+    for key, raw_value in headers.items():
+        normalized_value = _normalize_header_value(raw_value)
+        if normalized_value is None:
+            logger.warning("Dropping header '%s' due to invalid value", key)
+            continue
+        normalized_headers[key] = normalized_value
+    return normalized_headers
+
+
 def build_upstream_headers(
     connection: Connection | Endpoint,
     provider_type: str,
@@ -151,14 +178,22 @@ def build_upstream_headers(
     if blocklist_rules:
         headers = sanitize_headers(headers, blocklist_rules)
 
-    headers[config["auth_header"]] = f"{config['auth_prefix']}{api_key}"
+    normalized_api_key = _normalize_header_value(api_key) or ""
+    headers[config["auth_header"]] = f"{config['auth_prefix']}{normalized_api_key}"
     headers.update(config["extra_headers"])
 
     if custom_headers:
         try:
             custom = json.loads(custom_headers)
             if isinstance(custom, dict):
-                headers.update(custom)
+                for key, raw_value in custom.items():
+                    normalized_custom_value = _normalize_header_value(raw_value)
+                    if normalized_custom_value is None:
+                        logger.warning(
+                            "Skipping custom header '%s' due to invalid value", key
+                        )
+                        continue
+                    headers[key] = normalized_custom_value
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -177,7 +212,7 @@ def build_upstream_headers(
                 logger.debug("Blocked header (post-merge): %s", key)
         headers = sanitized
 
-    return headers
+    return _normalize_header_values(headers)
 
 
 def header_is_blocked(name: str, rules: list[HeaderBlocklistRule]) -> bool:
@@ -287,4 +322,3 @@ def extract_stream_flag(raw_body: bytes) -> bool:
         return bool(parsed.get("stream", False))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return False
-
