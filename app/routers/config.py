@@ -216,7 +216,6 @@ async def export_config(
     )
 
     data = ConfigExportResponse(
-        config_version="1",
         mode="replace",
         exported_at=datetime.now(timezone.utc),
         providers=exported_providers,
