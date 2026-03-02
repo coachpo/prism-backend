@@ -503,19 +503,74 @@ class TestBatchDeleteValidation:
         assert exc_info.value.status_code == 400
 
 
-class TestDEF005_ModelResolution:
-    """DEF-005 (P0): model resolution is body-only."""
+class TestDEF005_GeminiPathModelRewrite:
+    """DEF-005 (P0): proxy must rewrite model ID in Gemini-style URL paths."""
 
-    def test_resolve_model_from_body(self):
+    def test_rewrite_gemini_path(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        result = _rewrite_model_in_path(
+            "/v1beta/models/gemini-3-flash:generateContent",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+        )
+        assert result == "/v1beta/models/gemini-3-flash-preview:generateContent"
+
+    def test_rewrite_gemini_path_stream(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        result = _rewrite_model_in_path(
+            "/v1beta/models/gemini-3-flash:streamGenerateContent",
+            "gemini-3-flash",
+            "gemini-3-flash-preview",
+        )
+        assert result == "/v1beta/models/gemini-3-flash-preview:streamGenerateContent"
+
+    def test_no_rewrite_when_same_model(self):
+        from app.routers.proxy import _rewrite_model_in_path
+
+        path = "/v1beta/models/gemini-3-flash:generateContent"
+        result = _rewrite_model_in_path(path, "gemini-3-flash", "gemini-3-flash")
+        assert result == path
+
+    def test_non_gemini_path_unchanged(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert _extract_model_from_path("/v1/chat/completions") is None
+
+    def test_extract_model_from_gemini_path(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert (
+            _extract_model_from_path("/v1beta/models/gemini-3-flash:generateContent")
+            == "gemini-3-flash"
+        )
+
+    def test_resolve_model_prefers_body_then_path(self):
         from app.routers.proxy import _resolve_model_id
 
         raw_body = json.dumps({"model": "gpt-4o-mini"}).encode("utf-8")
-        assert _resolve_model_id(raw_body) == "gpt-4o-mini"
+        assert (
+            _resolve_model_id(
+                raw_body,
+                "/v1beta/models/gemini-3-flash:generateContent",
+            )
+            == "gpt-4o-mini"
+        )
 
-    def test_resolve_model_returns_none_without_body(self):
+    def test_resolve_model_uses_path_when_body_missing_model(self):
         from app.routers.proxy import _resolve_model_id
 
-        assert _resolve_model_id(None) is None
+        raw_body = json.dumps({"contents": [{"parts": [{"text": "hi"}]}]}).encode(
+            "utf-8"
+        )
+        assert (
+            _resolve_model_id(
+                raw_body,
+                "/v1beta/models/gemini-3-flash:generateContent",
+            )
+            == "gemini-3-flash"
+        )
 
 
 class TestDEF006_ConfigExportImportFieldCoverage:
@@ -2521,11 +2576,15 @@ class TestDEF022_ProfileIsolationRuntimeDependencies:
         }
 
         v1_route = route_by_path["/v1/{path:path}"]
+        v1beta_route = route_by_path["/v1beta/{path:path}"]
 
         v1_dependencies = {dep.call for dep in v1_route.dependant.dependencies}
+        v1beta_dependencies = {dep.call for dep in v1beta_route.dependant.dependencies}
 
         assert get_active_profile_id in v1_dependencies
+        assert get_active_profile_id in v1beta_dependencies
         assert get_effective_profile_id not in v1_dependencies
+        assert get_effective_profile_id not in v1beta_dependencies
 
 
 class TestDEF023_ConfigImportReferenceValidation:

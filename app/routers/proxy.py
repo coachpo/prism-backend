@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Annotated, AsyncGenerator
 
@@ -40,6 +41,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["proxy"])
 
 
+# Gemini-style URL pattern: /models/{model_id}:{action}
+_GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
+
+
 
 def _track_detached_task(task: asyncio.Task[None], *, name: str) -> None:
     def _on_done(done_task: asyncio.Task[None]) -> None:
@@ -57,6 +62,21 @@ def _get_client_headers(request: Request) -> dict[str, str]:
     return dict(request.headers)
 
 
+def _extract_model_from_path(request_path: str) -> str | None:
+    match = _GEMINI_MODEL_RE.search(request_path)
+    return match.group(1) if match else None
+
+
+def _rewrite_model_in_path(
+    request_path: str, original_model: str, target_model: str
+) -> str:
+    if original_model == target_model:
+        return request_path
+    return request_path.replace(
+        f"/models/{original_model}", f"/models/{target_model}", 1
+    )
+
+
 async def _endpoint_is_active_now(
     db: AsyncSession, connection_id: int, profile_id: int | None = None
  ) -> bool:
@@ -67,10 +87,14 @@ async def _endpoint_is_active_now(
     return bool(result.scalar_one_or_none())
 
 
-def _resolve_model_id(raw_body: bytes | None) -> str | None:
+def _resolve_model_id(raw_body: bytes | None, request_path: str) -> str | None:
     if not raw_body:
-        return None
-    return extract_model_from_body(raw_body)
+        return _extract_model_from_path(request_path)
+    model_id = extract_model_from_body(raw_body)
+    if model_id:
+        return model_id
+    # Gemini-style: model is in the URL path, not the body.
+    return _extract_model_from_path(request_path)
 
 
 def _rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
@@ -94,13 +118,13 @@ async def _handle_proxy(
     request_path: str,
     profile_id: int,
  ):
-    model_id = _resolve_model_id(raw_body)
+    model_id = _resolve_model_id(raw_body, request_path)
     if not model_id:
         raise HTTPException(
             status_code=400,
             detail=(
                 "Cannot determine model for routing. "
-                "Include 'model' in the request body."
+                "Include 'model' in the request body or use a Gemini-style model path."
             ),
         )
     model_config = await get_model_config_with_connections(db, profile_id, model_id)
@@ -123,9 +147,17 @@ async def _handle_proxy(
     client_headers = _get_client_headers(request)
     method = request.method
     upstream_model_id = model_config.model_id
+    body_model_id = extract_model_from_body(raw_body) if raw_body else None
     rewritten_body = raw_body
-    if raw_body and upstream_model_id != model_id:
+    if raw_body and body_model_id and upstream_model_id != body_model_id:
         rewritten_body = _rewrite_model_in_body(raw_body, upstream_model_id)
+
+    path_model = _extract_model_from_path(request_path)
+    effective_request_path = request_path
+    if path_model and upstream_model_id != path_model:
+        effective_request_path = _rewrite_model_in_path(
+            request_path, path_model, upstream_model_id
+        )
 
     blocklist_rules: list[HeaderBlocklistRule] = list(
         (
@@ -203,7 +235,7 @@ async def _handle_proxy(
 
         attempted_any_endpoint = True
         upstream_url = build_upstream_url(
-            ep, request_path, endpoint=ep.endpoint_rel
+            ep, effective_request_path, endpoint=ep.endpoint_rel
         )
         if request.url.query:
             upstream_url = f"{upstream_url}?{request.url.query}"
@@ -722,3 +754,16 @@ async def proxy_catch_all(
 ):
     raw_body = await request.body() or None
     return await _handle_proxy(request, db, raw_body, f"/v1/{path}", profile_id)
+
+
+@router.api_route(
+    "/v1beta/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
+)
+async def proxy_catch_all_v1beta(
+    request: Request,
+    path: str,
+    db: Annotated[AsyncSession, Depends(get_db, scope="function")],
+    profile_id: Annotated[int, Depends(get_active_profile_id)],
+):
+    raw_body = await request.body() or None
+    return await _handle_proxy(request, db, raw_body, f"/v1beta/{path}", profile_id)
