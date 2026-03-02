@@ -30,30 +30,6 @@ async def get_model_config_with_connections(
     if not config:
         return None
 
-    if config.model_type == "proxy" and config.redirect_to:
-        target_result = await db.execute(
-            select(ModelConfig)
-            .options(
-                selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
-                selectinload(ModelConfig.provider),
-            )
-            .where(
-                ModelConfig.profile_id == profile_id,
-                ModelConfig.model_id == config.redirect_to,
-                ModelConfig.is_enabled.is_(True),
-            )
-        )
-        target = target_result.scalar_one_or_none()
-        if not target:
-            logger.warning(
-                "Proxy target model_id=%r not found or disabled for profile_id=%d proxy model_id=%r",
-                config.redirect_to,
-                profile_id,
-                model_id,
-            )
-            return None
-        return target
-
     return config
 
 
@@ -147,5 +123,4 @@ def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
             profile_id,
             connection_id,
         )
-
 

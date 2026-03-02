@@ -131,7 +131,7 @@ async def update_endpoint(
     return endpoint
 
 
-@router.delete("/api/endpoints/{endpoint_id}", status_code=204)
+@router.delete("/api/endpoints/{endpoint_id}")
 async def delete_endpoint(
     endpoint_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -184,3 +184,5 @@ async def delete_endpoint(
         )
 
     await db.delete(endpoint)
+    await db.flush()
+    return {"deleted": True}

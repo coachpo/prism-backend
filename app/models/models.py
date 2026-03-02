@@ -198,7 +198,7 @@ class Connection(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    name: Mapped[str | None] = mapped_column("description", Text, nullable=True)
+    name: Mapped[str | None] = mapped_column(Text, nullable=True)
     auth_type: Mapped[str | None] = mapped_column(
         String(50), nullable=True
     )  # null=use provider default; "openai", "anthropic" to override

@@ -30,7 +30,6 @@ PROVIDER_AUTH = {
 }
 
 FAILOVER_STATUS_CODES = {403, 429, 500, 502, 503, 529}
-_DOUBLE_SEGMENT_RE = re.compile(r"/(v\d+)/(?:\1)(?:/|$)")
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1F\x7F]")
 # Hop-by-hop headers that MUST NOT be forwarded (RFC 2616 §13.5.1)
 HOP_BY_HOP_HEADERS = frozenset(
@@ -77,12 +76,6 @@ def validate_base_url(base_url: str) -> list[str]:
         warnings.append(
             "base_url must include scheme and host (e.g. https://api.example.com/v1)"
         )
-    path = parsed.path.rstrip("/")
-    if _DOUBLE_SEGMENT_RE.search(path):
-        warnings.append(
-            f"base_url path '{path}' contains a repeated version segment (e.g. /v1/v1). "
-            "This is likely a misconfiguration."
-        )
     return warnings
 
 
@@ -91,21 +84,12 @@ def build_upstream_url(
     request_path: str,
     endpoint: Endpoint | None = None,
 ) -> str:
-    """Forward the exact request path to the endpoint's base URL.
-
-    Handles overlapping path prefixes between base_url and request_path.
-    e.g. base_url="https://api.example.com/v1" + request_path="/v1/responses"
-         -> "https://api.example.com/v1/responses" (not /v1/v1/responses)
-    """
+    """Forward the request path to the endpoint base URL without path normalization."""
     endpoint_obj = endpoint or connection
     parsed = httpx.URL(str(endpoint_obj.base_url or ""))
     base_path = parsed.path.rstrip("/")
     req_path = request_path if request_path.startswith("/") else f"/{request_path}"
-
-    if base_path and req_path.startswith(base_path):
-        final_path = req_path
-    else:
-        final_path = f"{base_path}{req_path}"
+    final_path = f"{base_path}{req_path}"
 
     return str(parsed.copy_with(path=final_path))
 
@@ -303,17 +287,6 @@ def extract_model_from_body(raw_body: bytes) -> str | None:
         return parsed.get("model")
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-
-
-def rewrite_model_in_body(raw_body: bytes | None, target_model_id: str) -> bytes | None:
-    if not raw_body:
-        return raw_body
-    try:
-        parsed = json.loads(raw_body)
-        parsed["model"] = target_model_id
-        return json.dumps(parsed, separators=(",", ":")).encode("utf-8")
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        return raw_body
 
 
 def extract_stream_flag(raw_body: bytes) -> bool:

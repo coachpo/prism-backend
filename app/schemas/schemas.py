@@ -50,7 +50,6 @@ class ProfileResponse(ProfileBase):
 
 class ProfileActivateRequest(BaseModel):
     expected_active_profile_id: int
-    expected_active_profile_version: int
 
 
 AuthType = Literal["openai", "anthropic", "gemini"]
@@ -308,8 +307,7 @@ class ModelConfigBase(BaseModel):
     provider_id: int
     model_id: str
     display_name: str | None = None
-    model_type: str = "native"
-    redirect_to: str | None = None
+    model_type: Literal["native"] = "native"
     lb_strategy: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
@@ -334,8 +332,6 @@ class ModelConfigUpdate(BaseModel):
     provider_id: int | None = None
     model_id: str | None = None
     display_name: str | None = None
-    model_type: str | None = None
-    redirect_to: str | None = None
     lb_strategy: Literal["single", "failover"] | None = None
     failover_recovery_enabled: bool | None = None
     failover_recovery_cooldown_seconds: int | None = None
@@ -351,8 +347,7 @@ class ModelConfigResponse(BaseModel):
     provider: ProviderResponse
     model_id: str
     display_name: str | None
-    model_type: str
-    redirect_to: str | None
+    model_type: Literal["native"]
     lb_strategy: Literal["single", "failover"]
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
@@ -371,8 +366,7 @@ class ModelConfigListResponse(BaseModel):
     provider: ProviderResponse
     model_id: str
     display_name: str | None
-    model_type: str
-    redirect_to: str | None
+    model_type: Literal["native"]
     lb_strategy: Literal["single", "failover"]
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
@@ -600,14 +594,14 @@ class SpendingReportResponse(BaseModel):
 
 
 class ConfigEndpointExport(BaseModel):
-    endpoint_ref: str
+    endpoint_id: int
     name: str
     base_url: str
     api_key: str
 
 class ConfigConnectionExport(BaseModel):
-    connection_ref: str
-    endpoint_ref: str
+    connection_id: int
+    endpoint_id: int
     is_active: bool = True
     priority: int = 0
     name: str | None = None
@@ -630,31 +624,28 @@ class ConfigModelExport(BaseModel):
     provider_type: str
     model_id: str
     display_name: str | None = None
-    model_type: str = "native"
-    redirect_to: str | None = None
+    model_type: Literal["native"] = "native"
     lb_strategy: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
     is_enabled: bool = True
-    connections: list[ConfigConnectionExport] = []
+    connections: list[ConfigConnectionExport] = Field(default_factory=list)
 
 
 
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
-    endpoint_ref: str
+    endpoint_id: int
     fx_rate: str
 
 
 class ConfigUserSettingsExport(BaseModel):
     report_currency_code: str = "USD"
     report_currency_symbol: str = "$"
-    endpoint_fx_mappings: list[ConfigEndpointFxRateExport] = []
+    endpoint_fx_mappings: list[ConfigEndpointFxRateExport] = Field(default_factory=list)
 
 
 class ConfigExportResponse(BaseModel):
-    config_version: Literal["1"] = "1"
-    mode: Literal["replace"] = "replace"
     exported_at: datetime
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
@@ -664,13 +655,11 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
-    config_version: Literal["1"]
     exported_at: datetime | None = None
     endpoints: list[ConfigEndpointExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(default_factory=list)
-    mode: Literal["replace"]
 
 
 

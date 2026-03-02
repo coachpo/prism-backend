@@ -237,7 +237,6 @@ def compute_cost_fields(
         result["unpriced_reason"] = "MISSING_TOKEN_USAGE"
         return result
 
-    policy = connection.missing_special_token_price_policy
     input_count = max(input_tokens or 0, 0)
     output_count = max(output_tokens or 0, 0)
 
@@ -254,27 +253,35 @@ def compute_cost_fields(
         max(reasoning_tokens, 0) if reasoning_tokens is not None else 0
     )
 
-    # Prices: use endpoint config, fall back via policy if None
-    if connection.cached_input_price is not None:
-        cached_price = Decimal(str(connection.cached_input_price))
-    elif policy == "MAP_TO_OUTPUT":
-        cached_price = output_price  # use output price as fallback
-    else:  # ZERO_COST
-        cached_price = Decimal("0")
+    if cache_read_input_tokens is not None and cache_read_input_tokens > 0 and connection.cached_input_price is None:
+        result["unpriced_reason"] = "MISSING_PRICE_DATA"
+        return result
+    if (
+        cache_creation_input_tokens is not None
+        and cache_creation_input_tokens > 0
+        and connection.cache_creation_price is None
+    ):
+        result["unpriced_reason"] = "MISSING_PRICE_DATA"
+        return result
+    if reasoning_tokens is not None and reasoning_tokens > 0 and connection.reasoning_price is None:
+        result["unpriced_reason"] = "MISSING_PRICE_DATA"
+        return result
 
-    if connection.cache_creation_price is not None:
-        cache_creation_price = Decimal(str(connection.cache_creation_price))
-    elif policy == "MAP_TO_OUTPUT":
-        cache_creation_price = output_price
-    else:  # ZERO_COST
-        cache_creation_price = Decimal("0")
-
-    if connection.reasoning_price is not None:
-        reasoning_price = Decimal(str(connection.reasoning_price))
-    elif policy == "MAP_TO_OUTPUT":
-        reasoning_price = output_price
-    else:  # ZERO_COST
-        reasoning_price = Decimal("0")
+    cached_price = (
+        Decimal(str(connection.cached_input_price))
+        if connection.cached_input_price is not None
+        else Decimal("0")
+    )
+    cache_creation_price = (
+        Decimal(str(connection.cache_creation_price))
+        if connection.cache_creation_price is not None
+        else Decimal("0")
+    )
+    reasoning_price = (
+        Decimal(str(connection.reasoning_price))
+        if connection.reasoning_price is not None
+        else Decimal("0")
+    )
 
     factor = Decimal("1000000")
     input_cost = (Decimal(input_count) / factor) * input_price
@@ -315,7 +322,7 @@ def compute_cost_fields(
                 cache_creation_price
             ),
             "pricing_snapshot_reasoning": _normalize_decimal_string(reasoning_price),
-            "pricing_snapshot_missing_special_token_price_policy": policy,
+            "pricing_snapshot_missing_special_token_price_policy": connection.missing_special_token_price_policy,
             "pricing_config_version_used": connection.pricing_config_version,
         }
     )

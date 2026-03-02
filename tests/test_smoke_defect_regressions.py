@@ -8,7 +8,6 @@ import pytest
 from fastapi import HTTPException
 
 from app.services.proxy_service import (
-    rewrite_model_in_body,
     extract_model_from_body,
     build_upstream_headers,
 )
@@ -151,55 +150,24 @@ class TestDEF031_StartupUserSettingsSeed:
         mock_session.commit.assert_not_awaited()
 
 
-class TestDEF002_ModelIdRewriting:
-    """DEF-002 (P1): proxy must inject/rewrite model field in forwarded body."""
+class TestDEF002_ModelExtraction:
+    """DEF-002 (P1): routing model must be extracted from request body only."""
 
-    def test_rewrite_model_for_proxy_alias(self):
+    def test_extract_model_from_valid_body(self):
         body = json.dumps(
             {
                 "model": "claude-sonnet-4",
                 "messages": [{"role": "user", "content": "hi"}],
             }
         ).encode()
-        result = rewrite_model_in_body(body, "claude-sonnet-4-20250514")
-        assert result is not None
-        parsed = json.loads(result)
-        assert parsed["model"] == "claude-sonnet-4-20250514"
-        assert parsed["messages"] == [{"role": "user", "content": "hi"}]
+        assert extract_model_from_body(body) == "claude-sonnet-4"
 
-    def test_inject_model_when_missing_from_body(self):
+    def test_extract_model_returns_none_when_missing(self):
         body = json.dumps({"messages": [{"role": "user", "content": "hi"}]}).encode()
         assert extract_model_from_body(body) is None
-        result = rewrite_model_in_body(body, "gemini-2.5-flash")
-        assert result is not None
-        parsed = json.loads(result)
-        assert parsed["model"] == "gemini-2.5-flash"
 
-    def test_rewrite_preserves_other_fields(self):
-        body = json.dumps(
-            {
-                "model": "alias-name",
-                "messages": [{"role": "user", "content": "test"}],
-                "temperature": 0.7,
-                "max_tokens": 100,
-                "stream": True,
-            }
-        ).encode()
-        result = rewrite_model_in_body(body, "real-model-id")
-        assert result is not None
-        parsed = json.loads(result)
-        assert parsed["model"] == "real-model-id"
-        assert parsed["temperature"] == 0.7
-        assert parsed["max_tokens"] == 100
-        assert parsed["stream"] is True
-
-    def test_rewrite_returns_none_for_none_body(self):
-        assert rewrite_model_in_body(None, "model") is None
-
-    def test_rewrite_returns_original_for_invalid_json(self):
-        body = b"not json"
-        result = rewrite_model_in_body(body, "model")
-        assert result == body
+    def test_extract_model_returns_none_for_invalid_json(self):
+        assert extract_model_from_body(b"not json") is None
 
 
 class TestDEF003_AuthHeaderPerEndpoint:
@@ -535,48 +503,19 @@ class TestBatchDeleteValidation:
         assert exc_info.value.status_code == 400
 
 
-class TestDEF005_GeminiPathModelRewrite:
-    """DEF-005 (P0): proxy must rewrite model ID in Gemini-style URL paths."""
+class TestDEF005_ModelResolution:
+    """DEF-005 (P0): model resolution is body-only."""
 
-    def test_rewrite_gemini_path(self):
-        from app.routers.proxy import _rewrite_model_in_path
+    def test_resolve_model_from_body(self):
+        from app.routers.proxy import _resolve_model_id
 
-        result = _rewrite_model_in_path(
-            "/v1beta/models/gemini-3-flash:generateContent",
-            "gemini-3-flash",
-            "gemini-3-flash-preview",
-        )
-        assert result == "/v1beta/models/gemini-3-flash-preview:generateContent"
+        raw_body = json.dumps({"model": "gpt-4o-mini"}).encode("utf-8")
+        assert _resolve_model_id(raw_body) == "gpt-4o-mini"
 
-    def test_rewrite_gemini_path_stream(self):
-        from app.routers.proxy import _rewrite_model_in_path
+    def test_resolve_model_returns_none_without_body(self):
+        from app.routers.proxy import _resolve_model_id
 
-        result = _rewrite_model_in_path(
-            "/v1beta/models/gemini-3-flash:streamGenerateContent",
-            "gemini-3-flash",
-            "gemini-3-flash-preview",
-        )
-        assert result == "/v1beta/models/gemini-3-flash-preview:streamGenerateContent"
-
-    def test_no_rewrite_when_same_model(self):
-        from app.routers.proxy import _rewrite_model_in_path
-
-        path = "/v1beta/models/gemini-3-flash:generateContent"
-        result = _rewrite_model_in_path(path, "gemini-3-flash", "gemini-3-flash")
-        assert result == path
-
-    def test_non_gemini_path_unchanged(self):
-        from app.routers.proxy import _extract_model_from_path
-
-        assert _extract_model_from_path("/v1/chat/completions") is None
-
-    def test_extract_model_from_gemini_path(self):
-        from app.routers.proxy import _extract_model_from_path
-
-        assert (
-            _extract_model_from_path("/v1beta/models/gemini-3-flash:generateContent")
-            == "gemini-3-flash"
-        )
+        assert _resolve_model_id(None) is None
 
 
 class TestDEF006_ConfigExportImportFieldCoverage:
@@ -587,7 +526,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConfigEndpointExport.model_fields.keys())
         expected = {
-            "endpoint_ref",
+            "endpoint_id",
             "name",
             "base_url",
             "api_key",
@@ -599,8 +538,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConfigConnectionExport.model_fields.keys())
         expected = {
-            "connection_ref",
-            "endpoint_ref",
+            "connection_id",
+            "endpoint_id",
             "is_active",
             "priority",
             "name",
@@ -619,7 +558,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "model_id",
             "display_name",
             "model_type",
-            "redirect_to",
             "lb_strategy",
             "is_enabled",
             "connections",
@@ -631,8 +569,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         headers = {"X-Custom": "value", "X-Another": "test"}
         connection = ConfigConnectionExport(
-            endpoint_ref="endpoint:1",
-            connection_ref="connection:test:1",
+            endpoint_id=1,
+            connection_id=1,
             custom_headers=headers,
             auth_type="openai",
         )
@@ -645,8 +583,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from app.schemas.schemas import ConfigConnectionExport
 
         connection = ConfigConnectionExport(
-            endpoint_ref="endpoint:1",
-            connection_ref="connection:test:2",
+            endpoint_id=1,
+            connection_id=2,
             custom_headers=None,
         )
         exported = connection.model_dump(mode="json")
@@ -657,8 +595,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from app.schemas.schemas import ConfigConnectionExport
 
         connection = ConfigConnectionExport(
-            endpoint_ref="endpoint:1",
-            connection_ref="connection:test:3",
+            endpoint_id=1,
+            connection_id=3,
             custom_headers={},
         )
         exported = connection.model_dump(mode="json")
@@ -684,11 +622,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            config_version="1",
             exported_at=datetime.now(timezone.utc),
             endpoints=[
                 ConfigEndpointExport(
-                    endpoint_ref="endpoint:openai-main",
+                    endpoint_id=1,
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
@@ -706,8 +643,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     failover_recovery_cooldown_seconds=60,
                     connections=[
                         ConfigConnectionExport(
-                            connection_ref="connection:gpt-4o:openai-main:0:primary:0",
-                            endpoint_ref="endpoint:openai-main",
+                            connection_id=1,
+                            endpoint_id=1,
                             is_active=True,
                             priority=0,
                             name="Primary",
@@ -719,7 +656,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ],
         )
         exported = config.model_dump(mode="json")
-        exported["mode"] = "replace"
         reimported = ConfigImportRequest(**exported)
 
         assert len(reimported.models) == 1
@@ -1048,8 +984,8 @@ class TestFailoverRecoveryFieldValidation:
             failover_recovery_cooldown_seconds=300,
             connections=[
                 ConfigConnectionExport(
-                    connection_ref="connection:gpt-4:openai-main:0:primary:0",
-                    endpoint_ref="endpoint:openai-main",
+                    connection_id=1,
+                    endpoint_id=1,
                 )
             ],
         )
@@ -1057,20 +993,19 @@ class TestFailoverRecoveryFieldValidation:
         assert exported["failover_recovery_enabled"] is False
         assert exported["failover_recovery_cooldown_seconds"] == 300
 
-    def test_config_import_accepts_version_1(self):
-        """ConfigImportRequest accepts version 1."""
+    def test_config_import_accepts_minimal_payload(self):
+        """ConfigImportRequest accepts minimal strict payload."""
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
-                "providers": [],
                 "endpoints": [],
                 "models": [],
-                "mode": "replace",
             }
         )
-        assert validation.config_version == "1"
+        assert validation.endpoints == []
+        assert validation.models == []
+
     def test_config_import_rejects_round_robin_in_models(self):
         """ConfigImportRequest rejects models with lb_strategy=round_robin."""
         from app.schemas.schemas import ConfigImportRequest
@@ -1079,11 +1014,9 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "config_version": "1",
-                    "providers": [],
                     "endpoints": [
                         {
-                            "endpoint_ref": "endpoint:openai-main",
+                            "endpoint_id": 1,
                             "name": "openai-main",
                             "base_url": "https://api.openai.com/v1",
                             "api_key": "sk-test",
@@ -1099,13 +1032,12 @@ class TestFailoverRecoveryFieldValidation:
                             "is_enabled": True,
                             "connections": [
                                 {
-                                    "connection_ref": "connection:gpt-4:openai-main:0:primary:0",
-                                    "endpoint_ref": "endpoint:openai-main",
+                                    "connection_id": 1,
+                                    "endpoint_id": 1,
                                 }
                             ],
                         }
                     ],
-                    "mode": "replace",
                 }
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
@@ -1117,16 +1049,9 @@ class TestFailoverRecoveryFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
-                "providers": [
-                    {
-                        "name": "OpenAI",
-                        "provider_type": "openai",
-                    }
-                ],
                 "endpoints": [
                     {
-                        "endpoint_ref": "endpoint:openai-main",
+                        "endpoint_id": 1,
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
@@ -1139,8 +1064,8 @@ class TestFailoverRecoveryFieldValidation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": "connection:dup",
-                                "endpoint_ref": "endpoint:openai-main",
+                                "connection_id": 1,
+                                "endpoint_id": 1,
                             }
                         ],
                     },
@@ -1150,13 +1075,12 @@ class TestFailoverRecoveryFieldValidation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": "connection:dup",
-                                "endpoint_ref": "endpoint:openai-main",
+                                "connection_id": 1,
+                                "endpoint_id": 1,
                             }
                         ],
                     },
                 ],
-                "mode": "replace",
             }
         )
 
@@ -1164,10 +1088,10 @@ class TestFailoverRecoveryFieldValidation:
             _validate_import(data)
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Duplicate connection reference: 'connection:dup'"
+        assert exc_info.value.detail == "Duplicate connection_id in import: 1"
 
-    def test_config_version_1_roundtrip(self):
-        """Config export/import roundtrip with version 1 and recovery fields."""
+    def test_config_roundtrip(self):
+        """Config export/import roundtrip with strict schema and recovery fields."""
         from app.schemas.schemas import (
             ConfigConnectionExport,
             ConfigEndpointExport,
@@ -1178,11 +1102,10 @@ class TestFailoverRecoveryFieldValidation:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            config_version="1",
             exported_at=datetime.now(timezone.utc),
             endpoints=[
                 ConfigEndpointExport(
-                    endpoint_ref="endpoint:openai-main",
+                    endpoint_id=1,
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
@@ -1200,8 +1123,8 @@ class TestFailoverRecoveryFieldValidation:
                     failover_recovery_cooldown_seconds=180,
                     connections=[
                         ConfigConnectionExport(
-                            connection_ref="connection:gpt-4o:openai-main:0:primary:0",
-                            endpoint_ref="endpoint:openai-main",
+                            connection_id=1,
+                            endpoint_id=1,
                             is_active=True,
                             priority=0,
                         )
@@ -1210,10 +1133,8 @@ class TestFailoverRecoveryFieldValidation:
             ],
         )
         exported = config.model_dump(mode="json")
-        exported["mode"] = "replace"
         reimported = ConfigImportRequest(**exported)
 
-        assert reimported.config_version == "1"
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.lb_strategy == "failover"
@@ -1625,7 +1546,6 @@ class TestHeaderBlocklist:
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
-            config_version="1",
             exported_at=datetime.now(timezone.utc),
             endpoints=[],
             models=[],
@@ -1645,17 +1565,18 @@ class TestHeaderBlocklist:
 
 class TestDEF009_ConnectionDefaultsPersist:
     """DEF-009 (P1): connection schema defaults and creation path remain intact."""
+
     def test_config_export_connection_defaults(self):
         from app.schemas.schemas import ConfigConnectionExport
 
         export = ConfigConnectionExport(
-            endpoint_ref="endpoint:1",
-            connection_ref="connection:stream:1",
+            endpoint_id=1,
+            connection_id=1,
             pricing_enabled=True,
         )
         assert export.pricing_enabled is True
 
-        export_default = ConfigConnectionExport(connection_ref="connection:stream:2", endpoint_ref="endpoint:1")
+        export_default = ConfigConnectionExport(connection_id=2, endpoint_id=1)
         assert export_default.pricing_enabled is False
 
     @pytest.mark.asyncio
@@ -2118,8 +2039,8 @@ class TestDEF015_NoUsageBlockYieldsNull:
         assert usage["reasoning_tokens"] is None
 
 
-class TestDEF016_MapToOutputFallback:
-    """DEF-016: MAP_TO_OUTPUT applies output_price to missing special prices."""
+class TestDEF016_MissingSpecialPriceFailsClosed:
+    """DEF-016: Missing special prices produce MISSING_PRICE_DATA instead of fallback pricing."""
 
     @staticmethod
     def _build_connection(
@@ -2156,7 +2077,7 @@ class TestDEF016_MapToOutputFallback:
         connection.endpoint_rel = endpoint
         return connection, endpoint
 
-    def test_map_to_output_uses_output_price_for_missing_specials(self):
+    def test_missing_special_prices_set_unpriced_reason(self):
         from app.services.costing_service import (
             CostingSettingsSnapshot,
             compute_cost_fields,
@@ -2188,18 +2109,12 @@ class TestDEF016_MapToOutputFallback:
             ),
         )
 
-        # All three special costs should use output_price (4 per 1M)
-        assert result["cache_read_input_cost_micros"] == 2_000_000  # 500k * 4/1M * 1e6
-        assert result["cache_creation_input_cost_micros"] == 2_000_000
-        assert result["reasoning_cost_micros"] == 2_000_000
-        # Snapshot should reflect the fallback price
-        assert result["pricing_snapshot_cache_read_input"] == "4.000000"
-        assert result["pricing_snapshot_cache_creation_input"] == "4.000000"
-        assert result["pricing_snapshot_reasoning"] == "4.000000"
+        assert result["priced_flag"] is False
+        assert result["unpriced_reason"] == "MISSING_PRICE_DATA"
 
 
-class TestDEF017_ZeroCostFallback:
-    """DEF-017: ZERO_COST with missing special prices produces 0 special costs."""
+class TestDEF017_ExplicitSpecialPricesAreUsed:
+    """DEF-017: Provided special prices are used directly."""
 
     @staticmethod
     def _build_connection(
@@ -2236,7 +2151,7 @@ class TestDEF017_ZeroCostFallback:
         connection.endpoint_rel = endpoint
         return connection, endpoint
 
-    def test_zero_cost_produces_zero_for_missing_specials(self):
+    def test_explicit_special_prices_produce_costs(self):
         from app.services.costing_service import (
             CostingSettingsSnapshot,
             compute_cost_fields,
@@ -2245,9 +2160,9 @@ class TestDEF017_ZeroCostFallback:
         connection, endpoint = self._build_connection(
             input_price="2",
             output_price="4",
-            cached_input_price=None,
-            cache_creation_price=None,
-            reasoning_price=None,
+            cached_input_price="1",
+            cache_creation_price="3",
+            reasoning_price="5",
             missing_special_token_price_policy="ZERO_COST",
         )
 
@@ -2268,14 +2183,9 @@ class TestDEF017_ZeroCostFallback:
             ),
         )
 
-        # All three special costs should be zero
-        assert result["cache_read_input_cost_micros"] == 0
-        assert result["cache_creation_input_cost_micros"] == 0
-        assert result["reasoning_cost_micros"] == 0
-        # Snapshot should reflect zero price
-        assert result["pricing_snapshot_cache_read_input"] == "0.000000"
-        assert result["pricing_snapshot_cache_creation_input"] == "0.000000"
-        assert result["pricing_snapshot_reasoning"] == "0.000000"
+        assert result["cache_read_input_cost_micros"] == 500_000
+        assert result["cache_creation_input_cost_micros"] == 1_500_000
+        assert result["reasoning_cost_micros"] == 2_500_000
 
 
 class TestDEF018_SpecialTokensNeverCopiedFromOutput:
@@ -2611,28 +2521,23 @@ class TestDEF022_ProfileIsolationRuntimeDependencies:
         }
 
         v1_route = route_by_path["/v1/{path:path}"]
-        v1beta_route = route_by_path["/v1beta/{path:path}"]
 
         v1_dependencies = {dep.call for dep in v1_route.dependant.dependencies}
-        v1beta_dependencies = {dep.call for dep in v1beta_route.dependant.dependencies}
 
         assert get_active_profile_id in v1_dependencies
-        assert get_active_profile_id in v1beta_dependencies
         assert get_effective_profile_id not in v1_dependencies
-        assert get_effective_profile_id not in v1beta_dependencies
 
 
 class TestDEF023_ConfigImportReferenceValidation:
-    def test_validate_import_accepts_v1_logical_refs(self):
+    def test_validate_import_accepts_numeric_ids(self):
         from app.schemas.schemas import ConfigImportRequest
         from app.routers.config import _validate_import
 
         data = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
                 "endpoints": [
                     {
-                        "endpoint_ref": "endpoint:openai-main",
+                        "endpoint_id": 1,
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
@@ -2645,8 +2550,8 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": "connection:gpt-4o:openai-main:0:primary:0",
-                                "endpoint_ref": "endpoint:openai-main",
+                                "connection_id": 1,
+                                "endpoint_id": 1,
                             }
                         ],
                     }
@@ -2655,27 +2560,25 @@ class TestDEF023_ConfigImportReferenceValidation:
                     "endpoint_fx_mappings": [
                         {
                             "model_id": "gpt-4o",
-                            "endpoint_ref": "endpoint:openai-main",
+                            "endpoint_id": 1,
                             "fx_rate": "1",
                         }
                     ]
                 },
-                "mode": "replace",
             }
         )
 
         _validate_import(data)
 
-    def test_validate_import_rejects_duplicate_logical_connection_refs(self):
+    def test_validate_import_rejects_duplicate_connection_ids(self):
         from app.routers.config import _validate_import
         from app.schemas.schemas import ConfigImportRequest
 
         data = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
                 "endpoints": [
                     {
-                        "endpoint_ref": "endpoint:openai-main",
+                        "endpoint_id": 1,
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
@@ -2688,8 +2591,8 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": "connection:dup",
-                                "endpoint_ref": "endpoint:openai-main",
+                                "connection_id": 1,
+                                "endpoint_id": 1,
                             }
                         ],
                     },
@@ -2699,13 +2602,12 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": "connection:dup",
-                                "endpoint_ref": "endpoint:openai-main",
+                                "connection_id": 1,
+                                "endpoint_id": 1,
                             }
                         ],
                     },
                 ],
-                "mode": "replace",
             }
         )
 
@@ -2713,12 +2615,12 @@ class TestDEF023_ConfigImportReferenceValidation:
             _validate_import(data)
 
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Duplicate connection reference: 'connection:dup'"
+        assert exc_info.value.detail == "Duplicate connection_id in import: 1"
 
 
 class TestDEF024_ConfigImportExportRefRoundtrip:
     @pytest.mark.asyncio
-    async def test_import_v1_roundtrip_preserves_logical_refs(self):
+    async def test_import_export_roundtrip_preserves_numeric_ids(self):
         from sqlalchemy import select
         from app.core.database import AsyncSessionLocal, get_engine
         from app.models.models import Connection, Endpoint, EndpointFxRateSetting, Profile
@@ -2732,14 +2634,11 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         endpoint_name = f"def024-endpoint-{suffix}"
         model_id = f"def024-model-{suffix}"
         connection_name = f"def024-connection-{suffix}"
-        endpoint_ref = f"endpoint:{endpoint_name}"
-        connection_ref = f"connection:{model_id}:{endpoint_name}:0:{connection_name}:0"
         payload = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
                 "endpoints": [
                     {
-                        "endpoint_ref": endpoint_ref,
+                        "endpoint_id": 9001,
                         "name": endpoint_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
@@ -2752,8 +2651,8 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": connection_ref,
-                                "endpoint_ref": endpoint_ref,
+                                "connection_id": 7001,
+                                "endpoint_id": 9001,
                                 "name": connection_name,
                             }
                         ],
@@ -2765,12 +2664,11 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     "endpoint_fx_mappings": [
                         {
                             "model_id": model_id,
-                            "endpoint_ref": endpoint_ref,
+                            "endpoint_id": 9001,
                             "fx_rate": "1.25",
                         }
                     ],
                 },
-                "mode": "replace",
             }
         )
 
@@ -2826,12 +2724,10 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             export_response = await export_config(db=db, profile_id=1)
             exported = json.loads(export_response.body)
 
-        assert exported["config_version"] == "1"
         exported_endpoint = next(
             e for e in exported["endpoints"] if e["name"] == endpoint_name
         )
-        assert exported_endpoint["endpoint_ref"] == endpoint_ref
-        assert "endpoint_id" not in exported_endpoint
+        assert exported_endpoint["endpoint_id"] == endpoint.id
 
         exported_model = next(
             m for m in exported["models"] if m["model_id"] == model_id
@@ -2839,17 +2735,15 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         exported_connection = next(
             c for c in exported_model["connections"] if c["name"] == connection_name
         )
-        assert exported_connection["endpoint_ref"] == endpoint_ref
-        assert "connection_id" not in exported_connection
-        assert exported_connection["connection_ref"].startswith("connection:")
+        assert exported_connection["endpoint_id"] == endpoint.id
+        assert exported_connection["connection_id"] == connection.id
 
         exported_mapping = next(
             m
             for m in exported["user_settings"]["endpoint_fx_mappings"]
             if m["model_id"] == model_id
         )
-        assert exported_mapping["endpoint_ref"] == endpoint_ref
-        assert "endpoint_id" not in exported_mapping
+        assert exported_mapping["endpoint_id"] == endpoint.id
 
 
 
@@ -2882,7 +2776,6 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                 await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "config_version": "1",
                     "endpoints": [],
                     "models": [],
                     "user_settings": {
@@ -2898,7 +2791,6 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                             "enabled": True,
                         }
                     ],
-                    "mode": "replace",
                 }
             )
 

@@ -163,12 +163,6 @@ async def activate_profile(
             detail=f"Active profile mismatch: expected {body.expected_active_profile_id}, got {current_active.id}",
         )
 
-    if current_active.version != body.expected_active_profile_version:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Active profile version mismatch: expected {body.expected_active_profile_version}, got {current_active.version}",
-        )
-
     # If target is already active, no-op
     if profile_id == current_active.id:
         return current_active
@@ -204,7 +198,7 @@ async def activate_profile(
     await db.refresh(target_profile)
     return target_profile
 
-@router.delete("/{profile_id}", status_code=204)
+@router.delete("/{profile_id}")
 async def delete_profile(
     profile_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -236,4 +230,4 @@ async def delete_profile(
     profile.deleted_at = datetime.utcnow()
     profile.updated_at = datetime.utcnow()
     await db.flush()
-    return None
+    return {"deleted": True}

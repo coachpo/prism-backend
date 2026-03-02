@@ -166,9 +166,7 @@ class TestProfileCRUDAndLifecycle:
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
-        body = ProfileActivateRequest(
-            expected_active_profile_id=1, expected_active_profile_version=5
-        )
+        body = ProfileActivateRequest(expected_active_profile_id=1)
         with patch(
             "app.routers.profiles.ensure_profile_invariants",
             new_callable=AsyncMock,
@@ -183,8 +181,8 @@ class TestProfileCRUDAndLifecycle:
         assert target_profile.version == 4
         assert mock_db.flush.await_count == 2
     @pytest.mark.asyncio
-    async def test_activate_profile_with_stale_cas_fails(self):
-        """Profile activation fails with stale CAS payload."""
+    async def test_activate_profile_with_stale_active_id_fails(self):
+        """Profile activation fails when expected active profile ID is stale."""
         mock_db = AsyncMock()
 
         # Mock current active profile with different version
@@ -197,10 +195,7 @@ class TestProfileCRUDAndLifecycle:
 
         mock_db.execute.return_value = active_result
 
-        body = ProfileActivateRequest(
-            expected_active_profile_id=1,
-            expected_active_profile_version=5,  # Stale version
-        )
+        body = ProfileActivateRequest(expected_active_profile_id=99)
         with patch(
             "app.routers.profiles.ensure_profile_invariants",
             new_callable=AsyncMock,
@@ -210,7 +205,7 @@ class TestProfileCRUDAndLifecycle:
                 await activate_profile(profile_id=2, body=body, db=mock_db)
 
         assert exc_info.value.status_code == 409
-        assert "version mismatch" in exc_info.value.detail
+        assert "mismatch" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_activate_profile_conflict_returns_409(self):
@@ -238,9 +233,7 @@ class TestProfileCRUDAndLifecycle:
         from sqlalchemy.exc import IntegrityError
         mock_db.flush.side_effect = [None, IntegrityError("stmt", "params", Exception("dup"))]
 
-        body = ProfileActivateRequest(
-            expected_active_profile_id=1, expected_active_profile_version=5
-        )
+        body = ProfileActivateRequest(expected_active_profile_id=1)
         with patch(
             "app.routers.profiles.ensure_profile_invariants",
             new_callable=AsyncMock,
@@ -502,41 +495,27 @@ class TestProxyRuntimeIsolation:
         assert resolved.profile_id == 1
 
     @pytest.mark.asyncio
-    async def test_proxy_alias_stays_within_profile(self):
-        """Proxy alias resolution must stay within same profile."""
+    async def test_proxy_returns_requested_model_within_profile(self):
+        """Model resolution remains profile-scoped without alias indirection."""
         mock_db = AsyncMock()
 
-        # Mock proxy model in profile 1
-        proxy_model = MagicMock()
-        proxy_model.profile_id = 1
-        proxy_model.model_id = "gpt-4-alias"
-        proxy_model.model_type = "proxy"
-        proxy_model.redirect_to = "gpt-4-real"
+        model = MagicMock()
+        model.profile_id = 1
+        model.model_id = "gpt-4-alias"
+        model.model_type = "native"
+        model.redirect_to = None
+        model.connections_rel = [MagicMock()]
 
-        # Mock target model in profile 1
-        target_model = MagicMock()
-        target_model.profile_id = 1
-        target_model.model_id = "gpt-4-real"
-        target_model.model_type = "native"
-        target_model.redirect_to = None
-        target_model.connections_rel = [MagicMock()]
-
-        # First query returns proxy, second returns target
-        proxy_result = MagicMock()
-        proxy_result.scalar_one_or_none.return_value = proxy_model
-
-        target_result = MagicMock()
-        target_result.scalar_one_or_none.return_value = target_model
-
-        mock_db.execute.side_effect = [proxy_result, target_result]
+        result = MagicMock()
+        result.scalar_one_or_none.return_value = model
+        mock_db.execute.return_value = result
 
         resolved = await get_model_config_with_connections(
             db=mock_db, model_id="gpt-4-alias", profile_id=1
         )
 
-        # Verify both queries filtered by profile_id=1
         assert resolved.profile_id == 1
-        assert resolved.model_id == "gpt-4-real"
+        assert resolved.model_id == "gpt-4-alias"
 
     @pytest.mark.asyncio
     async def test_model_not_found_in_other_profile(self):
@@ -623,7 +602,6 @@ class TestConfigExportImportIsolation:
         payload = json.loads(config.body.decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["config_version"] == "1"
         assert len(payload["endpoints"]) == 1
         assert len(payload["models"]) == 1
         assert "providers" not in payload
@@ -652,12 +630,10 @@ class TestConfigExportImportIsolation:
         other_rule_pattern = f"x-other-{suffix}"
 
         new_endpoint_name = f"target-endpoint-new-{suffix}"
-        new_endpoint_ref = f"endpoint:{new_endpoint_name}"
+        new_endpoint_id = 9001
         new_model_id = f"target-model-new-{suffix}"
         new_connection_name = f"target-connection-new-{suffix}"
-        new_connection_ref = (
-            f"connection:{new_model_id}:{new_endpoint_ref}:0:{new_connection_name}:0"
-        )
+        new_connection_id = 7001
         new_rule_pattern = f"x-target-new-{suffix}"
 
         async with AsyncSessionLocal() as db:
@@ -798,11 +774,9 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "config_version": "1",
-                "mode": "replace",
                 "endpoints": [
                     {
-                        "endpoint_ref": new_endpoint_ref,
+                        "endpoint_id": new_endpoint_id,
                         "name": new_endpoint_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-target-new",
@@ -815,8 +789,8 @@ class TestConfigExportImportIsolation:
                         "model_type": "native",
                         "connections": [
                             {
-                                "connection_ref": new_connection_ref,
-                                "endpoint_ref": new_endpoint_ref,
+                                "connection_id": new_connection_id,
+                                "endpoint_id": new_endpoint_id,
                                 "name": new_connection_name,
                                 "priority": 0,
                                 "is_active": True,
@@ -830,7 +804,7 @@ class TestConfigExportImportIsolation:
                     "endpoint_fx_mappings": [
                         {
                             "model_id": new_model_id,
-                            "endpoint_ref": new_endpoint_ref,
+                            "endpoint_id": new_endpoint_id,
                             "fx_rate": "1.25",
                         }
                     ],

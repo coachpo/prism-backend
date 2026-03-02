@@ -170,10 +170,6 @@ async def create_connection(
     model = model_result.scalar_one_or_none()
     if model is None:
         raise HTTPException(status_code=404, detail="Model configuration not found")
-    if model.model_type == "proxy":
-        raise HTTPException(
-            status_code=400, detail="Cannot add connections to a proxy model"
-        )
 
     endpoint: Endpoint | None = None
     if body.endpoint_id is not None:
@@ -302,7 +298,7 @@ async def update_connection(
     )
 
 
-@router.delete("/api/connections/{connection_id}", status_code=204)
+@router.delete("/api/connections/{connection_id}")
 async def delete_connection(
     connection_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -320,6 +316,7 @@ async def delete_connection(
     mark_connection_recovered(profile_id, connection.id)
     await db.delete(connection)
     await db.flush()
+    return {"deleted": True}
 @router.post(
     "/api/connections/{connection_id}/health-check",
     response_model=HealthCheckResponse,
