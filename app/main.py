@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.core.config import settings, ensure_postgresql_database_url
 from app.core.database import engine
 from app.core.migrations import run_migrations
-from app.models.models import Provider, HeaderBlocklistRule, UserSetting
+from app.models.models import Profile, Provider, HeaderBlocklistRule, UserSetting
 from app.routers import (
     profiles,
     providers,
@@ -132,17 +132,47 @@ async def seed_user_settings():
     from app.core.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as session:
-        existing = (
+        profile_ids = (
             await session.execute(
-                select(UserSetting).order_by(UserSetting.id.asc()).limit(1)
+                select(Profile.id)
+                .where(Profile.deleted_at.is_(None))
+                .order_by(Profile.id.asc())
             )
-        ).scalar_one_or_none()
-        if existing is None:
+        ).scalars().all()
+        if not profile_ids:
+            return
+
+        existing_profile_ids = set(
+            (
+                await session.execute(
+                    select(UserSetting.profile_id).where(
+                        UserSetting.profile_id.in_(profile_ids)
+                    )
+                )
+            ).scalars().all()
+        )
+
+        missing_profile_ids = [
+            profile_id
+            for profile_id in profile_ids
+            if profile_id not in existing_profile_ids
+        ]
+        for profile_id in missing_profile_ids:
             session.add(
-                UserSetting(report_currency_code="USD", report_currency_symbol="$")
+                UserSetting(
+                    profile_id=profile_id,
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    timezone_preference=None,
+                )
             )
+
+        if missing_profile_ids:
             await session.commit()
-            logger.info("Seeded default user settings")
+            logger.info(
+                "Seeded default user settings for %d profile(s)",
+                len(missing_profile_ids),
+            )
 
 
 async def run_startup_migrations() -> None:

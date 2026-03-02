@@ -80,6 +80,77 @@ class TestDEF001_LogsSurviveFailoverRollback:
         mock_session.commit.assert_awaited_once()
 
 
+class TestDEF031_StartupUserSettingsSeed:
+    """DEF-031 (P0): startup must seed user settings with profile_id."""
+
+    @pytest.mark.asyncio
+    async def test_seed_user_settings_creates_missing_rows_per_profile(self):
+        from app.main import seed_user_settings
+        from app.models.models import UserSetting
+
+        profile_ids_result = MagicMock()
+        profile_ids_scalars = MagicMock()
+        profile_ids_scalars.all.return_value = [1, 2]
+        profile_ids_result.scalars.return_value = profile_ids_scalars
+
+        existing_profile_ids_result = MagicMock()
+        existing_ids_scalars = MagicMock()
+        existing_ids_scalars.all.return_value = [2]
+        existing_profile_ids_result.scalars.return_value = existing_ids_scalars
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        mock_session.execute = AsyncMock(
+            side_effect=[profile_ids_result, existing_profile_ids_result]
+        )
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            await seed_user_settings()
+
+        mock_session.add.assert_called_once()
+        seeded_setting = mock_session.add.call_args.args[0]
+        assert isinstance(seeded_setting, UserSetting)
+        assert seeded_setting.profile_id == 1
+        assert seeded_setting.report_currency_code == "USD"
+        assert seeded_setting.report_currency_symbol == "$"
+        mock_session.commit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_seed_user_settings_noops_when_no_profiles_exist(self):
+        from app.main import seed_user_settings
+
+        profile_ids_result = MagicMock()
+        profile_ids_scalars = MagicMock()
+        profile_ids_scalars.all.return_value = []
+        profile_ids_result.scalars.return_value = profile_ids_scalars
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        mock_session.execute = AsyncMock(return_value=profile_ids_result)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            await seed_user_settings()
+
+        mock_session.add.assert_not_called()
+        mock_session.commit.assert_not_awaited()
+
+
 class TestDEF002_ModelIdRewriting:
     """DEF-002 (P1): proxy must inject/rewrite model field in forwarded body."""
 
