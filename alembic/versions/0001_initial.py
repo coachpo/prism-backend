@@ -1,6 +1,6 @@
 """Squashed baseline schema
 
-Revision ID: 0005_drop_forward_stream_options
+Revision ID: 0001_initial_status
 Revises:
 Create Date: 2026-03-01 03:30:00
 """
@@ -12,7 +12,7 @@ from alembic import op
 
 
 # revision identifiers, used by Alembic.
-revision = "0005_drop_forward_stream_options"
+revision = "0001_initial_status"
 down_revision = None
 branch_labels = None
 depends_on = None
@@ -121,7 +121,7 @@ def upgrade() -> None:
         sa.Column("endpoint_id", sa.Integer(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
+        sa.Column("name", sa.Text(), nullable=True),
         sa.Column("auth_type", sa.String(length=50), nullable=True),
         sa.Column("custom_headers", sa.Text(), nullable=True),
         sa.Column("health_status", sa.String(length=20), nullable=False),
