@@ -146,7 +146,8 @@ async def export_config(
                 provider_type=provider_type_map.get(model.provider_id, ""),
                 model_id=model.model_id,
                 display_name=model.display_name,
-                model_type="native",
+                model_type=model.model_type,
+                redirect_to=model.redirect_to,
                 lb_strategy="failover" if model.lb_strategy == "failover" else "single",
                 failover_recovery_enabled=model.failover_recovery_enabled,
                 failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
@@ -272,6 +273,7 @@ def _validate_import(data: ConfigImportRequest) -> None:
             )
 
     seen_model_ids: set[str] = set()
+    native_models: dict[str, str] = {}
     connection_ids_seen: set[int] = set()
     connection_pairs: set[tuple[str, int]] = set()
 
@@ -288,11 +290,29 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 detail=f"Unknown provider type: '{model.provider_type}'",
             )
 
-        if model.model_type != "native":
+        if model.model_type not in {"native", "proxy"}:
             raise HTTPException(
                 status_code=400,
                 detail=f"Unsupported model_type '{model.model_type}' for model '{model.model_id}'",
             )
+        if model.model_type == "native":
+            if model.redirect_to is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Native model '{model.model_id}' must not have redirect_to",
+                )
+            native_models[model.model_id] = model.provider_type
+        else:
+            if not model.redirect_to:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Proxy model '{model.model_id}' must include redirect_to",
+                )
+            if model.connections:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Proxy model '{model.model_id}' must not have connections",
+                )
 
         for connection in model.connections:
             if connection.connection_id in connection_ids_seen:
@@ -323,6 +343,26 @@ def _validate_import(data: ConfigImportRequest) -> None:
                         "but pricing_currency_code is missing"
                     ),
                 )
+
+    for model in data.models:
+        if model.model_type != "proxy":
+            continue
+        if model.redirect_to not in native_models:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model.model_id}' references unknown redirect target "
+                    f"'{model.redirect_to}'"
+                ),
+            )
+        if native_models[model.redirect_to] != model.provider_type:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Model '{model.model_id}' cannot redirect cross-provider to "
+                    f"'{model.redirect_to}'"
+                ),
+            )
 
     if data.user_settings is not None:
         seen_fx: set[tuple[str, int]] = set()
@@ -429,20 +469,28 @@ async def import_config(
     imported_connection_pairs: set[tuple[str, int]] = set()
 
     for model in data.models:
+        is_proxy = model.model_type == "proxy"
         model_config = ModelConfig(
             provider_id=provider_map[model.provider_type],
             profile_id=profile_id,
             model_id=model.model_id,
             display_name=model.display_name,
-            model_type="native",
-            redirect_to=None,
-            lb_strategy=model.lb_strategy,
-            failover_recovery_enabled=model.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
+            model_type=model.model_type,
+            redirect_to=model.redirect_to if is_proxy else None,
+            lb_strategy="single" if is_proxy else model.lb_strategy,
+            failover_recovery_enabled=True
+            if is_proxy
+            else model.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=60
+            if is_proxy
+            else model.failover_recovery_cooldown_seconds,
             is_enabled=model.is_enabled,
         )
         db.add(model_config)
         await db.flush()
+
+        if is_proxy:
+            continue
 
         for connection_data in model.connections:
             mapped_endpoint_id = endpoint_id_map.get(connection_data.endpoint_id)

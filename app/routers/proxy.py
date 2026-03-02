@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from typing import Annotated, AsyncGenerator
@@ -72,6 +73,20 @@ def _resolve_model_id(raw_body: bytes | None) -> str | None:
     return extract_model_from_body(raw_body)
 
 
+def _rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return raw_body
+    if not isinstance(payload, dict):
+        return raw_body
+    payload["model"] = target_model_id
+    try:
+        return json.dumps(payload).encode("utf-8")
+    except (TypeError, ValueError):
+        return raw_body
+
+
 async def _handle_proxy(
     request: Request,
     db: AsyncSession,
@@ -107,6 +122,10 @@ async def _handle_proxy(
     is_streaming = extract_stream_flag(raw_body) if raw_body else False
     client_headers = _get_client_headers(request)
     method = request.method
+    upstream_model_id = model_config.model_id
+    rewritten_body = raw_body
+    if raw_body and upstream_model_id != model_id:
+        rewritten_body = _rewrite_model_in_body(raw_body, upstream_model_id)
 
     blocklist_rules: list[HeaderBlocklistRule] = list(
         (
@@ -196,7 +215,7 @@ async def _handle_proxy(
             endpoint=ep.endpoint_rel,
         )
         ep_desc = ep.name
-        endpoint_body = raw_body
+        endpoint_body = rewritten_body
 
 
         start_time = time.monotonic()

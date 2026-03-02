@@ -307,7 +307,8 @@ class ModelConfigBase(BaseModel):
     provider_id: int
     model_id: str
     display_name: str | None = None
-    model_type: Literal["native"] = "native"
+    model_type: Literal["native", "proxy"] = "native"
+    redirect_to: str | None = None
     lb_strategy: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
@@ -332,6 +333,8 @@ class ModelConfigUpdate(BaseModel):
     provider_id: int | None = None
     model_id: str | None = None
     display_name: str | None = None
+    model_type: Literal["native", "proxy"] | None = None
+    redirect_to: str | None = None
     lb_strategy: Literal["single", "failover"] | None = None
     failover_recovery_enabled: bool | None = None
     failover_recovery_cooldown_seconds: int | None = None
@@ -347,7 +350,8 @@ class ModelConfigResponse(BaseModel):
     provider: ProviderResponse
     model_id: str
     display_name: str | None
-    model_type: Literal["native"]
+    model_type: Literal["native", "proxy"]
+    redirect_to: str | None
     lb_strategy: Literal["single", "failover"]
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
@@ -366,7 +370,8 @@ class ModelConfigListResponse(BaseModel):
     provider: ProviderResponse
     model_id: str
     display_name: str | None
-    model_type: Literal["native"]
+    model_type: Literal["native", "proxy"]
+    redirect_to: str | None
     lb_strategy: Literal["single", "failover"]
     failover_recovery_enabled: bool
     failover_recovery_cooldown_seconds: int
@@ -624,7 +629,8 @@ class ConfigModelExport(BaseModel):
     provider_type: str
     model_id: str
     display_name: str | None = None
-    model_type: Literal["native"] = "native"
+    model_type: Literal["native", "proxy"] = "native"
+    redirect_to: str | None = None
     lb_strategy: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = True
     failover_recovery_cooldown_seconds: int = 60
