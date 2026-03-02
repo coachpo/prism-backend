@@ -260,6 +260,146 @@ class TestDEF004_FrontendDeleteErrorHandling:
         pass
 
 
+class TestDEF058_StatsTimezoneFilterNormalization:
+    """DEF-058 (P1): stats endpoints must accept ISO-8601 `Z` datetime filters."""
+
+    @staticmethod
+    def _aware_utc_datetime():
+        from datetime import datetime, timezone
+
+        return datetime(2026, 2, 28, 3, 29, 6, 216000, tzinfo=timezone.utc)
+
+    @pytest.mark.asyncio
+    async def test_requests_route_normalizes_aware_datetimes_before_service_call(self):
+        from app.routers.stats import list_request_logs
+
+        mock_db = AsyncMock()
+        aware_from = self._aware_utc_datetime()
+        aware_to = self._aware_utc_datetime()
+
+        with patch("app.routers.stats.get_request_logs", new_callable=AsyncMock) as mock_get_request_logs:
+            mock_get_request_logs.return_value = ([], 0)
+            response = await list_request_logs(
+                db=mock_db,
+                profile_id=7,
+                from_time=aware_from,
+                to_time=aware_to,
+                limit=50,
+                offset=0,
+            )
+
+        assert response.total == 0
+        call_kwargs = mock_get_request_logs.await_args.kwargs
+        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
+        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
+        assert call_kwargs["from_time"].tzinfo is None
+        assert call_kwargs["to_time"].tzinfo is None
+
+    @pytest.mark.asyncio
+    async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
+        from app.routers.stats import stats_summary
+
+        mock_db = AsyncMock()
+        aware_from = self._aware_utc_datetime()
+        aware_to = self._aware_utc_datetime()
+
+        with patch("app.routers.stats.get_stats_summary", new_callable=AsyncMock) as mock_get_stats_summary:
+            mock_get_stats_summary.return_value = {
+                "total_requests": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "success_rate": 0.0,
+                "avg_response_time_ms": 0.0,
+                "p95_response_time_ms": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_tokens": 0,
+                "groups": [],
+            }
+            response = await stats_summary(
+                db=mock_db,
+                profile_id=7,
+                from_time=aware_from,
+                to_time=aware_to,
+            )
+
+        assert response.total_requests == 0
+        call_kwargs = mock_get_stats_summary.await_args.kwargs
+        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
+        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
+        assert call_kwargs["from_time"].tzinfo is None
+        assert call_kwargs["to_time"].tzinfo is None
+
+    @pytest.mark.asyncio
+    async def test_connection_success_rates_route_normalizes_aware_datetimes(self):
+        from app.routers.stats import connection_success_rates
+
+        mock_db = AsyncMock()
+        aware_from = self._aware_utc_datetime()
+        aware_to = self._aware_utc_datetime()
+
+        with patch("app.routers.stats.get_connection_success_rates", new_callable=AsyncMock) as mock_get_success_rates:
+            mock_get_success_rates.return_value = []
+            response = await connection_success_rates(
+                db=mock_db,
+                profile_id=7,
+                from_time=aware_from,
+                to_time=aware_to,
+            )
+
+        assert response == []
+        call_kwargs = mock_get_success_rates.await_args.kwargs
+        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
+        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
+        assert call_kwargs["from_time"].tzinfo is None
+        assert call_kwargs["to_time"].tzinfo is None
+
+    @pytest.mark.asyncio
+    async def test_spending_route_normalizes_aware_datetimes_before_service_call(self):
+        from app.routers.stats import spending_report
+
+        mock_db = AsyncMock()
+        aware_from = self._aware_utc_datetime()
+        aware_to = self._aware_utc_datetime()
+
+        with patch("app.routers.stats.get_spending_report", new_callable=AsyncMock) as mock_get_spending_report:
+            mock_get_spending_report.return_value = {
+                "summary": {
+                    "total_cost_micros": 0,
+                    "successful_request_count": 0,
+                    "priced_request_count": 0,
+                    "unpriced_request_count": 0,
+                    "total_input_tokens": 0,
+                    "total_output_tokens": 0,
+                    "total_cache_read_input_tokens": 0,
+                    "total_cache_creation_input_tokens": 0,
+                    "total_reasoning_tokens": 0,
+                    "total_tokens": 0,
+                    "avg_cost_per_successful_request_micros": 0,
+                },
+                "groups": [],
+                "groups_total": 0,
+                "top_spending_models": [],
+                "top_spending_endpoints": [],
+                "unpriced_breakdown": {},
+                "report_currency_code": "USD",
+                "report_currency_symbol": "$",
+            }
+            response = await spending_report(
+                db=mock_db,
+                profile_id=7,
+                from_time=aware_from,
+                to_time=aware_to,
+            )
+
+        assert response["report_currency_code"] == "USD"
+        call_kwargs = mock_get_spending_report.await_args.kwargs
+        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
+        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
+        assert call_kwargs["from_time"].tzinfo is None
+        assert call_kwargs["to_time"].tzinfo is None
+
+
 class TestBatchDeleteValidation:
     """Validate flexible batch deletion for stats and audit endpoints."""
 
