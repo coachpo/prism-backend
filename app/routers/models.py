@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import EndpointFxRateSetting, ModelConfig, Provider
+from app.models.models import Connection, EndpointFxRateSetting, ModelConfig, Provider
 from app.schemas.schemas import (
     ModelConfigCreate,
     ModelConfigUpdate,
@@ -18,6 +18,11 @@ from app.schemas.schemas import (
 from app.services.stats_service import get_model_health_stats
 
 router = APIRouter(prefix="/api/models", tags=["models"])
+
+_MODEL_CONFIG_DETAIL_OPTIONS = (
+    selectinload(ModelConfig.provider),
+    selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+)
 
 
 async def _validate_proxy(
@@ -128,9 +133,7 @@ async def get_model(
 ):
     result = await db.execute(
         select(ModelConfig)
-        .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
-        )
+        .options(*_MODEL_CONFIG_DETAIL_OPTIONS)
         .where(
             ModelConfig.id == model_config_id,
             ModelConfig.profile_id == profile_id,
@@ -192,9 +195,7 @@ async def create_model(
 
     result = await db.execute(
         select(ModelConfig)
-        .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
-        )
+        .options(*_MODEL_CONFIG_DETAIL_OPTIONS)
         .where(ModelConfig.id == config.id)
     )
     return result.scalar_one()
@@ -209,9 +210,7 @@ async def update_model(
 ):
     result = await db.execute(
         select(ModelConfig)
-        .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
-        )
+        .options(*_MODEL_CONFIG_DETAIL_OPTIONS)
         .where(
             ModelConfig.id == model_config_id,
             ModelConfig.profile_id == profile_id,
@@ -343,9 +342,7 @@ async def update_model(
 
     result = await db.execute(
         select(ModelConfig)
-        .options(
-            selectinload(ModelConfig.provider), selectinload(ModelConfig.connections)
-        )
+        .options(*_MODEL_CONFIG_DETAIL_OPTIONS)
         .where(ModelConfig.id == config.id)
     )
     return result.scalar_one()
@@ -394,8 +391,7 @@ async def get_models_by_endpoint(
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     """Get all models that use a specific endpoint."""
-    from app.models.models import Connection
-    
+
     # Find all connections using this endpoint
     result = await db.execute(
         select(Connection)

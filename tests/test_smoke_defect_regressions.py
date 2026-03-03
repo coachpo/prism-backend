@@ -3006,6 +3006,96 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
 
 
 
+class TestDEF065_ModelDetailEndpointEagerLoad:
+    """DEF-065 (P1): model detail responses must eagerly load connection endpoints."""
+
+    @pytest.mark.asyncio
+    async def test_get_model_returns_connections_with_endpoint_loaded(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import Connection, Endpoint, ModelConfig, Profile, Provider
+        from app.routers.models import get_model
+        from app.schemas.schemas import ModelConfigResponse
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        model_id = f"def065-model-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            provider = (
+                await db.execute(
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                provider = Provider(
+                    name=f"DEF065 OpenAI {suffix}",
+                    provider_type="openai",
+                    description="DEF065 provider",
+                )
+                db.add(provider)
+                await db.flush()
+
+            profile = Profile(
+                name=f"DEF065 Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            model = ModelConfig(
+                profile_id=profile.id,
+                provider_id=provider.id,
+                model_id=model_id,
+                model_type="native",
+                redirect_to=None,
+                lb_strategy="single",
+                failover_recovery_enabled=True,
+                failover_recovery_cooldown_seconds=60,
+                is_enabled=True,
+            )
+            db.add(model)
+            await db.flush()
+
+            endpoint = Endpoint(
+                profile_id=profile.id,
+                name=f"DEF065 endpoint {suffix}",
+                base_url="https://api.openai.com/v1",
+                api_key="sk-test",
+            )
+            db.add(endpoint)
+            await db.flush()
+
+            connection = Connection(
+                profile_id=profile.id,
+                model_config_id=model.id,
+                endpoint_id=endpoint.id,
+                is_active=True,
+                priority=0,
+                name=f"DEF065 connection {suffix}",
+            )
+            db.add(connection)
+            await db.flush()
+
+            config = await get_model(
+                model_config_id=model.id,
+                db=db,
+                profile_id=profile.id,
+            )
+            response = ModelConfigResponse.model_validate(config, from_attributes=True)
+
+            assert len(response.connections) == 1
+            assert response.connections[0].id == connection.id
+            assert response.connections[0].endpoint is not None
+            assert response.connections[0].endpoint.id == endpoint.id
+
+
 class TestDEF032_ProxyModelUpdateInvariants:
     @pytest.mark.asyncio
     async def test_update_model_renaming_native_cascades_proxy_redirects(self):
