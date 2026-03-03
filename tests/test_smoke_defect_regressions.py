@@ -582,7 +582,16 @@ class TestDEF059_HealthCheckRequestBuilder:
         path, body = _build_health_check_request("openai", "gpt-4o-mini")
 
         assert path == "/v1/responses"
-        assert body == {"model": "gpt-4o-mini", "input": "hi"}
+        assert body == {
+            "model": "gpt-4o-mini",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                }
+            ],
+            "max_output_tokens": 1,
+        }
 
     def test_openai_legacy_health_check_uses_chat_completions_endpoint(self):
         from app.routers.connections import _build_openai_legacy_health_check_request
@@ -596,23 +605,17 @@ class TestDEF059_HealthCheckRequestBuilder:
             "max_tokens": 1,
         }
 
-    def test_openai_responses_list_fallback_uses_list_input(self):
+    def test_openai_responses_basic_fallback_uses_string_input(self):
         from app.routers.connections import (
-            _build_openai_responses_list_health_check_request,
+            _build_openai_responses_basic_health_check_request,
         )
 
-        path, body = _build_openai_responses_list_health_check_request("gpt-4o-mini")
+        path, body = _build_openai_responses_basic_health_check_request("gpt-4o-mini")
 
         assert path == "/v1/responses"
         assert body == {
             "model": "gpt-4o-mini",
-            "input": [
-                {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hi"}],
-                }
-            ],
-            "max_output_tokens": 1,
+            "input": "hi",
         }
 
     def test_gemini_health_check_uses_generate_content_endpoint(self):
@@ -638,7 +641,7 @@ class TestDEF059_HealthCheckRequestBuilder:
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
-    """DEF-066 (P1): OpenAI health checks should try responses-list fallback before legacy."""
+    """DEF-066 (P1): OpenAI health checks should try responses-basic fallback before legacy."""
 
     @pytest.mark.asyncio
     async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(self):
@@ -671,7 +674,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_uses_responses_list_fallback_when_primary_fails(
+    async def test_openai_health_check_uses_responses_basic_fallback_when_primary_fails(
         self,
     ):
         from types import SimpleNamespace
@@ -700,7 +703,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
             )
 
         assert health_status == "healthy"
-        assert detail == "Connection successful (fallback /v1/responses list input)"
+        assert detail == "Connection successful (fallback /v1/responses basic input)"
         assert response_time_ms == 5
         assert log_url == "https://api.openai.com/v1/responses"
         assert execute_mock.await_count == 2
@@ -710,11 +713,15 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
             "/v1/responses"
         )
-        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "hi"
         assert (
-            execute_mock.await_args_list[1].kwargs["body"]["input"][0]["content"][0][
+            execute_mock.await_args_list[0].kwargs["body"]["input"][0]["content"][0][
                 "text"
             ]
+            == "hi"
+        )
+        assert execute_mock.await_args_list[0].kwargs["body"]["max_output_tokens"] == 1
+        assert (
+            execute_mock.await_args_list[1].kwargs["body"]["input"]
             == "hi"
         )
 
