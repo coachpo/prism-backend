@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import ensure_utc_datetime, utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import RequestLog
 from app.schemas.schemas import (
@@ -26,11 +27,7 @@ router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
 
 def _normalize_datetime_filter(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is not None:
-        return value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
+    return ensure_utc_datetime(value)
 
 
 @router.get("/requests", response_model=RequestLogListResponse)
@@ -191,7 +188,7 @@ async def delete_request_logs(
                 detail="older_than_days is required when delete_all is false",
             )
         days = int(older_than_days)
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+        cutoff = utc_now() - timedelta(days=days)
         stmt = delete(RequestLog).where(
             RequestLog.profile_id == profile_id,
             RequestLog.created_at < cutoff,

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Final
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.models.models import Profile
 
 DEFAULT_PROFILE_NAME: Final[str] = "Default"
@@ -33,7 +33,7 @@ async def ensure_default_profile(session: AsyncSession) -> Profile:
             default_profile.is_editable = True
             changed = True
         if changed:
-            default_profile.updated_at = datetime.utcnow()
+            default_profile.updated_at = utc_now()
             default_profile.version += 1
             await session.flush()
         await session.refresh(default_profile)
@@ -67,7 +67,7 @@ async def ensure_profile_invariants(session: AsyncSession) -> Profile:
     if active_profile is None:
         if not default_profile.is_active:
             default_profile.is_active = True
-            default_profile.updated_at = datetime.utcnow()
+            default_profile.updated_at = utc_now()
             default_profile.version += 1
             await session.flush()
             await session.refresh(default_profile)
@@ -75,7 +75,7 @@ async def ensure_profile_invariants(session: AsyncSession) -> Profile:
 
     if active_profile.id != default_profile.id and default_profile.is_active:
         default_profile.is_active = False
-        default_profile.updated_at = datetime.utcnow()
+        default_profile.updated_at = utc_now()
         default_profile.version += 1
         await session.flush()
         await session.refresh(default_profile)

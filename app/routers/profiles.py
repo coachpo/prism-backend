@@ -1,11 +1,11 @@
 from typing import Annotated
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.dependencies import get_db
 from app.models.models import Profile
 from app.services.profile_invariants import DEFAULT_PROFILE_NAME, ensure_profile_invariants
@@ -122,7 +122,7 @@ async def update_profile(
     for key, value in update_data.items():
         setattr(profile, key, value)
 
-    profile.updated_at = datetime.utcnow()
+    profile.updated_at = utc_now()
     if profile.is_default:
         profile.name = DEFAULT_PROFILE_NAME
     await db.flush()
@@ -181,13 +181,13 @@ async def activate_profile(
     # Deactivate first to avoid transient unique-index violations.
     current_active.is_active = False
     current_active.version += 1
-    current_active.updated_at = datetime.utcnow()
+    current_active.updated_at = utc_now()
     await db.flush()
 
     try:
         target_profile.is_active = True
         target_profile.version += 1
-        target_profile.updated_at = datetime.utcnow()
+        target_profile.updated_at = utc_now()
         await db.flush()
     except IntegrityError as exc:
         raise HTTPException(
@@ -227,7 +227,7 @@ async def delete_profile(
         )
 
     # Soft delete
-    profile.deleted_at = datetime.utcnow()
-    profile.updated_at = datetime.utcnow()
+    profile.deleted_at = utc_now()
+    profile.updated_at = utc_now()
     await db.flush()
     return {"deleted": True}

@@ -358,7 +358,7 @@ class TestProfileScopedDataIsolation:
         """list_models returns only models for the effective profile."""
         mock_db = AsyncMock()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         provider = SimpleNamespace(
             id=1,
             name="OpenAI",
@@ -545,7 +545,7 @@ class TestConfigExportImportIsolation:
 
         mock_db = AsyncMock()
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         endpoint = SimpleNamespace(
             id=10,
             profile_id=1,
@@ -1179,14 +1179,14 @@ class TestFailoverRecoveryStateIsolation:
         # Profile 1, connection 10
         key1 = (1, 10)
         _recovery_state[key1] = {
-            "failed_at": datetime.utcnow(),
+            "failed_at": datetime.now(timezone.utc),
             "cooldown_seconds": 60,
         }
 
         # Profile 2, connection 10 (same connection ID, different profile)
         key2 = (2, 10)
         _recovery_state[key2] = {
-            "failed_at": datetime.utcnow(),
+            "failed_at": datetime.now(timezone.utc),
             "cooldown_seconds": 120,
         }
 

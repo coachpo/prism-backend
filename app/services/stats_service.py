@@ -1,11 +1,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import String, and_, case, cast, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.models.models import RequestLog, UserSetting
 
 logger = logging.getLogger(__name__)
@@ -724,7 +725,7 @@ def resolve_time_preset(
     if preset in (None, "", "custom"):
         return from_time, to_time
 
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    now = utc_now()
     if preset == "today":
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         return today_start, to_time

@@ -258,10 +258,10 @@ class TestDEF058_StatsTimezoneFilterNormalization:
 
         assert response.total == 0
         call_kwargs = mock_get_request_logs.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
-        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
-        assert call_kwargs["from_time"].tzinfo is None
-        assert call_kwargs["to_time"].tzinfo is None
+        assert call_kwargs["from_time"] == aware_from
+        assert call_kwargs["to_time"] == aware_to
+        assert call_kwargs["from_time"].tzinfo is not None
+        assert call_kwargs["to_time"].tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
@@ -293,10 +293,10 @@ class TestDEF058_StatsTimezoneFilterNormalization:
 
         assert response.total_requests == 0
         call_kwargs = mock_get_stats_summary.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
-        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
-        assert call_kwargs["from_time"].tzinfo is None
-        assert call_kwargs["to_time"].tzinfo is None
+        assert call_kwargs["from_time"] == aware_from
+        assert call_kwargs["to_time"] == aware_to
+        assert call_kwargs["from_time"].tzinfo is not None
+        assert call_kwargs["to_time"].tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_connection_success_rates_route_normalizes_aware_datetimes(self):
@@ -317,10 +317,10 @@ class TestDEF058_StatsTimezoneFilterNormalization:
 
         assert response == []
         call_kwargs = mock_get_success_rates.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
-        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
-        assert call_kwargs["from_time"].tzinfo is None
-        assert call_kwargs["to_time"].tzinfo is None
+        assert call_kwargs["from_time"] == aware_from
+        assert call_kwargs["to_time"] == aware_to
+        assert call_kwargs["from_time"].tzinfo is not None
+        assert call_kwargs["to_time"].tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_spending_route_normalizes_aware_datetimes_before_service_call(self):
@@ -362,10 +362,10 @@ class TestDEF058_StatsTimezoneFilterNormalization:
 
         assert response["report_currency_code"] == "USD"
         call_kwargs = mock_get_spending_report.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from.replace(tzinfo=None)
-        assert call_kwargs["to_time"] == aware_to.replace(tzinfo=None)
-        assert call_kwargs["from_time"].tzinfo is None
-        assert call_kwargs["to_time"].tzinfo is None
+        assert call_kwargs["from_time"] == aware_from
+        assert call_kwargs["to_time"] == aware_to
+        assert call_kwargs["from_time"].tzinfo is not None
+        assert call_kwargs["to_time"].tzinfo is not None
 
 
 class TestBatchDeleteValidation:
@@ -725,11 +725,11 @@ class TestDEF061_ConnectionResponseEndpointMapping:
     """DEF-061 (P1): ConnectionResponse should map endpoint_rel to endpoint."""
 
     def test_connection_response_maps_endpoint_rel_attribute(self):
-        from datetime import datetime
+        from datetime import datetime, timezone
         from types import SimpleNamespace
         from app.schemas.schemas import ConnectionResponse
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         endpoint = SimpleNamespace(
             id=3,
             profile_id=1,

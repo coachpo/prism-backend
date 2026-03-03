@@ -1,10 +1,10 @@
 from typing import Annotated
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import utc_now
 from app.dependencies import get_db
 from app.models.models import Provider
 from app.schemas.schemas import ProviderResponse, ProviderUpdate
@@ -41,7 +41,7 @@ async def update_provider(
     update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(provider, key, value)
-    provider.updated_at = datetime.utcnow()
+    provider.updated_at = utc_now()
     await db.flush()
     await db.refresh(provider)
     return provider

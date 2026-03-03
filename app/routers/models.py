@@ -1,11 +1,11 @@
 from typing import Annotated, Literal, cast
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, EndpointFxRateSetting, ModelConfig, Provider
 from app.schemas.schemas import (
@@ -337,7 +337,7 @@ async def update_model(
                 .values(redirect_to=update_data["model_id"])
             )
 
-    config.updated_at = datetime.utcnow()
+    config.updated_at = utc_now()
     await db.flush()
 
     result = await db.execute(

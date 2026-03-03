@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint
 from app.schemas.schemas import (
@@ -125,7 +125,7 @@ async def update_endpoint(
     for key, value in update_data.items():
         setattr(endpoint, key, value)
 
-    endpoint.updated_at = datetime.utcnow()
+    endpoint.updated_at = utc_now()
     await db.flush()
     await db.refresh(endpoint)
     return endpoint

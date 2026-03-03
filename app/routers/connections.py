@@ -1,5 +1,3 @@
-from datetime import datetime
-
 import json
 import logging
 import time
@@ -11,6 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint, HeaderBlocklistRule, ModelConfig
 from app.schemas.schemas import (
@@ -313,7 +312,7 @@ async def update_connection(
     if pricing_changed:
         connection.pricing_config_version = (connection.pricing_config_version or 0) + 1
 
-    connection.updated_at = datetime.utcnow()
+    connection.updated_at = utc_now()
     await db.flush()
 
     return await _load_connection_or_404(
@@ -402,7 +401,7 @@ async def health_check_connection(
         endpoint=endpoint,
     )
 
-    checked_at = datetime.utcnow()
+    checked_at = utc_now()
     health_status = "unhealthy"
     detail = ""
     response_time_ms = 0

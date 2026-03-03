@@ -16,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.core.time import utc_now
 
 
 class Profile(Base):
@@ -43,10 +44,14 @@ class Profile(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     is_editable: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     model_configs: Mapped[list["ModelConfig"]] = relationship(
@@ -84,9 +89,11 @@ class Provider(Base):
     audit_capture_bodies: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     model_configs: Mapped[list["ModelConfig"]] = relationship(
@@ -133,9 +140,11 @@ class ModelConfig(Base):
         Integer, default=60, nullable=False
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="model_configs")
@@ -158,9 +167,11 @@ class Endpoint(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     api_key: Mapped[str] = mapped_column(String(500), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="endpoints")
@@ -209,7 +220,9 @@ class Connection(Base):
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy
     health_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_health_check: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_health_check: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     pricing_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
@@ -225,9 +238,11 @@ class Connection(Base):
     pricing_config_version: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="connections")
@@ -327,7 +342,7 @@ class RequestLog(Base):
     error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     endpoint_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="request_logs")
@@ -350,9 +365,11 @@ class UserSetting(Base):
         String(5), default="$", nullable=False
     )
     timezone_preference: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="user_settings")
@@ -385,9 +402,11 @@ class EndpointFxRateSetting(Base):
         ForeignKey("endpoints.id", ondelete="CASCADE"), nullable=False
     )
     fx_rate: Mapped[str] = mapped_column(String(20), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="endpoint_fx_rate_settings")
@@ -429,9 +448,11 @@ class HeaderBlocklistRule(Base):
     )  # normalized lowercase
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
     profile: Mapped["Profile | None"] = relationship(back_populates="header_blocklist_rules")
@@ -475,7 +496,7 @@ class AuditLog(Base):
     is_stream: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=datetime.utcnow, nullable=False, index=True
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="audit_logs")

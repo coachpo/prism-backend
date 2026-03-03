@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Annotated
 import json
 import logging
@@ -9,6 +8,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import (
     Connection,
@@ -198,7 +198,7 @@ async def export_config(
     )
 
     data = ConfigExportResponse(
-        exported_at=datetime.now(timezone.utc),
+        exported_at=utc_now(),
         endpoints=exported_endpoints,
         models=exported_models,
         user_settings=ConfigUserSettingsExport(
@@ -232,7 +232,7 @@ async def export_config(
         ],
     )
 
-    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    date_str = utc_now().strftime("%Y-%m-%d")
     return JSONResponse(
         content=data.model_dump(mode="json"),
         headers={
@@ -734,7 +734,7 @@ async def update_header_blocklist_rule(
 
     for field, value in update_data.items():
         setattr(rule, field, value)
-    rule.updated_at = datetime.now(timezone.utc)
+    rule.updated_at = utc_now()
 
     await db.flush()
     await db.refresh(rule)

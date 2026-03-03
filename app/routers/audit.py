@@ -1,10 +1,11 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func, delete, and_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.time import ensure_utc_datetime, utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import AuditLog
 from app.schemas.schemas import (
@@ -31,6 +32,9 @@ async def list_audit_logs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
+    normalized_from_time = ensure_utc_datetime(from_time)
+    normalized_to_time = ensure_utc_datetime(to_time)
+
     filters = [AuditLog.profile_id == profile_id]
     if provider_id is not None:
         filters.append(AuditLog.provider_id == provider_id)
@@ -42,10 +46,10 @@ async def list_audit_logs(
         filters.append(AuditLog.endpoint_id == endpoint_id)
     if connection_id is not None:
         filters.append(AuditLog.connection_id == connection_id)
-    if from_time:
-        filters.append(AuditLog.created_at >= from_time)
-    if to_time:
-        filters.append(AuditLog.created_at <= to_time)
+    if normalized_from_time:
+        filters.append(AuditLog.created_at >= normalized_from_time)
+    if normalized_to_time:
+        filters.append(AuditLog.created_at <= normalized_to_time)
 
     where = and_(*filters) if filters else literal(True)
 
@@ -112,6 +116,8 @@ async def delete_audit_logs(
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
 ):
+    normalized_before = ensure_utc_datetime(before)
+
     provided = sum([before is not None, older_than_days is not None, delete_all])
     if provided != 1:
         raise HTTPException(
@@ -122,17 +128,17 @@ async def delete_audit_logs(
     if delete_all:
         stmt = delete(AuditLog).where(AuditLog.profile_id == profile_id)
     elif older_than_days is not None:
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            days=older_than_days
-        )
+        cutoff = utc_now() - timedelta(days=older_than_days)
         stmt = delete(AuditLog).where(
             AuditLog.profile_id == profile_id,
             AuditLog.created_at < cutoff,
         )
     else:
+        if normalized_before is None:
+            raise HTTPException(status_code=400, detail="'before' is required")
         stmt = delete(AuditLog).where(
             AuditLog.profile_id == profile_id,
-            AuditLog.created_at < before,
+            AuditLog.created_at < normalized_before,
         )
 
     result = await db.execute(stmt)
