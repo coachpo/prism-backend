@@ -596,6 +596,25 @@ class TestDEF059_HealthCheckRequestBuilder:
             "max_tokens": 1,
         }
 
+    def test_openai_responses_list_fallback_uses_list_input(self):
+        from app.routers.connections import (
+            _build_openai_responses_list_health_check_request,
+        )
+
+        path, body = _build_openai_responses_list_health_check_request("gpt-4o-mini")
+
+        assert path == "/v1/responses"
+        assert body == {
+            "model": "gpt-4o-mini",
+            "input": [
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                }
+            ],
+            "max_output_tokens": 1,
+        }
+
     def test_gemini_health_check_uses_generate_content_endpoint(self):
         from app.routers.connections import _build_health_check_request
 
@@ -619,7 +638,7 @@ class TestDEF059_HealthCheckRequestBuilder:
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
-    """DEF-066 (P1): OpenAI health-check fallback should use chat/completions only on failures."""
+    """DEF-066 (P1): OpenAI health checks should try responses-list fallback before legacy."""
 
     @pytest.mark.asyncio
     async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(self):
@@ -652,7 +671,9 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_uses_legacy_fallback_when_primary_fails(self):
+    async def test_openai_health_check_uses_responses_list_fallback_when_primary_fails(
+        self,
+    ):
         from types import SimpleNamespace
         from app.routers.connections import _probe_connection_health
 
@@ -679,14 +700,66 @@ class TestDEF066_OpenAIHealthCheckFallback:
             )
 
         assert health_status == "healthy"
-        assert detail == "Connection successful (legacy fallback /v1/chat/completions)"
+        assert detail == "Connection successful (fallback /v1/responses list input)"
         assert response_time_ms == 5
-        assert log_url == "https://api.openai.com/v1/chat/completions"
+        assert log_url == "https://api.openai.com/v1/responses"
         assert execute_mock.await_count == 2
         assert execute_mock.await_args_list[0].kwargs["upstream_url"].endswith(
             "/v1/responses"
         )
         assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
+            "/v1/responses"
+        )
+        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "hi"
+        assert (
+            execute_mock.await_args_list[1].kwargs["body"]["input"][0]["content"][0][
+                "text"
+            ]
+            == "hi"
+        )
+
+    @pytest.mark.asyncio
+    async def test_openai_health_check_uses_legacy_fallback_when_responses_fallback_fails(
+        self,
+    ):
+        from types import SimpleNamespace
+        from app.routers.connections import _probe_connection_health
+
+        connection = SimpleNamespace(base_url="https://api.openai.com")
+        endpoint = SimpleNamespace(base_url="https://api.openai.com")
+
+        with patch(
+            "app.routers.connections._execute_health_check_request",
+            new_callable=AsyncMock,
+        ) as execute_mock:
+            execute_mock.side_effect = [
+                ("unhealthy", "HTTP 404", 8),
+                ("unhealthy", "HTTP 400", 6),
+                ("healthy", "Connection successful", 4),
+            ]
+            health_status, detail, response_time_ms, log_url = (
+                await _probe_connection_health(
+                    client=AsyncMock(),
+                    connection=connection,
+                    endpoint=endpoint,
+                    provider_type="openai",
+                    model_id="gpt-4o-mini",
+                    headers={},
+                )
+            )
+
+        assert health_status == "healthy"
+        assert detail == "Connection successful (legacy fallback /v1/chat/completions)"
+        assert response_time_ms == 4
+        assert log_url == "https://api.openai.com/v1/chat/completions"
+        assert execute_mock.await_count == 3
+        assert execute_mock.await_args_list[0].kwargs["upstream_url"].endswith(
+            "/v1/responses"
+        )
+        assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
+            "/v1/responses"
+        )
+        assert execute_mock.await_args_list[2].kwargs["upstream_url"].endswith(
             "/v1/chat/completions"
         )
 

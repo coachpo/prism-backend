@@ -79,6 +79,21 @@ def _build_openai_legacy_health_check_request(
     }
 
 
+def _build_openai_responses_list_health_check_request(
+    model_id: str,
+) -> tuple[str, dict[str, object]]:
+    return "/v1/responses", {
+        "model": model_id,
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ],
+        "max_output_tokens": 1,
+    }
+
+
 def _extract_upstream_error_message(response: httpx.Response) -> str:
     if response.status_code < 400:
         return ""
@@ -162,6 +177,28 @@ async def _probe_connection_health(
     log_url = upstream_url
 
     if provider_type == "openai" and health_status != "healthy":
+        responses_list_path, responses_list_body = (
+            _build_openai_responses_list_health_check_request(model_id)
+        )
+        responses_list_url = build_upstream_url(
+            connection, responses_list_path, endpoint=endpoint
+        )
+        responses_list_status, responses_list_detail, responses_list_response_time_ms = (
+            await _execute_health_check_request(
+                client,
+                upstream_url=responses_list_url,
+                headers=headers,
+                body=responses_list_body,
+            )
+        )
+        if responses_list_status == "healthy":
+            return (
+                "healthy",
+                f"{responses_list_detail} (fallback /v1/responses list input)",
+                responses_list_response_time_ms,
+                responses_list_url,
+            )
+
         fallback_path, fallback_body = _build_openai_legacy_health_check_request(
             model_id
         )
@@ -181,13 +218,18 @@ async def _probe_connection_health(
                 fallback_response_time_ms,
                 fallback_url,
             )
-        detail = (
-            f"{detail}; fallback /v1/chat/completions failed: {fallback_detail}"
-            if detail
-            else f"Fallback /v1/chat/completions failed: {fallback_detail}"
+        detail_parts = [
+            detail,
+            f"fallback /v1/responses list input failed: {responses_list_detail}",
+            f"fallback /v1/chat/completions failed: {fallback_detail}",
+        ]
+        detail = "; ".join(part for part in detail_parts if part)
+        response_time_ms = (
+            fallback_response_time_ms
+            or responses_list_response_time_ms
+            or response_time_ms
         )
-        response_time_ms = fallback_response_time_ms or response_time_ms
-        log_url = f"{upstream_url} -> {fallback_url}"
+        log_url = f"{upstream_url} -> {responses_list_url} -> {fallback_url}"
 
     return health_status, detail, response_time_ms, log_url
 
