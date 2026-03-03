@@ -584,6 +584,18 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == {"model": "gpt-4o-mini", "input": "hi"}
 
+    def test_openai_legacy_health_check_uses_chat_completions_endpoint(self):
+        from app.routers.connections import _build_openai_legacy_health_check_request
+
+        path, body = _build_openai_legacy_health_check_request("gpt-4o-mini")
+
+        assert path == "/v1/chat/completions"
+        assert body == {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 1,
+        }
+
     def test_gemini_health_check_uses_generate_content_endpoint(self):
         from app.routers.connections import _build_health_check_request
 
@@ -604,6 +616,109 @@ class TestDEF059_HealthCheckRequestBuilder:
 
         assert path == "/v1/messages"
         assert body["model"] == "gemini-3.1-pro-preview"
+
+
+class TestDEF066_OpenAIHealthCheckFallback:
+    """DEF-066 (P1): OpenAI health-check fallback should use chat/completions only on failures."""
+
+    @pytest.mark.asyncio
+    async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(self):
+        from types import SimpleNamespace
+        from app.routers.connections import _probe_connection_health
+
+        connection = SimpleNamespace(base_url="https://api.openai.com")
+        endpoint = SimpleNamespace(base_url="https://api.openai.com")
+
+        with patch(
+            "app.routers.connections._execute_health_check_request",
+            new_callable=AsyncMock,
+        ) as execute_mock:
+            execute_mock.return_value = ("healthy", "Connection successful", 6)
+            health_status, detail, response_time_ms, log_url = (
+                await _probe_connection_health(
+                    client=AsyncMock(),
+                    connection=connection,
+                    endpoint=endpoint,
+                    provider_type="openai",
+                    model_id="gpt-4o-mini",
+                    headers={},
+                )
+            )
+
+        assert health_status == "healthy"
+        assert detail == "Connection successful"
+        assert response_time_ms == 6
+        assert log_url == "https://api.openai.com/v1/responses"
+        assert execute_mock.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_openai_health_check_uses_legacy_fallback_when_primary_fails(self):
+        from types import SimpleNamespace
+        from app.routers.connections import _probe_connection_health
+
+        connection = SimpleNamespace(base_url="https://api.openai.com")
+        endpoint = SimpleNamespace(base_url="https://api.openai.com")
+
+        with patch(
+            "app.routers.connections._execute_health_check_request",
+            new_callable=AsyncMock,
+        ) as execute_mock:
+            execute_mock.side_effect = [
+                ("unhealthy", "HTTP 404", 8),
+                ("healthy", "Connection successful", 5),
+            ]
+            health_status, detail, response_time_ms, log_url = (
+                await _probe_connection_health(
+                    client=AsyncMock(),
+                    connection=connection,
+                    endpoint=endpoint,
+                    provider_type="openai",
+                    model_id="gpt-4o-mini",
+                    headers={},
+                )
+            )
+
+        assert health_status == "healthy"
+        assert detail == "Connection successful (legacy fallback /v1/chat/completions)"
+        assert response_time_ms == 5
+        assert log_url == "https://api.openai.com/v1/chat/completions"
+        assert execute_mock.await_count == 2
+        assert execute_mock.await_args_list[0].kwargs["upstream_url"].endswith(
+            "/v1/responses"
+        )
+        assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
+            "/v1/chat/completions"
+        )
+
+    @pytest.mark.asyncio
+    async def test_non_openai_health_check_does_not_use_legacy_fallback(self):
+        from types import SimpleNamespace
+        from app.routers.connections import _probe_connection_health
+
+        connection = SimpleNamespace(base_url="https://api.anthropic.com")
+        endpoint = SimpleNamespace(base_url="https://api.anthropic.com")
+
+        with patch(
+            "app.routers.connections._execute_health_check_request",
+            new_callable=AsyncMock,
+        ) as execute_mock:
+            execute_mock.return_value = ("unhealthy", "HTTP 500", 7)
+            health_status, detail, response_time_ms, log_url = (
+                await _probe_connection_health(
+                    client=AsyncMock(),
+                    connection=connection,
+                    endpoint=endpoint,
+                    provider_type="anthropic",
+                    model_id="claude-sonnet-4",
+                    headers={},
+                )
+            )
+
+        assert health_status == "unhealthy"
+        assert detail == "HTTP 500"
+        assert response_time_ms == 7
+        assert log_url == "https://api.anthropic.com/v1/messages"
+        assert execute_mock.await_count == 1
 
 
 class TestDEF060_ProxyProviderPathValidation:

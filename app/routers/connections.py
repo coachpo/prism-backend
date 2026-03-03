@@ -68,6 +68,130 @@ def _build_health_check_request(
         }
     raise ValueError(f"Unsupported provider type '{provider_type}' for health check")
 
+
+def _build_openai_legacy_health_check_request(
+    model_id: str,
+) -> tuple[str, dict[str, object]]:
+    return "/v1/chat/completions", {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+    }
+
+
+def _extract_upstream_error_message(response: httpx.Response) -> str:
+    if response.status_code < 400:
+        return ""
+    try:
+        response_json = response.json()
+    except Exception:
+        return ""
+    if not isinstance(response_json, dict):
+        return ""
+
+    error = response_json.get("error", {})
+    if isinstance(error, dict):
+        message = error.get("message", "")
+        return message if isinstance(message, str) else str(message)
+    if isinstance(error, str):
+        return error
+    return ""
+
+
+def _map_health_check_response(response: httpx.Response) -> tuple[str, str]:
+    upstream_msg = _extract_upstream_error_message(response)
+    if 200 <= response.status_code < 300:
+        return "healthy", "Connection successful"
+    if response.status_code == 429:
+        return "healthy", "Rate limited (connection works)"
+    if response.status_code in (401, 403):
+        detail = f"Authentication failed (HTTP {response.status_code})"
+        if upstream_msg:
+            detail += f": {upstream_msg}"
+        return "unhealthy", detail
+
+    detail = f"HTTP {response.status_code}"
+    if upstream_msg:
+        detail += f": {upstream_msg}"
+    return "unhealthy", detail
+
+
+async def _execute_health_check_request(
+    client: httpx.AsyncClient,
+    *,
+    upstream_url: str,
+    headers: dict[str, str],
+    body: dict[str, object],
+) -> tuple[str, str, int]:
+    try:
+        start = time.monotonic()
+        response = await client.post(
+            upstream_url,
+            headers=headers,
+            json=body,
+            timeout=15.0,
+        )
+        response_time_ms = int((time.monotonic() - start) * 1000)
+        health_status, detail = _map_health_check_response(response)
+        return health_status, detail, response_time_ms
+    except httpx.ConnectError as exc:
+        return "unhealthy", f"Connection failed: {exc}", 0
+    except httpx.TimeoutException:
+        return "unhealthy", "Connection timed out", 0
+    except Exception as exc:
+        return "unhealthy", f"Error: {exc}", 0
+
+
+async def _probe_connection_health(
+    *,
+    client: httpx.AsyncClient,
+    connection: Connection,
+    endpoint: Endpoint,
+    provider_type: str,
+    model_id: str,
+    headers: dict[str, str],
+) -> tuple[str, str, int, str]:
+    request_path, body = _build_health_check_request(provider_type, model_id)
+    upstream_url = build_upstream_url(connection, request_path, endpoint=endpoint)
+    health_status, detail, response_time_ms = await _execute_health_check_request(
+        client,
+        upstream_url=upstream_url,
+        headers=headers,
+        body=body,
+    )
+    log_url = upstream_url
+
+    if provider_type == "openai" and health_status != "healthy":
+        fallback_path, fallback_body = _build_openai_legacy_health_check_request(
+            model_id
+        )
+        fallback_url = build_upstream_url(connection, fallback_path, endpoint=endpoint)
+        fallback_status, fallback_detail, fallback_response_time_ms = (
+            await _execute_health_check_request(
+                client,
+                upstream_url=fallback_url,
+                headers=headers,
+                body=fallback_body,
+            )
+        )
+        if fallback_status == "healthy":
+            return (
+                "healthy",
+                f"{fallback_detail} (legacy fallback /v1/chat/completions)",
+                fallback_response_time_ms,
+                fallback_url,
+            )
+        detail = (
+            f"{detail}; fallback /v1/chat/completions failed: {fallback_detail}"
+            if detail
+            else f"Fallback /v1/chat/completions failed: {fallback_detail}"
+        )
+        response_time_ms = fallback_response_time_ms or response_time_ms
+        log_url = f"{upstream_url} -> {fallback_url}"
+
+    return health_status, detail, response_time_ms, log_url
+
+
 async def _ensure_unique_endpoint_name(
     db: AsyncSession,
     *,
@@ -376,9 +500,6 @@ async def health_check_connection(
     provider_type = provider.provider_type
     model_id = connection.model_config_rel.model_id
 
-    request_path, body = _build_health_check_request(provider_type, model_id)
-
-    upstream_url = build_upstream_url(connection, request_path, endpoint=endpoint)
     blocklist_rules = list(
         (
             await db.execute(
@@ -402,61 +523,22 @@ async def health_check_connection(
     )
 
     checked_at = utc_now()
-    health_status = "unhealthy"
-    detail = ""
-    response_time_ms = 0
 
     client: httpx.AsyncClient = request.app.state.http_client
-    try:
-        start = time.monotonic()
-        response = await client.post(
-            upstream_url,
-            headers=headers,
-            json=body,
-            timeout=15.0,
-        )
-        response_time_ms = int((time.monotonic() - start) * 1000)
-
-        upstream_msg = ""
-        if response.status_code >= 400:
-            try:
-                response_json = response.json()
-                error = response_json.get("error", {})
-                if isinstance(error, dict):
-                    upstream_msg = error.get("message", "")
-                elif isinstance(error, str):
-                    upstream_msg = error
-            except Exception:
-                upstream_msg = ""
-
-        if 200 <= response.status_code < 300:
-            health_status = "healthy"
-            detail = "Connection successful"
-        elif response.status_code == 429:
-            health_status = "healthy"
-            detail = "Rate limited (connection works)"
-        elif response.status_code in (401, 403):
-            health_status = "unhealthy"
-            detail = f"Authentication failed (HTTP {response.status_code})"
-            if upstream_msg:
-                detail += f": {upstream_msg}"
-        else:
-            health_status = "unhealthy"
-            detail = f"HTTP {response.status_code}"
-            if upstream_msg:
-                detail += f": {upstream_msg}"
-    except httpx.ConnectError as exc:
-        detail = f"Connection failed: {exc}"
-    except httpx.TimeoutException:
-        detail = "Connection timed out"
-    except Exception as exc:
-        detail = f"Error: {exc}"
+    health_status, detail, response_time_ms, log_url = await _probe_connection_health(
+        client=client,
+        connection=connection,
+        endpoint=endpoint,
+        provider_type=provider_type,
+        model_id=model_id,
+        headers=headers,
+    )
 
     logger.info(
         "Health check connection_id=%d endpoint_id=%d url=%s status=%s detail=%s",
         connection.id,
         endpoint.id,
-        upstream_url,
+        log_url,
         health_status,
         detail,
     )
