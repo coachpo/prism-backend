@@ -938,15 +938,8 @@ class TestDEF061_ConnectionResponseEndpointMapping:
             name="primary",
             auth_type=None,
             custom_headers=None,
-            pricing_enabled=False,
-            pricing_currency_code=None,
-            input_price=None,
-            output_price=None,
-            cached_input_price=None,
-            cache_creation_price=None,
-            reasoning_price=None,
-            missing_special_token_price_policy="MAP_TO_OUTPUT",
-            pricing_config_version=0,
+            pricing_template_id=None,
+            pricing_template_rel=None,
             health_status="unknown",
             health_detail=None,
             last_health_check=None,
@@ -983,6 +976,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         expected = {
             "connection_id",
             "endpoint_id",
+            "pricing_template_id",
             "is_active",
             "priority",
             "name",
@@ -1001,7 +995,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "model_id",
             "display_name",
             "model_type",
+            "redirect_to",
             "lb_strategy",
+            "failover_recovery_enabled",
+            "failover_recovery_cooldown_seconds",
             "is_enabled",
             "connections",
         }
@@ -1074,6 +1071,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     api_key="sk-test",
                 )
             ],
+            pricing_templates=[],
             models=[
                 ConfigModelExport(
                     provider_type="openai",
@@ -1127,7 +1125,7 @@ class TestDEF008_CacheCreationPricing:
         reasoning_price: str,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Connection, Endpoint
+        from app.models.models import Connection, Endpoint, PricingTemplate
 
         endpoint = Endpoint(
             name="pricing-endpoint",
@@ -1135,10 +1133,10 @@ class TestDEF008_CacheCreationPricing:
             api_key="sk-test",
         )
         endpoint.id = 1
-        connection = Connection(
-            model_config_id=1,
-            endpoint_id=1,
-            pricing_enabled=True,
+        pricing_template = PricingTemplate(
+            profile_id=1,
+            name="def008-template",
+            pricing_unit="PER_1M",
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -1146,11 +1144,18 @@ class TestDEF008_CacheCreationPricing:
             cache_creation_price=cache_creation_price,
             reasoning_price=reasoning_price,
             missing_special_token_price_policy=missing_special_token_price_policy,
-            pricing_config_version=9,
+            version=9,
+        )
+        pricing_template.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
+            pricing_template_id=pricing_template.id,
         )
         connection.id = 1
         connection.endpoint_rel = endpoint
-        return connection, endpoint
+        connection.pricing_template_rel = pricing_template
+        return connection, pricing_template, endpoint
 
     def test_extract_token_usage_parses_cache_creation_tokens(self):
         from app.services.stats_service import extract_token_usage
@@ -1255,7 +1260,7 @@ class TestDEF008_CacheCreationPricing:
             compute_cost_fields,
         )
 
-        connection, endpoint = self._build_connection(
+        connection, pricing_template, endpoint = self._build_connection(
             input_price="2",
             output_price="4",
             cached_input_price="1",
@@ -1266,6 +1271,7 @@ class TestDEF008_CacheCreationPricing:
 
         result = compute_cost_fields(
             connection=connection,
+            pricing_template=pricing_template,
             endpoint=endpoint,
             model_id="claude-sonnet",
             status_code=200,
@@ -1292,7 +1298,7 @@ class TestDEF008_CacheCreationPricing:
             compute_cost_fields,
         )
 
-        connection, endpoint = self._build_connection(
+        connection, pricing_template, endpoint = self._build_connection(
             input_price="0",
             output_price="0",
             cached_input_price="0",
@@ -1303,6 +1309,7 @@ class TestDEF008_CacheCreationPricing:
 
         result = compute_cost_fields(
             connection=connection,
+            pricing_template=pricing_template,
             endpoint=endpoint,
             model_id="claude-sonnet",
             status_code=200,
@@ -1442,7 +1449,9 @@ class TestFailoverRecoveryFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [],
+                "pricing_templates": [],
                 "models": [],
             }
         )
@@ -1457,6 +1466,7 @@ class TestFailoverRecoveryFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
+                    "version": 2,
                     "endpoints": [
                         {
                             "endpoint_id": 1,
@@ -1465,6 +1475,7 @@ class TestFailoverRecoveryFieldValidation:
                             "api_key": "sk-test",
                         }
                     ],
+                    "pricing_templates": [],
                     "models": [
                         {
                             "provider_type": "openai",
@@ -1492,6 +1503,7 @@ class TestFailoverRecoveryFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [
                     {
                         "endpoint_id": 1,
@@ -1500,6 +1512,7 @@ class TestFailoverRecoveryFieldValidation:
                         "api_key": "sk-test",
                     }
                 ],
+                "pricing_templates": [],
                 "models": [
                     {
                         "provider_type": "openai",
@@ -1554,6 +1567,7 @@ class TestFailoverRecoveryFieldValidation:
                     api_key="sk-test",
                 )
             ],
+            pricing_templates=[],
             models=[
                 ConfigModelExport(
                     provider_type="openai",
@@ -1992,6 +2006,7 @@ class TestHeaderBlocklist:
             exported_at=datetime.now(timezone.utc),
             endpoints=[],
             models=[],
+            pricing_templates=[],
             header_blocklist_rules=[
                 HeaderBlocklistRuleExport(
                     name="Block Custom",
@@ -2015,12 +2030,12 @@ class TestDEF009_ConnectionDefaultsPersist:
         export = ConfigConnectionExport(
             endpoint_id=1,
             connection_id=1,
-            pricing_enabled=True,
+            pricing_template_id=11,
         )
-        assert export.pricing_enabled is True
+        assert export.pricing_template_id == 11
 
         export_default = ConfigConnectionExport(connection_id=2, endpoint_id=1)
-        assert export_default.pricing_enabled is False
+        assert export_default.pricing_template_id is None
 
     @pytest.mark.asyncio
     async def test_create_endpoint_persists_pricing_enabled(self):
@@ -2042,13 +2057,19 @@ class TestDEF009_ConnectionDefaultsPersist:
         model_result.scalar_one_or_none.return_value = model
         no_conflict_result = MagicMock()
         no_conflict_result.scalar_one_or_none.return_value = None
-        mock_db.execute = AsyncMock(side_effect=[model_result, no_conflict_result])
+        template = MagicMock()
+        template.id = 11
+        template_result = MagicMock()
+        template_result.scalar_one_or_none.return_value = template
+        mock_db.execute = AsyncMock(
+            side_effect=[model_result, no_conflict_result, template_result]
+        )
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
 
         with patch(
             "app.routers.connections._load_connection_or_404",
-            AsyncMock(return_value=MagicMock(pricing_enabled=True)),
+            AsyncMock(return_value=MagicMock(pricing_template_id=11)),
         ):
             connection = await create_connection(
                 model_config_id=77,
@@ -2058,14 +2079,13 @@ class TestDEF009_ConnectionDefaultsPersist:
                         base_url="https://api.example.com/v1",
                         api_key="sk-test",
                     ),
-                    pricing_enabled=True,
-                    pricing_currency_code="USD",
+                    pricing_template_id=11,
                 ),
                 db=mock_db,
                 profile_id=1,
             )
 
-        assert connection.pricing_enabled is True
+        assert connection.pricing_template_id == 11
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
@@ -2495,7 +2515,7 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
         reasoning_price: str | None,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Connection, Endpoint
+        from app.models.models import Connection, Endpoint, PricingTemplate
 
         endpoint = Endpoint(
             name="def016-endpoint",
@@ -2503,10 +2523,10 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
             api_key="sk-test",
         )
         endpoint.id = 1
-        connection = Connection(
-            model_config_id=1,
-            endpoint_id=1,
-            pricing_enabled=True,
+        pricing_template = PricingTemplate(
+            profile_id=1,
+            name="def016-template",
+            pricing_unit="PER_1M",
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -2514,11 +2534,18 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
             cache_creation_price=cache_creation_price,
             reasoning_price=reasoning_price,
             missing_special_token_price_policy=missing_special_token_price_policy,
-            pricing_config_version=10,
+            version=10,
+        )
+        pricing_template.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
+            pricing_template_id=pricing_template.id,
         )
         connection.id = 1
         connection.endpoint_rel = endpoint
-        return connection, endpoint
+        connection.pricing_template_rel = pricing_template
+        return connection, pricing_template, endpoint
 
     def test_missing_special_prices_set_unpriced_reason(self):
         from app.services.costing_service import (
@@ -2526,7 +2553,7 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
             compute_cost_fields,
         )
 
-        connection, endpoint = self._build_connection(
+        connection, pricing_template, endpoint = self._build_connection(
             input_price="2",
             output_price="4",
             cached_input_price=None,
@@ -2537,6 +2564,7 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
 
         result = compute_cost_fields(
             connection=connection,
+            pricing_template=pricing_template,
             endpoint=endpoint,
             model_id="test-model",
             status_code=200,
@@ -2569,7 +2597,7 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
         reasoning_price: str | None,
         missing_special_token_price_policy: str,
     ):
-        from app.models.models import Connection, Endpoint
+        from app.models.models import Connection, Endpoint, PricingTemplate
 
         endpoint = Endpoint(
             name="def017-endpoint",
@@ -2577,10 +2605,10 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
             api_key="sk-test",
         )
         endpoint.id = 1
-        connection = Connection(
-            model_config_id=1,
-            endpoint_id=1,
-            pricing_enabled=True,
+        pricing_template = PricingTemplate(
+            profile_id=1,
+            name="def017-template",
+            pricing_unit="PER_1M",
             pricing_currency_code="USD",
             input_price=input_price,
             output_price=output_price,
@@ -2588,11 +2616,18 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
             cache_creation_price=cache_creation_price,
             reasoning_price=reasoning_price,
             missing_special_token_price_policy=missing_special_token_price_policy,
-            pricing_config_version=10,
+            version=10,
+        )
+        pricing_template.id = 1
+        connection = Connection(
+            model_config_id=1,
+            endpoint_id=1,
+            pricing_template_id=pricing_template.id,
         )
         connection.id = 1
         connection.endpoint_rel = endpoint
-        return connection, endpoint
+        connection.pricing_template_rel = pricing_template
+        return connection, pricing_template, endpoint
 
     def test_explicit_special_prices_produce_costs(self):
         from app.services.costing_service import (
@@ -2600,7 +2635,7 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
             compute_cost_fields,
         )
 
-        connection, endpoint = self._build_connection(
+        connection, pricing_template, endpoint = self._build_connection(
             input_price="2",
             output_price="4",
             cached_input_price="1",
@@ -2611,6 +2646,7 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
 
         result = compute_cost_fields(
             connection=connection,
+            pricing_template=pricing_template,
             endpoint=endpoint,
             model_id="test-model",
             status_code=200,
@@ -2982,6 +3018,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [
                     {
                         "endpoint_id": 1,
@@ -2990,6 +3027,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "api_key": "sk-test",
                     }
                 ],
+                "pricing_templates": [],
                 "models": [
                     {
                         "provider_type": "openai",
@@ -3023,6 +3061,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [
                     {
                         "endpoint_id": 1,
@@ -3031,6 +3070,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "api_key": "sk-test",
                     }
                 ],
+                "pricing_templates": [],
                 "models": [
                     {
                         "provider_type": "openai",
@@ -3070,7 +3110,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
     async def test_import_export_roundtrip_preserves_numeric_ids(self):
         from sqlalchemy import select
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import Connection, Endpoint, EndpointFxRateSetting, Profile
+        from app.models.models import Connection, Endpoint, EndpointFxRateSetting, Profile, Provider
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
 
@@ -3083,6 +3123,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [
                     {
                         "endpoint_id": 9001,
@@ -3091,6 +3132,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         "api_key": "sk-test",
                     }
                 ],
+                "pricing_templates": [],
                 "models": [
                     {
                         "provider_type": "openai",
@@ -3128,6 +3170,22 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         name="DEF024 Profile",
                         is_active=False,
                         version=0,
+                    )
+                )
+                await db.flush()
+            provider = (
+                await db.execute(
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                db.add(
+                    Provider(
+                        name=f"DEF024 OpenAI {suffix}",
+                        provider_type="openai",
                     )
                 )
                 await db.flush()
@@ -3562,8 +3620,10 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                 await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
+                    "version": 2,
                     "endpoints": [],
                     "models": [],
+                    "pricing_templates": [],
                     "user_settings": {
                         "report_currency_code": "USD",
                         "report_currency_symbol": "$",

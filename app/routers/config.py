@@ -18,12 +18,14 @@ from app.models.models import (
     HeaderBlocklistRule,
     UserSetting,
     EndpointFxRateSetting,
-)
+    PricingTemplate,
+ )
 from app.schemas.schemas import (
     ConfigExportResponse,
     ConfigModelExport,
     ConfigConnectionExport,
     ConfigEndpointExport,
+    ConfigPricingTemplateExport,
     ConfigUserSettingsExport,
     ConfigEndpointFxRateExport,
     ConfigImportRequest,
@@ -32,7 +34,7 @@ from app.schemas.schemas import (
     HeaderBlocklistRuleUpdate,
     HeaderBlocklistRuleResponse,
     HeaderBlocklistRuleExport,
-)
+ )
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 logger = logging.getLogger(__name__)
@@ -76,12 +78,22 @@ async def export_config(
             await db.execute(
                 select(ModelConfig)
                 .options(
-                    selectinload(ModelConfig.connections).selectinload(
-                        Connection.endpoint_rel
-                    )
+                    selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+                    selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
                 )
                 .where(ModelConfig.profile_id == profile_id)
                 .order_by(ModelConfig.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    pricing_templates = (
+        (
+            await db.execute(
+                select(PricingTemplate)
+                .where(PricingTemplate.profile_id == profile_id)
+                .order_by(PricingTemplate.id.asc())
             )
         )
         .scalars()
@@ -111,6 +123,24 @@ async def export_config(
             )
         )
 
+    exported_pricing_templates: list[ConfigPricingTemplateExport] = []
+    for template in pricing_templates:
+        exported_pricing_templates.append(
+            ConfigPricingTemplateExport(
+                pricing_template_id=template.id,
+                name=template.name,
+                description=template.description,
+                pricing_unit="PER_1M",
+                pricing_currency_code=template.pricing_currency_code,
+                input_price=template.input_price,
+                output_price=template.output_price,
+                cached_input_price=template.cached_input_price,
+                cache_creation_price=template.cache_creation_price,
+                reasoning_price=template.reasoning_price,
+                missing_special_token_price_policy=template.missing_special_token_price_policy,
+                version=template.version,
+            )
+        )
     exported_models: list[ConfigModelExport] = []
     for model in model_configs:
         sorted_connections = sorted(
@@ -123,6 +153,7 @@ async def export_config(
                 ConfigConnectionExport(
                     connection_id=connection.id,
                     endpoint_id=connection.endpoint_id,
+                    pricing_template_id=connection.pricing_template_id,
                     is_active=connection.is_active,
                     priority=connection.priority,
                     name=connection.name,
@@ -130,15 +161,6 @@ async def export_config(
                     custom_headers=_normalize_custom_headers_for_export(
                         connection.custom_headers
                     ),
-                    pricing_enabled=connection.pricing_enabled,
-                    pricing_currency_code=connection.pricing_currency_code,
-                    input_price=connection.input_price,
-                    output_price=connection.output_price,
-                    cached_input_price=connection.cached_input_price,
-                    cache_creation_price=connection.cache_creation_price,
-                    reasoning_price=connection.reasoning_price,
-                    missing_special_token_price_policy=connection.missing_special_token_price_policy,
-                    pricing_config_version=connection.pricing_config_version,
                 )
             )
         exported_models.append(
@@ -198,8 +220,10 @@ async def export_config(
     )
 
     data = ConfigExportResponse(
+        version=2,
         exported_at=utc_now(),
         endpoints=exported_endpoints,
+        pricing_templates=exported_pricing_templates,
         models=exported_models,
         user_settings=ConfigUserSettingsExport(
             report_currency_code=(
@@ -272,6 +296,31 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 detail=f"Endpoint '{endpoint_name}' has invalid base_url: {'; '.join(url_warnings)}",
             )
 
+    pricing_template_ids_in_file: set[int] = set()
+    pricing_template_names_in_file: set[str] = set()
+    for template in data.pricing_templates:
+        if template.pricing_template_id in pricing_template_ids_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Duplicate pricing_template_id in import: "
+                    f"{template.pricing_template_id}"
+                ),
+            )
+        pricing_template_ids_in_file.add(template.pricing_template_id)
+
+        template_name = template.name.strip()
+        if not template_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Pricing template name must not be empty",
+            )
+        if template_name in pricing_template_names_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate pricing template name: '{template_name}'",
+            )
+        pricing_template_names_in_file.add(template_name)
     seen_model_ids: set[str] = set()
     native_models: dict[str, str] = {}
     connection_ids_seen: set[int] = set()
@@ -335,15 +384,17 @@ def _validate_import(data: ConfigImportRequest) -> None:
 
             connection_pairs.add((model.model_id, connection.endpoint_id))
 
-            if connection.pricing_enabled and connection.pricing_currency_code is None:
+            if (
+                connection.pricing_template_id is not None
+                and connection.pricing_template_id not in pricing_template_ids_in_file
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Connection for model '{model.model_id}' has pricing_enabled=true "
-                        "but pricing_currency_code is missing"
+                        f"Connection for model '{model.model_id}' references unknown "
+                        f"pricing_template_id '{connection.pricing_template_id}'"
                     ),
                 )
-
     for model in data.models:
         if model.model_type != "proxy":
             continue
@@ -407,6 +458,8 @@ async def import_config(
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     _validate_import(data)
+    if data.version != 2:
+        raise HTTPException(status_code=400, detail="Config import requires version=2")
 
     await db.execute(
         delete(EndpointFxRateSetting).where(
@@ -416,6 +469,7 @@ async def import_config(
     await db.execute(delete(Connection).where(Connection.profile_id == profile_id))
     await db.execute(delete(Endpoint).where(Endpoint.profile_id == profile_id))
     await db.execute(delete(ModelConfig).where(ModelConfig.profile_id == profile_id))
+    await db.execute(delete(PricingTemplate).where(PricingTemplate.profile_id == profile_id))
     await db.execute(
         delete(HeaderBlocklistRule).where(
             HeaderBlocklistRule.is_system == False,  # noqa: E712
@@ -465,6 +519,29 @@ async def import_config(
         endpoint_id_map[endpoint_data.endpoint_id] = endpoint.id
         endpoints_count += 1
 
+    template_id_map: dict[int, int] = {}
+    templates_count = 0
+    for template_data in data.pricing_templates:
+        template = PricingTemplate(
+            profile_id=profile_id,
+            name=template_data.name.strip(),
+            description=template_data.description,
+            pricing_unit="PER_1M",
+            pricing_currency_code=template_data.pricing_currency_code,
+            input_price=template_data.input_price,
+            output_price=template_data.output_price,
+            cached_input_price=template_data.cached_input_price,
+            cache_creation_price=template_data.cache_creation_price,
+            reasoning_price=template_data.reasoning_price,
+            missing_special_token_price_policy=template_data.missing_special_token_price_policy,
+            version=template_data.version,
+        )
+        db.add(template)
+        await db.flush()
+
+        template_id_map[template_data.pricing_template_id] = template.id
+        templates_count += 1
+
     connections_count = 0
     imported_connection_pairs: set[tuple[str, int]] = set()
 
@@ -507,6 +584,11 @@ async def import_config(
                 model_config_id=model_config.id,
                 profile_id=profile_id,
                 endpoint_id=mapped_endpoint_id,
+                pricing_template_id=(
+                    template_id_map[connection_data.pricing_template_id]
+                    if connection_data.pricing_template_id is not None
+                    else None
+                ),
                 is_active=connection_data.is_active,
                 priority=connection_data.priority,
                 name=connection_data.name,
@@ -514,15 +596,6 @@ async def import_config(
                 custom_headers=json.dumps(connection_data.custom_headers)
                 if connection_data.custom_headers
                 else None,
-                pricing_enabled=connection_data.pricing_enabled,
-                pricing_currency_code=connection_data.pricing_currency_code,
-                input_price=connection_data.input_price,
-                output_price=connection_data.output_price,
-                cached_input_price=connection_data.cached_input_price,
-                cache_creation_price=connection_data.cache_creation_price,
-                reasoning_price=connection_data.reasoning_price,
-                missing_special_token_price_policy=connection_data.missing_special_token_price_policy,
-                pricing_config_version=connection_data.pricing_config_version,
             )
             db.add(connection)
             connections_count += 1
@@ -586,6 +659,7 @@ async def import_config(
     return ConfigImportResponse(
         endpoints_imported=endpoints_count,
         models_imported=len(data.models),
+        pricing_templates_imported=templates_count,
         connections_imported=connections_count,
     )
 

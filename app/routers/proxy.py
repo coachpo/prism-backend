@@ -241,6 +241,7 @@ async def _handle_proxy(
         token_values = tokens or {}
         return compute_cost_fields(
             connection=connection,
+            pricing_template=connection.pricing_template_rel,
             endpoint=connection.endpoint_rel,
             model_id=model_id,
             status_code=status_code,

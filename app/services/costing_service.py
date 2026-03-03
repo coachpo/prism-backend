@@ -7,7 +7,7 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Connection, Endpoint, EndpointFxRateSetting, UserSetting
+from app.models.models import Connection, Endpoint, EndpointFxRateSetting, PricingTemplate, UserSetting
 
 SIX_DP = Decimal("0.000001")
 MICRO_FACTOR = Decimal("1000000")
@@ -129,6 +129,7 @@ async def load_costing_settings(
 def compute_cost_fields(
     *,
     connection: Connection | None,
+    pricing_template: PricingTemplate | None,
     endpoint: Endpoint | None,
     model_id: str,
     status_code: int,
@@ -138,7 +139,7 @@ def compute_cost_fields(
     cache_creation_input_tokens: int | None,
     reasoning_tokens: int | None,
     settings: CostingSettingsSnapshot,
-) -> CostFieldPayload:
+ ) -> CostFieldPayload:
     success_flag = 200 <= status_code < 300
     billable_flag = success_flag
 
@@ -209,20 +210,20 @@ def compute_cost_fields(
     if not success_flag:
         return result
 
-    if not connection.pricing_enabled:
+    if pricing_template is None:
         result["unpriced_reason"] = "PRICING_DISABLED"
         return result
 
-    if not connection.pricing_currency_code:
+    if not pricing_template.pricing_currency_code:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
 
     try:
-        input_price = _parse_non_negative(connection.input_price)
-        output_price = _parse_non_negative(connection.output_price)
-        _parse_non_negative(connection.cached_input_price)
-        _parse_non_negative(connection.cache_creation_price)
-        _parse_non_negative(connection.reasoning_price)
+        input_price = _parse_non_negative(pricing_template.input_price)
+        output_price = _parse_non_negative(pricing_template.output_price)
+        _parse_non_negative(pricing_template.cached_input_price)
+        _parse_non_negative(pricing_template.cache_creation_price)
+        _parse_non_negative(pricing_template.reasoning_price)
     except ValueError:
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
@@ -240,7 +241,6 @@ def compute_cost_fields(
     input_count = max(input_tokens or 0, 0)
     output_count = max(output_tokens or 0, 0)
 
-    # Cost counts: used for pricing math only (policy-derived)
     cached_cost_count = (
         max(cache_read_input_tokens, 0) if cache_read_input_tokens is not None else 0
     )
@@ -253,33 +253,41 @@ def compute_cost_fields(
         max(reasoning_tokens, 0) if reasoning_tokens is not None else 0
     )
 
-    if cache_read_input_tokens is not None and cache_read_input_tokens > 0 and connection.cached_input_price is None:
+    if (
+        cache_read_input_tokens is not None
+        and cache_read_input_tokens > 0
+        and pricing_template.cached_input_price is None
+    ):
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
     if (
         cache_creation_input_tokens is not None
         and cache_creation_input_tokens > 0
-        and connection.cache_creation_price is None
+        and pricing_template.cache_creation_price is None
     ):
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
-    if reasoning_tokens is not None and reasoning_tokens > 0 and connection.reasoning_price is None:
+    if (
+        reasoning_tokens is not None
+        and reasoning_tokens > 0
+        and pricing_template.reasoning_price is None
+    ):
         result["unpriced_reason"] = "MISSING_PRICE_DATA"
         return result
 
     cached_price = (
-        Decimal(str(connection.cached_input_price))
-        if connection.cached_input_price is not None
+        Decimal(str(pricing_template.cached_input_price))
+        if pricing_template.cached_input_price is not None
         else Decimal("0")
     )
     cache_creation_price = (
-        Decimal(str(connection.cache_creation_price))
-        if connection.cache_creation_price is not None
+        Decimal(str(pricing_template.cache_creation_price))
+        if pricing_template.cache_creation_price is not None
         else Decimal("0")
     )
     reasoning_price = (
-        Decimal(str(connection.reasoning_price))
-        if connection.reasoning_price is not None
+        Decimal(str(pricing_template.reasoning_price))
+        if pricing_template.reasoning_price is not None
         else Decimal("0")
     )
 
@@ -311,8 +319,8 @@ def compute_cost_fields(
             "reasoning_cost_micros": decimal_to_micros(reasoning_cost),
             "total_cost_original_micros": decimal_to_micros(total_original),
             "total_cost_user_currency_micros": decimal_to_micros(total_user_currency),
-            "currency_code_original": connection.pricing_currency_code,
-            "pricing_snapshot_unit": "PER_1M",
+            "currency_code_original": pricing_template.pricing_currency_code,
+            "pricing_snapshot_unit": pricing_template.pricing_unit,
             "pricing_snapshot_input": _normalize_decimal_string(input_price),
             "pricing_snapshot_output": _normalize_decimal_string(output_price),
             "pricing_snapshot_cache_read_input": _normalize_decimal_string(
@@ -322,8 +330,8 @@ def compute_cost_fields(
                 cache_creation_price
             ),
             "pricing_snapshot_reasoning": _normalize_decimal_string(reasoning_price),
-            "pricing_snapshot_missing_special_token_price_policy": connection.missing_special_token_price_policy,
-            "pricing_config_version_used": connection.pricing_config_version,
+            "pricing_snapshot_missing_special_token_price_policy": pricing_template.missing_special_token_price_policy,
+            "pricing_config_version_used": pricing_template.version,
         }
     )
     return result

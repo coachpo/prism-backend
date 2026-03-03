@@ -577,6 +577,9 @@ class TestConfigExportImportIsolation:
         model_result = MagicMock()
         model_result.scalars.return_value.all.return_value = [model]
 
+        pricing_templates_result = MagicMock()
+        pricing_templates_result.scalars.return_value.all.return_value = []
+
         user_settings_result = MagicMock()
         user_settings_result.scalar_one_or_none.return_value = None
 
@@ -592,6 +595,7 @@ class TestConfigExportImportIsolation:
         mock_db.execute.side_effect = [
             endpoint_result,
             model_result,
+            pricing_templates_result,
             providers_result,
             user_settings_result,
             fx_result,
@@ -774,6 +778,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
+                "version": 2,
                 "endpoints": [
                     {
                         "endpoint_id": new_endpoint_id,
@@ -782,6 +787,7 @@ class TestConfigExportImportIsolation:
                         "api_key": "sk-target-new",
                     }
                 ],
+                "pricing_templates": [],
                 "models": [
                     {
                         "provider_type": "openai",

@@ -11,12 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import Connection, Endpoint, HeaderBlocklistRule, ModelConfig
+from app.models.models import Connection, Endpoint, HeaderBlocklistRule, ModelConfig, PricingTemplate
 from app.schemas.schemas import (
     ConnectionCreate,
     ConnectionOwnerResponse,
     ConnectionResponse,
     ConnectionUpdate,
+    ConnectionPricingTemplateUpdate,
     HealthCheckResponse,
  )
 from app.services.loadbalancer import mark_connection_recovered
@@ -31,16 +32,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["connections"])
 
-PRICING_FIELDS = {
-    "pricing_enabled",
-    "pricing_currency_code",
-    "input_price",
-    "output_price",
-    "cached_input_price",
-    "cache_creation_price",
-    "reasoning_price",
-    "missing_special_token_price_policy",
-}
 
 def _build_health_check_request(
     provider_type: str, model_id: str
@@ -290,6 +281,29 @@ async def _create_endpoint_from_inline(
     await db.flush()
     return endpoint
 
+async def _validate_pricing_template_id(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    pricing_template_id: int | None,
+    allow_null: bool = True,
+ ) -> int | None:
+    if pricing_template_id is None:
+        if allow_null:
+            return None
+        raise HTTPException(status_code=422, detail="pricing_template_id is required")
+
+    template_result = await db.execute(
+        select(PricingTemplate).where(
+            PricingTemplate.id == pricing_template_id,
+            PricingTemplate.profile_id == profile_id,
+        )
+    )
+    template = template_result.scalar_one_or_none()
+    if template is None:
+        raise HTTPException(status_code=404, detail="Pricing template not found")
+    return template.id
+
 
 async def _load_connection_or_404(
     db: AsyncSession,
@@ -299,7 +313,7 @@ async def _load_connection_or_404(
  ) -> Connection:
     result = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.endpoint_rel))
+        .options(selectinload(Connection.endpoint_rel), selectinload(Connection.pricing_template_rel))
         .where(
             Connection.id == connection_id,
             Connection.profile_id == profile_id,
@@ -331,7 +345,7 @@ async def list_connections(
 
     result = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.endpoint_rel))
+        .options(selectinload(Connection.endpoint_rel), selectinload(Connection.pricing_template_rel))
         .where(
             Connection.model_config_id == model_config_id,
             Connection.profile_id == profile_id,
@@ -387,6 +401,11 @@ async def create_connection(
             detail="Exactly one of endpoint_id or endpoint_create is required",
         )
 
+    pricing_template_id = await _validate_pricing_template_id(
+        db,
+        profile_id=profile_id,
+        pricing_template_id=body.pricing_template_id,
+    )
     connection = Connection(
         profile_id=profile_id,
         model_config_id=model_config_id,
@@ -396,15 +415,7 @@ async def create_connection(
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
-        pricing_enabled=body.pricing_enabled,
-        pricing_currency_code=body.pricing_currency_code,
-        input_price=body.input_price,
-        output_price=body.output_price,
-        cached_input_price=body.cached_input_price,
-        cache_creation_price=body.cache_creation_price,
-        reasoning_price=body.reasoning_price,
-        missing_special_token_price_policy=body.missing_special_token_price_policy,
-        pricing_config_version=1 if body.pricing_enabled else 0,
+        pricing_template_id=pricing_template_id,
     )
     db.add(connection)
     await db.flush()
@@ -454,17 +465,18 @@ async def update_connection(
         if endpoint is None:
             raise HTTPException(status_code=404, detail="Endpoint not found")
 
+    if "pricing_template_id" in update_data:
+        update_data["pricing_template_id"] = await _validate_pricing_template_id(
+            db,
+            profile_id=profile_id,
+            pricing_template_id=update_data["pricing_template_id"],
+        )
     if "custom_headers" in update_data:
         custom_headers = update_data["custom_headers"]
         update_data["custom_headers"] = (
             json.dumps(custom_headers) if custom_headers else None
         )
 
-    pricing_changed = any(
-        field_name in update_data
-        and update_data[field_name] != getattr(connection, field_name)
-        for field_name in PRICING_FIELDS
-    )
 
     for key, value in update_data.items():
         setattr(connection, key, value)
@@ -475,9 +487,6 @@ async def update_connection(
     if is_active_changed:
         mark_connection_recovered(profile_id, connection.id)
 
-    if pricing_changed:
-        connection.pricing_config_version = (connection.pricing_config_version or 0) + 1
-
     connection.updated_at = utc_now()
     await db.flush()
 
@@ -487,6 +496,35 @@ async def update_connection(
         connection_id=connection.id,
     )
 
+
+@router.put(
+    "/api/connections/{connection_id}/pricing-template",
+    response_model=ConnectionResponse,
+ )
+async def set_connection_pricing_template(
+    connection_id: int,
+    body: ConnectionPricingTemplateUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+ ):
+    connection = await _load_connection_or_404(
+        db,
+        profile_id=profile_id,
+        connection_id=connection_id,
+    )
+    connection.pricing_template_id = await _validate_pricing_template_id(
+        db,
+        profile_id=profile_id,
+        pricing_template_id=body.pricing_template_id,
+    )
+    connection.updated_at = utc_now()
+    await db.flush()
+
+    return await _load_connection_or_404(
+        db,
+        profile_id=profile_id,
+        connection_id=connection.id,
+    )
 
 @router.delete("/api/connections/{connection_id}")
 async def delete_connection(

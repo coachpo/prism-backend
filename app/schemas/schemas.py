@@ -111,25 +111,100 @@ class EndpointResponse(BaseModel):
     updated_at: datetime
 
 
-# --- Connection Schemas (model-scoped routing config) ---
+# --- Pricing Template + Connection Schemas ---
 
 
-class ConnectionBase(BaseModel):
-    is_active: bool = True
-    priority: int = 0
-    name: str | None = None
-    auth_type: AuthType | None = None
-    custom_headers: dict[str, str] | None = None
-    pricing_enabled: bool = False
-    pricing_currency_code: str | None = None
-    input_price: str | None = None
-    output_price: str | None = None
+class PricingTemplateCreate(BaseModel):
+    name: str
+    description: str | None = None
+    pricing_unit: Literal["PER_1M"] = "PER_1M"
+    pricing_currency_code: str
+    input_price: str
+    output_price: str
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("name must not be empty")
+        if len(trimmed) > 200:
+            raise ValueError("name must be at most 200 characters")
+        return trimmed
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        return trimmed or None
+
+    @field_validator(
+        "input_price",
+        "output_price",
+        "cached_input_price",
+        "cache_creation_price",
+        "reasoning_price",
+        mode="before",
+    )
+    @classmethod
+    def validate_prices(cls, v: str | int | float | Decimal | None, info) -> str | None:
+        if v is None:
+            return None
+        return _validate_decimal_non_negative(str(v), info.field_name)
+
+    @field_validator("pricing_currency_code")
+    @classmethod
+    def validate_currency_code(cls, v: str) -> str:
+        code = v.strip().upper()
+        if not _CURRENCY_CODE_RE.match(code):
+            raise ValueError(
+                "pricing_currency_code must be a 3-letter uppercase ISO code"
+            )
+        return code
+
+
+class PricingTemplateUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    pricing_unit: Literal["PER_1M"] | None = None
+    pricing_currency_code: str | None = None
+    input_price: str | None = None
+    output_price: str | None = None
+    cached_input_price: str | None = None
+    cache_creation_price: str | None = None
+    reasoning_price: str | None = None
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = (
+        None
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        if not trimmed:
+            raise ValueError("name must not be empty")
+        if len(trimmed) > 200:
+            raise ValueError("name must be at most 200 characters")
+        return trimmed
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        trimmed = v.strip()
+        return trimmed or None
+
     @field_validator(
         "input_price",
         "output_price",
@@ -156,16 +231,80 @@ class ConnectionBase(BaseModel):
             )
         return code
 
-    @model_validator(mode="after")
-    def validate_pricing_config(self):
-        if self.pricing_enabled:
-            if not self.pricing_currency_code:
-                raise ValueError(
-                    "pricing_currency_code is required when pricing_enabled is true"
-                )
-        return self
+
+class PricingTemplateListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    name: str
+    description: str | None
+    pricing_unit: Literal["PER_1M"]
+    pricing_currency_code: str
+    version: int
+    updated_at: datetime
+
+
+class PricingTemplateResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    name: str
+    description: str | None
+    pricing_unit: Literal["PER_1M"]
+    pricing_currency_code: str
+    input_price: str
+    output_price: str
+    cached_input_price: str | None
+    cache_creation_price: str | None
+    reasoning_price: str | None
+    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
+    version: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class PricingTemplateConnectionUsageItem(BaseModel):
+    connection_id: int
+    connection_name: str | None
+    model_config_id: int
+    model_id: str
+    endpoint_id: int
+    endpoint_name: str
+
+
+class PricingTemplateConnectionsResponse(BaseModel):
+    template_id: int
+    items: list[PricingTemplateConnectionUsageItem]
+
+
+class ConnectionPricingTemplateUpdate(BaseModel):
+    pricing_template_id: int | None = None
+
+
+class ConnectionPricingTemplateSummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    pricing_unit: Literal["PER_1M"]
+    pricing_currency_code: str
+    version: int
+
+
+class ConnectionBase(BaseModel):
+    is_active: bool = True
+    priority: int = 0
+    name: str | None = None
+    auth_type: AuthType | None = None
+    custom_headers: dict[str, str] | None = None
+    pricing_template_id: int | None = None
+
 
 class ConnectionCreate(ConnectionBase):
+    model_config = ConfigDict(extra="forbid")
+
     endpoint_id: int | None = None
     endpoint_create: EndpointCreate | None = None
 
@@ -181,6 +320,8 @@ class ConnectionCreate(ConnectionBase):
 
 
 class ConnectionUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     endpoint_id: int | None = None
     endpoint_create: EndpointCreate | None = None
     is_active: bool | None = None
@@ -188,53 +329,14 @@ class ConnectionUpdate(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
-    pricing_enabled: bool | None = None
-    pricing_currency_code: str | None = None
-    input_price: str | None = None
-    output_price: str | None = None
-    cached_input_price: str | None = None
-    cache_creation_price: str | None = None
-    reasoning_price: str | None = None
-    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] | None = (
-        None
-    )
-    @field_validator(
-        "input_price",
-        "output_price",
-        "cached_input_price",
-        "cache_creation_price",
-        "reasoning_price",
-        mode="before",
-    )
-    @classmethod
-    def validate_update_prices(
-        cls, v: str | int | float | Decimal | None, info
-    ) -> str | None:
-        if v is None:
-            return None
-        return _validate_decimal_non_negative(str(v), info.field_name)
-
-    @field_validator("pricing_currency_code")
-    @classmethod
-    def validate_update_currency_code(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        code = v.strip().upper()
-        if not _CURRENCY_CODE_RE.match(code):
-            raise ValueError(
-                "pricing_currency_code must be a 3-letter uppercase ISO code"
-            )
-        return code
+    pricing_template_id: int | None = None
 
     @model_validator(mode="after")
     def validate_update(self):
         if self.endpoint_id is not None and self.endpoint_create is not None:
             raise ValueError("endpoint_id and endpoint_create are mutually exclusive")
-        if self.pricing_enabled is True and not self.pricing_currency_code:
-            raise ValueError(
-                "pricing_currency_code is required when pricing_enabled is true"
-            )
         return self
+
 
 class ConnectionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -249,15 +351,11 @@ class ConnectionResponse(BaseModel):
     name: str | None
     auth_type: AuthType | None
     custom_headers: dict[str, str] | None
-    pricing_enabled: bool
-    pricing_currency_code: str | None
-    input_price: str | None
-    output_price: str | None
-    cached_input_price: str | None
-    cache_creation_price: str | None
-    reasoning_price: str | None
-    missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"]
-    pricing_config_version: int
+    pricing_template_id: int | None
+    pricing_template: ConnectionPricingTemplateSummary | None = Field(
+        default=None,
+        validation_alias=AliasChoices("pricing_template", "pricing_template_rel"),
+    )
     health_status: str
     health_detail: str | None
     last_health_check: datetime | None
@@ -272,7 +370,6 @@ class ConnectionResponse(BaseModel):
         if isinstance(v, dict):
             return v
         return json.loads(v)
-
 
 class HealthCheckResponse(BaseModel):
     connection_id: int
@@ -604,25 +701,33 @@ class ConfigEndpointExport(BaseModel):
     base_url: str
     api_key: str
 
-class ConfigConnectionExport(BaseModel):
-    connection_id: int
-    endpoint_id: int
-    is_active: bool = True
-    priority: int = 0
-    name: str | None = None
-    auth_type: AuthType | None = None
-    custom_headers: dict[str, str] | None = None
-    pricing_enabled: bool = False
-    pricing_currency_code: str | None = None
-    input_price: str | None = None
-    output_price: str | None = None
+
+class ConfigPricingTemplateExport(BaseModel):
+    pricing_template_id: int
+    name: str
+    description: str | None = None
+    pricing_unit: Literal["PER_1M"] = "PER_1M"
+    pricing_currency_code: str
+    input_price: str
+    output_price: str
     cached_input_price: str | None = None
     cache_creation_price: str | None = None
     reasoning_price: str | None = None
     missing_special_token_price_policy: Literal["MAP_TO_OUTPUT", "ZERO_COST"] = (
         "MAP_TO_OUTPUT"
     )
-    pricing_config_version: int = 0
+    version: int = 1
+
+
+class ConfigConnectionExport(BaseModel):
+    connection_id: int
+    endpoint_id: int
+    pricing_template_id: int | None = None
+    is_active: bool = True
+    priority: int = 0
+    name: str | None = None
+    auth_type: AuthType | None = None
+    custom_headers: dict[str, str] | None = None
 
 
 class ConfigModelExport(BaseModel):
@@ -638,7 +743,6 @@ class ConfigModelExport(BaseModel):
     connections: list[ConfigConnectionExport] = Field(default_factory=list)
 
 
-
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
     endpoint_id: int
@@ -652,28 +756,30 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
+    version: Literal[2] = 2
     exported_at: datetime
     endpoints: list[ConfigEndpointExport]
+    pricing_templates: list[ConfigPricingTemplateExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(default_factory=list)
-
 
 
 class ConfigImportRequest(BaseModel):
+    version: int
     exported_at: datetime | None = None
     endpoints: list[ConfigEndpointExport]
+    pricing_templates: list[ConfigPricingTemplateExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(default_factory=list)
-
 
 
 class ConfigImportResponse(BaseModel):
     endpoints_imported: int
+    pricing_templates_imported: int
     models_imported: int
     connections_imported: int
-
 
 # --- Audit Log Schemas ---
 

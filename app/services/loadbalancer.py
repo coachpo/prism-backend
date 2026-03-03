@@ -18,6 +18,7 @@ async def get_model_config_with_connections(
         select(ModelConfig)
         .options(
             selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+            selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
             selectinload(ModelConfig.provider),
         )
         .where(
@@ -35,6 +36,7 @@ async def get_model_config_with_connections(
             select(ModelConfig)
             .options(
                 selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+                selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
                 selectinload(ModelConfig.provider),
             )
             .where(

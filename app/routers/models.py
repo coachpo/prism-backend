@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/models", tags=["models"])
 _MODEL_CONFIG_DETAIL_OPTIONS = (
     selectinload(ModelConfig.provider),
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
+    selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
 )
 
 
@@ -395,7 +396,7 @@ async def get_models_by_endpoint(
     # Find all connections using this endpoint
     result = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.model_config_rel).selectinload(ModelConfig.provider))
+        .options(selectinload(Connection.model_config_rel).selectinload(ModelConfig.provider), selectinload(Connection.pricing_template_rel))
         .where(
             Connection.endpoint_id == endpoint_id,
             Connection.profile_id == profile_id,

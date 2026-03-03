@@ -74,6 +74,9 @@ class Profile(Base):
     header_blocklist_rules: Mapped[list["HeaderBlocklistRule"]] = relationship(
         back_populates="profile", cascade="all, delete-orphan"
     )
+    pricing_templates: Mapped[list["PricingTemplate"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
 
 
 class Provider(Base):
@@ -180,6 +183,43 @@ class Endpoint(Base):
     )
 
 
+class PricingTemplate(Base):
+    __tablename__ = "pricing_templates"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "name", name="uq_pricing_templates_profile_name"),
+        Index("idx_pricing_templates_profile_id", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pricing_unit: Mapped[str] = mapped_column(String(20), default="PER_1M", nullable=False)
+    pricing_currency_code: Mapped[str] = mapped_column(String(3), nullable=False)
+    input_price: Mapped[str] = mapped_column(String(20), nullable=False)
+    output_price: Mapped[str] = mapped_column(String(20), nullable=False)
+    cached_input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    cache_creation_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    reasoning_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    missing_special_token_price_policy: Mapped[str] = mapped_column(
+        String(20), default="MAP_TO_OUTPUT", nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    profile: Mapped["Profile"] = relationship(back_populates="pricing_templates")
+    connections: Mapped[list["Connection"]] = relationship(
+        back_populates="pricing_template_rel"
+    )
+
+
 class Connection(Base):
     __tablename__ = "connections"
     __table_args__ = (
@@ -188,6 +228,7 @@ class Connection(Base):
         Index("idx_connections_is_active", "is_active"),
         Index("idx_connections_priority", "priority"),
         Index("idx_connections_profile_id", "profile_id"),
+        Index("idx_connections_pricing_template_id", "pricing_template_id"),
         Index(
             "idx_connections_profile_model_active_priority",
             "profile_id",
@@ -207,6 +248,9 @@ class Connection(Base):
     endpoint_id: Mapped[int] = mapped_column(
         ForeignKey("endpoints.id", ondelete="RESTRICT"), nullable=False
     )
+    pricing_template_id: Mapped[int | None] = mapped_column(
+        ForeignKey("pricing_templates.id", ondelete="RESTRICT"), nullable=True
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -223,21 +267,6 @@ class Connection(Base):
     last_health_check: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    pricing_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    pricing_currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
-    input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    output_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    cached_input_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    cache_creation_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    reasoning_price: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    missing_special_token_price_policy: Mapped[str] = mapped_column(
-        String(20), default="MAP_TO_OUTPUT", nullable=False
-    )
-    pricing_config_version: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -248,6 +277,9 @@ class Connection(Base):
     profile: Mapped["Profile"] = relationship(back_populates="connections")
     model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="connections")
     endpoint_rel: Mapped["Endpoint"] = relationship(back_populates="connections")
+    pricing_template_rel: Mapped["PricingTemplate | None"] = relationship(
+        back_populates="connections"
+    )
 
     @property
     def base_url(self) -> str | None:

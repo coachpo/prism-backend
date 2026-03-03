@@ -23,6 +23,7 @@ from app.routers import (
     config,
     audit,
     settings as settings_router,
+    pricing_templates,
 )
 
 logger = logging.getLogger(__name__)
@@ -246,6 +247,7 @@ app.include_router(stats.router)
 app.include_router(audit.router)
 app.include_router(config.router)
 app.include_router(settings_router.router)
+app.include_router(pricing_templates.router)
 app.include_router(proxy.router)
 
 
