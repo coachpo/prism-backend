@@ -47,7 +47,7 @@ app/
 - Startup order in lifespan: validate PostgreSQL URL -> run migrations -> seed providers -> seed user settings -> seed system header blocklist rules -> create shared `httpx.AsyncClient`.
 - Failover trigger statuses are `403, 429, 500, 502, 503, 529` (`FAILOVER_STATUS_CODES`).
 - Failover recovery state is in-memory and keyed by `(profile_id, connection_id)`; resets on process restart.
-- Config export/import canonical contract is `version: 1` with logical references (`endpoint_ref`, `connection_ref`) and replace-mode import.
+- Config export/import canonical contract is `version: 2` with explicit IDs (`endpoint_id`, `connection_id`, `pricing_template_id`) and replace-mode import.
 - Spending API supports `group_by`: `none`, `day`, `week`, `month`, `provider`, `model`, `endpoint`, `model_endpoint`.
 - Costing stores integer micros in logs (`*_micros`), with pricing snapshot fields for auditability.
 - FX mappings are keyed by `(model_id, endpoint_id)` in backend settings APIs.
