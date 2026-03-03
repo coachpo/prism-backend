@@ -7,7 +7,7 @@ Persists state in PostgreSQL via async SQLAlchemy, applies Alembic migrations on
 ## STRUCTURE
 ```
 app/
-|- main.py                 # Lifespan startup: validate DB URL, run migrations, seed providers/settings/blocklist, create shared httpx client
+|- main.py                 # Lifespan startup: validate DB URL, run migrations, seed providers/profile invariants/settings/blocklist, create shared httpx client
 |- dependencies.py         # DB session dependency + active/effective profile dependencies
 |- core/
 |  |- config.py            # Environment-backed settings and timeout values
@@ -44,14 +44,14 @@ app/
 - Providers are global shared seed rows (`openai`, `anthropic`, `gemini`) and not profile-scoped.
 
 ## KEY BACKEND FACTS
-- Startup order in lifespan: validate PostgreSQL URL -> run migrations -> seed providers -> seed user settings -> seed system header blocklist rules -> create shared `httpx.AsyncClient`.
+- Startup order in lifespan: validate PostgreSQL URL -> run migrations -> seed providers -> enforce profile invariants -> seed user settings -> seed system header blocklist rules -> create shared `httpx.AsyncClient`.
 - Failover trigger statuses are `403, 429, 500, 502, 503, 529` (`FAILOVER_STATUS_CODES`).
 - Failover recovery state is in-memory and keyed by `(profile_id, connection_id)`; resets on process restart.
 - Config export/import canonical contract is `version: 2` with explicit IDs (`endpoint_id`, `connection_id`, `pricing_template_id`) and replace-mode import.
 - Spending API supports `group_by`: `none`, `day`, `week`, `month`, `provider`, `model`, `endpoint`, `model_endpoint`.
 - Costing stores integer micros in logs (`*_micros`), with pricing snapshot fields for auditability.
 - FX mappings are keyed by `(model_id, endpoint_id)` in backend settings APIs.
-- `Connection.description` is a synonym-backed field over the `description` column (ORM attribute is `name` with synonym).
+- `Connection` persists `name` directly; ownership navigation should rely on connection->model lookup routes rather than alias fields.
 - `request_logs` and `audit_logs` both persist `endpoint_id` plus endpoint snapshot fields.
 - `user_settings` includes `timezone_preference` and report currency settings.
 
