@@ -14,8 +14,8 @@ from app.schemas.schemas import (
     EndpointResponse,
     EndpointUpdate,
 )
+from app.services.loadbalancer import mark_connection_recovered
 from app.services.proxy_service import normalize_base_url, validate_base_url
-
 router = APIRouter(tags=["endpoints"])
 
 
@@ -122,8 +122,30 @@ async def update_endpoint(
         if url_warnings:
             raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
+    clear_dependent_recovery_state = False
+    if "base_url" in update_data and update_data["base_url"] != endpoint.base_url:
+        clear_dependent_recovery_state = True
+    if "api_key" in update_data and update_data["api_key"] != endpoint.api_key:
+        clear_dependent_recovery_state = True
+
     for key, value in update_data.items():
         setattr(endpoint, key, value)
+
+    if clear_dependent_recovery_state:
+        dependent_connection_ids = (
+            (
+                await db.execute(
+                    select(Connection.id).where(
+                        Connection.profile_id == profile_id,
+                        Connection.endpoint_id == endpoint.id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for connection_id in dependent_connection_ids:
+            mark_connection_recovered(profile_id, connection_id)
 
     endpoint.updated_at = utc_now()
     await db.flush()

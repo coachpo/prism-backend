@@ -1,3 +1,5 @@
+from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -13,6 +15,13 @@ class Settings(BaseSettings):
     # Load balancer settings
     failover_cooldown_seconds: int = 60
     max_retries: int = 3
+    failover_failure_threshold: int = Field(default=2, ge=1, le=10)
+    failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
+    failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    failover_auth_error_cooldown_seconds: int = Field(
+        default=1800, ge=1, le=86_400
+    )
 
 def ensure_postgresql_database_url(database_url: str) -> None:
     if not database_url.lower().startswith("postgresql"):
@@ -22,5 +31,6 @@ def ensure_postgresql_database_url(database_url: str) -> None:
         )
 
 
+@lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()

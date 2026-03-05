@@ -14,11 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_active_profile_id
 from app.models.models import Connection, HeaderBlocklistRule
 from app.services.loadbalancer import (
-    get_model_config_with_connections,
+    FailureKind,
     build_attempt_plan,
+    get_model_config_with_connections,
     mark_connection_failed,
     mark_connection_recovered,
-)
+ )
 from app.services.proxy_service import (
     build_upstream_url,
     build_upstream_headers,
@@ -145,6 +146,69 @@ def _rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
         return json.dumps(payload).encode("utf-8")
     except (TypeError, ValueError):
         return raw_body
+
+
+_AUTH_LIKE_ERROR_RE = re.compile(
+    r"(auth|authoriz|forbidden|permission|api[\s_-]?key|token|credential|access denied)",
+    re.IGNORECASE,
+)
+
+
+def _extract_error_text(raw_body: bytes | None) -> str:
+    if not raw_body:
+        return ""
+    decoded_body = raw_body.decode("utf-8", errors="replace")
+    text_chunks = [decoded_body]
+    try:
+        payload = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return decoded_body
+
+    if isinstance(payload, dict):
+        error_value = payload.get("error")
+        if isinstance(error_value, dict):
+            for field in ("message", "detail", "type", "code"):
+                value = error_value.get(field)
+                if isinstance(value, str):
+                    text_chunks.append(value)
+        elif isinstance(error_value, str):
+            text_chunks.append(error_value)
+
+        for field in ("detail", "message"):
+            value = payload.get(field)
+            if isinstance(value, str):
+                text_chunks.append(value)
+    elif isinstance(payload, str):
+        text_chunks.append(payload)
+
+    return " ".join(chunk for chunk in text_chunks if chunk)
+
+
+def _classify_http_failure(status_code: int, raw_body: bytes | None) -> FailureKind:
+    if status_code != 403:
+        return "transient_http"
+    return (
+        "auth_like"
+        if _AUTH_LIKE_ERROR_RE.search(_extract_error_text(raw_body))
+        else "transient_http"
+    )
+
+
+def _classify_failover_failure(
+    *,
+    status_code: int | None = None,
+    raw_body: bytes | None = None,
+    exception: Exception | None = None,
+) -> FailureKind:
+    if exception is not None:
+        return "timeout" if isinstance(exception, httpx.TimeoutException) else "connect_error"
+    if status_code is None:
+        return "transient_http"
+    return _classify_http_failure(status_code, raw_body)
+
+
+def _is_recovery_success_status(status_code: int) -> bool:
+    return 200 <= status_code < 400
 
 
 async def _handle_proxy(
@@ -348,11 +412,16 @@ async def _handle_proxy(
                                 capture_bodies=audit_capture_bodies,
                             )
                         if recovery_active:
+                            failure_kind = _classify_failover_failure(
+                                status_code=upstream_resp.status_code,
+                                raw_body=body,
+                            )
                             mark_connection_failed(
                                 profile_id,
                                 ep.id,
                                 model_config.failover_recovery_cooldown_seconds,
                                 time.monotonic(),
+                                failure_kind,
                             )
                         continue
 
@@ -397,7 +466,9 @@ async def _handle_proxy(
                             capture_bodies=audit_capture_bodies,
                         )
 
-                    if recovery_active:
+                    if recovery_active and _is_recovery_success_status(
+                        upstream_resp.status_code
+                    ):
                         mark_connection_recovered(profile_id, ep.id)
                     return Response(
                         content=body,
@@ -406,7 +477,9 @@ async def _handle_proxy(
                     )
 
                 # Success case - mark endpoint as recovered
-                if recovery_active:
+                if recovery_active and _is_recovery_success_status(
+                    upstream_resp.status_code
+                ):
                     mark_connection_recovered(profile_id, ep.id)
                 _log_model_id = model_id
                 _log_provider_type = provider_type
@@ -610,11 +683,16 @@ async def _handle_proxy(
                             capture_bodies=audit_capture_bodies,
                         )
                     if recovery_active:
+                        failure_kind = _classify_failover_failure(
+                            status_code=response.status_code,
+                            raw_body=response.content,
+                        )
                         mark_connection_failed(
                             profile_id,
                             ep.id,
                             model_config.failover_recovery_cooldown_seconds,
                             time.monotonic(),
+                            failure_kind,
                         )
                     continue
 
@@ -665,8 +743,7 @@ async def _handle_proxy(
                         capture_bodies=audit_capture_bodies,
                     )
 
-                # Success or non-failover error - mark as recovered if in failover mode
-                if recovery_active:
+                if recovery_active and _is_recovery_success_status(response.status_code):
                     mark_connection_recovered(profile_id, ep.id)
                 return Response(
                     content=response.content,
@@ -715,11 +792,13 @@ async def _handle_proxy(
                     capture_bodies=audit_capture_bodies,
                 )
             if recovery_active:
+                failure_kind = _classify_failover_failure(exception=e)
                 mark_connection_failed(
                     profile_id,
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
+                    failure_kind,
                 )
             continue
         except httpx.TimeoutException as e:
@@ -763,11 +842,13 @@ async def _handle_proxy(
                     capture_bodies=audit_capture_bodies,
                 )
             if recovery_active:
+                failure_kind = _classify_failover_failure(exception=e)
                 mark_connection_failed(
                     profile_id,
                     ep.id,
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
+                    failure_kind,
                 )
             continue
 

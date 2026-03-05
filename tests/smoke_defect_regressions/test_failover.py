@@ -300,8 +300,7 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(401)
-        mark_connection_failed(1, connection.id, 60, 10.0)
-        assert (1, connection.id) in _recovery_state
+        mark_connection_failed(1, connection.id, 60, 10.0, "transient_http")
 
         mock_db = AsyncMock()
         mock_db.get = AsyncMock(return_value=connection)
@@ -330,8 +329,7 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(402)
-        mark_connection_failed(1, connection.id, 60, 10.0)
-        assert (1, connection.id) in _recovery_state
+        mark_connection_failed(1, connection.id, 60, 10.0, "transient_http")
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=connection)))

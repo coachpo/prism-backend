@@ -440,7 +440,9 @@ async def update_connection(
         connection_id=connection_id,
     )
     previous_is_active = connection.is_active
-
+    previous_endpoint_id = connection.endpoint_id
+    previous_auth_type = connection.auth_type
+    previous_custom_headers = connection.custom_headers
     update_data = body.model_dump(exclude_unset=True)
 
     inline_endpoint_payload = update_data.pop("endpoint_create", None)
@@ -481,12 +483,17 @@ async def update_connection(
     for key, value in update_data.items():
         setattr(connection, key, value)
 
-    is_active_changed = (
-        "is_active" in update_data and update_data["is_active"] != previous_is_active
-    )
-    if is_active_changed:
+    clear_recovery_state = False
+    if "is_active" in update_data and update_data["is_active"] != previous_is_active:
+        clear_recovery_state = True
+    if "endpoint_id" in update_data and update_data["endpoint_id"] != previous_endpoint_id:
+        clear_recovery_state = True
+    if "auth_type" in update_data and update_data["auth_type"] != previous_auth_type:
+        clear_recovery_state = True
+    if "custom_headers" in update_data and update_data["custom_headers"] != previous_custom_headers:
+        clear_recovery_state = True
+    if clear_recovery_state:
         mark_connection_recovered(profile_id, connection.id)
-
     connection.updated_at = utc_now()
     await db.flush()
 
@@ -626,6 +633,9 @@ async def health_check_connection(
     connection.health_status = health_status
     connection.health_detail = detail
     connection.last_health_check = checked_at
+    if health_status == "healthy":
+        mark_connection_recovered(profile_id, connection.id)
+
     await db.flush()
 
     return HealthCheckResponse(

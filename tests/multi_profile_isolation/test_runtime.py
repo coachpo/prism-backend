@@ -141,22 +141,30 @@ class TestFailoverRecoveryStateIsolation:
         # Profile 1, connection 10
         key1 = (1, 10)
         _recovery_state[key1] = {
-            "failed_at": datetime.now(timezone.utc),
-            "cooldown_seconds": 60,
+            "consecutive_failures": 2,
+            "blocked_until_mono": 120.0,
+            "last_cooldown_seconds": 60.0,
+            "last_failure_kind": "transient_http",
+            "probe_eligible_logged": False,
         }
 
         # Profile 2, connection 10 (same connection ID, different profile)
         key2 = (2, 10)
         _recovery_state[key2] = {
-            "failed_at": datetime.now(timezone.utc),
-            "cooldown_seconds": 120,
+            "consecutive_failures": 4,
+            "blocked_until_mono": 240.0,
+            "last_cooldown_seconds": 120.0,
+            "last_failure_kind": "timeout",
+            "probe_eligible_logged": True,
         }
 
         # Both can coexist without collision
         assert key1 in _recovery_state
         assert key2 in _recovery_state
         assert (
-            _recovery_state[key1]["cooldown_seconds"]
-            != _recovery_state[key2]["cooldown_seconds"]
+            _recovery_state[key1]["last_cooldown_seconds"]
+            != _recovery_state[key2]["last_cooldown_seconds"]
         )
+        assert _recovery_state[key1]["last_failure_kind"] == "transient_http"
+        assert _recovery_state[key2]["last_failure_kind"] == "timeout"
 

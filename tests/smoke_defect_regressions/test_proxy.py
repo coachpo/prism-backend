@@ -556,6 +556,207 @@ class TestDEF060_ProxyProviderPathValidation:
         assert "incompatible with provider 'anthropic'" in exc_info.value.detail
         attempt_plan_mock.assert_not_called()
 
+class TestDEF061_FailoverFailureClassification:
+    def test_classify_http_failure_marks_403_auth_like_when_body_matches_auth_patterns(self):
+        from app.routers.proxy import _classify_http_failure
+
+        raw_body = json.dumps(
+            {"error": {"message": "Invalid API key provided", "type": "auth_error"}}
+        ).encode("utf-8")
+
+        assert _classify_http_failure(403, raw_body) == "auth_like"
+
+    def test_classify_http_failure_marks_403_auth_like_for_spaced_api_key_message(self):
+        from app.routers.proxy import _classify_http_failure
+
+        raw_body = json.dumps(
+            {"error": {"message": "invalid API key for this endpoint"}}
+        ).encode("utf-8")
+
+        assert _classify_http_failure(403, raw_body) == "auth_like"
+
+    def test_classify_http_failure_marks_403_transient_without_auth_signal(self):
+        from app.routers.proxy import _classify_http_failure
+
+        raw_body = json.dumps({"error": {"message": "capacity issue"}}).encode("utf-8")
+
+        assert _classify_http_failure(403, raw_body) == "transient_http"
+
+    def test_classify_http_failure_non_403_is_transient_http(self):
+        from app.routers.proxy import _classify_http_failure
+
+        assert _classify_http_failure(429, None) == "transient_http"
+
+    def test_classify_failover_failure_for_timeout_exception(self):
+        import httpx
+        from app.routers.proxy import _classify_failover_failure
+
+        failure_kind = _classify_failover_failure(exception=httpx.TimeoutException("timeout"))
+
+        assert failure_kind == "timeout"
+
+    def test_classify_failover_failure_for_connect_exception(self):
+        import httpx
+        from app.routers.proxy import _classify_failover_failure
+
+        failure_kind = _classify_failover_failure(
+            exception=httpx.ConnectError("connect fail")
+        )
+
+        assert failure_kind == "connect_error"
+
+    def test_classify_failover_failure_uses_http_classifier(self):
+        from app.routers.proxy import _classify_failover_failure
+
+        raw_body = json.dumps({"error": {"message": "forbidden: bad token"}}).encode(
+            "utf-8"
+        )
+
+        failure_kind = _classify_failover_failure(
+            status_code=403,
+            raw_body=raw_body,
+        )
+
+        assert failure_kind == "auth_like"
+
+    def test_recovery_success_status_classifies_2xx_and_3xx_as_success(self):
+        from app.routers.proxy import _is_recovery_success_status
+
+        assert _is_recovery_success_status(200) is True
+        assert _is_recovery_success_status(302) is True
+        assert _is_recovery_success_status(399) is True
+        assert _is_recovery_success_status(400) is False
+        assert _is_recovery_success_status(503) is False
+
+
+class TestDEF062_NonFailover4xxRecoveryState:
+    @pytest.mark.asyncio
+    async def test_non_failover_4xx_preserves_existing_recovery_state(self):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+        import httpx
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer import _recovery_state
+
+        class DummyHttpClient:
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                return httpx.Response(
+                    status_code=404,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=json.dumps(
+                        {"error": {"message": "not found", "type": "invalid_request"}}
+                    ).encode("utf-8"),
+                )
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        endpoint_rel = MagicMock()
+        endpoint_rel.base_url = "https://api.openai.com/v1"
+
+        connection = MagicMock()
+        connection.id = 1001
+        connection.endpoint_id = 501
+        connection.endpoint_rel = endpoint_rel
+        connection.pricing_template_rel = None
+        connection.name = "primary"
+        connection.custom_headers = None
+        connection.auth_type = None
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.lb_strategy = "failover"
+        model_config.failover_recovery_enabled = True
+        model_config.failover_recovery_cooldown_seconds = 60
+
+        state_key = (1, connection.id)
+        _recovery_state[state_key] = {
+            "consecutive_failures": 3,
+            "blocked_until_mono": 1234.0,
+            "last_cooldown_seconds": 120.0,
+            "last_failure_kind": "transient_http",
+            "probe_eligible_logged": False,
+        }
+
+        try:
+            mock_rules_result = MagicMock()
+            mock_rules_result.scalars.return_value.all.return_value = []
+            mock_db = AsyncMock()
+            mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy.build_attempt_plan",
+                    return_value=[connection],
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
+                patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/chat/completions",
+                    profile_id=1,
+                )
+
+            assert response.status_code == 404
+            assert state_key in _recovery_state
+            assert _recovery_state[state_key]["consecutive_failures"] == 3
+            assert _recovery_state[state_key]["blocked_until_mono"] == 1234.0
+        finally:
+            _recovery_state.pop(state_key, None)
 class TestDEF011_RuntimeEndpointActivityCheck:
     @pytest.mark.asyncio
     async def test_endpoint_is_active_now_returns_true_for_active_row(self):
@@ -1323,4 +1524,3 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             assert exc_info.value.status_code == 400
             assert exc_info.value.detail == "Proxy model cannot redirect to itself"
-

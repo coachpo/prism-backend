@@ -27,12 +27,12 @@ backend/
 │   ├── routers/
 │   │   ├── providers.py             # Provider CRUD
 │   │   ├── models.py                # Model CRUD
-│   │   ├── endpoints.py             # Global credential CRUD
+│   │   ├── endpoints.py             # Profile-scoped credential CRUD
 │   │   ├── connections.py           # Model-scoped routing + health checks
 │   │   ├── stats.py                 # Request logs + aggregated statistics
 │   │   ├── audit.py                 # Audit log queries
 │   │   ├── config.py                # Config export/import
-│   │   └── proxy.py                 # Catch-all /v1/* proxy router
+│   │   └── proxy.py                 # Catch-all /v1/* and /v1beta/* proxy router
 │   └── services/
 │       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
@@ -119,50 +119,42 @@ docker compose up -d postgres
 
 ### Management API
 
-- `GET /providers` - List all providers
-- `POST /providers` - Create provider
-- `PUT /providers/{id}` - Update provider
-- `DELETE /providers/{id}` - Delete provider
+- `GET /api/providers` - List all providers
+- `POST /api/providers` - Create provider
+- `PUT /api/providers/{id}` - Update provider
+- `DELETE /api/providers/{id}` - Delete provider
 
-- `GET /models` - List all models
-- `POST /models` - Create model
-- `PUT /models/{id}` - Update model
-- `DELETE /models/{id}` - Delete model
+- `GET /api/models` - List all models
+- `POST /api/models` - Create model
+- `PUT /api/models/{id}` - Update model
+- `DELETE /api/models/{id}` - Delete model
 
-- `GET /endpoints` - List all global endpoints
-- `POST /endpoints` - Create global endpoint
-- `PUT /endpoints/{id}` - Update global endpoint
-- `DELETE /endpoints/{id}` - Delete global endpoint
+- `GET /api/endpoints` - List profile-scoped endpoints
+- `POST /api/endpoints` - Create profile-scoped endpoint
+- `PUT /api/endpoints/{id}` - Update profile-scoped endpoint
+- `DELETE /api/endpoints/{id}` - Delete profile-scoped endpoint
 
-- `GET /models/{id}/connections` - List connections for model
-- `POST /models/{id}/connections` - Create connection for model
-- `PUT /connections/{id}` - Update connection
-- `DELETE /connections/{id}` - Delete connection
-- `POST /connections/{id}/health` - Manual health check
+- `GET /api/models/{id}/connections` - List connections for model
+- `POST /api/models/{id}/connections` - Create connection for model
+- `PUT /api/connections/{id}` - Update connection
+- `DELETE /api/connections/{id}` - Delete connection
+- `POST /api/connections/{id}/health-check` - Manual health check
 
-- `GET /stats/requests` - Request logs with filters
-- `GET /stats/summary` - Aggregated statistics
-- `GET /stats/connection-success-rates` - Per-connection success rates
-- `POST /endpoints` - Create endpoint
-- `PUT /endpoints/{id}` - Update endpoint
-- `DELETE /endpoints/{id}` - Delete endpoint
-- `POST /endpoints/{id}/health` - Manual health check
+- `GET /api/stats/requests` - Request logs with filters
+- `GET /api/stats/summary` - Aggregated statistics
+- `GET /api/stats/connection-success-rates` - Per-connection success rates
 
-- `GET /stats/requests` - Request logs with filters
-- `GET /stats/summary` - Aggregated statistics
-- `GET /stats/endpoint-success-rates` - Per-endpoint success rates
+- `GET /api/audit/logs` - Audit logs with filters
+- `GET /api/audit/logs/{id}` - Audit log detail
 
-- `GET /audit/logs` - Audit logs with filters
-- `GET /audit/logs/{id}` - Audit log detail
-
-- `GET /config/export` - Export full configuration
-- `POST /config/import` - Import configuration
+- `GET /api/config/export` - Export full configuration
+- `POST /api/config/import` - Import configuration
 
 ### Proxy API
 
-- `POST /v1/*` - Catch-all proxy endpoint (OpenAI-compatible)
+- `POST /v1/*` and `POST /v1beta/*` - Catch-all proxy endpoints (OpenAI-compatible request/response shapes)
 
-All `/v1/*` requests are forwarded to the appropriate upstream provider based on the `model` field in the request body.
+Both `/v1/*` and `/v1beta/*` requests are forwarded to the appropriate upstream provider based on the `model` field in the request body (or Gemini model path).
 
 ---
 
@@ -176,7 +168,7 @@ All `/v1/*` requests are forwarded to the appropriate upstream provider based on
 ### Load Balancing Strategies
 
 - **single**: Always use the first active connection (priority 0)
-- **failover**: Try connections in priority order until one succeeds
+- **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and auth-like cooldown handling)
 
 ### Success Rate Tracking
 
