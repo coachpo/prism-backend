@@ -1,6 +1,6 @@
+# ruff: noqa: F401
 import json
 import logging
-import time
 from typing import Annotated
 
 import httpx
@@ -11,7 +11,13 @@ from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import Connection, Endpoint, HeaderBlocklistRule, ModelConfig, PricingTemplate
+from app.models.models import (
+    Connection,
+    Endpoint,
+    HeaderBlocklistRule,
+    ModelConfig,
+    PricingTemplate,
+)
 from app.schemas.schemas import (
     ConnectionCreate,
     ConnectionOwnerResponse,
@@ -19,14 +25,19 @@ from app.schemas.schemas import (
     ConnectionUpdate,
     ConnectionPricingTemplateUpdate,
     HealthCheckResponse,
- )
+)
 from app.services.loadbalancer import mark_connection_recovered
 from app.services.proxy_service import (
     build_upstream_headers,
     build_upstream_url,
     normalize_base_url,
     validate_base_url,
- )
+)
+from app.routers.connections_domains.health_helpers import (
+    _execute_health_check_request,
+    _extract_upstream_error_message,
+    _map_health_check_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,69 +96,6 @@ def _build_openai_responses_basic_health_check_request(
     }
 
 
-def _extract_upstream_error_message(response: httpx.Response) -> str:
-    if response.status_code < 400:
-        return ""
-    try:
-        response_json = response.json()
-    except Exception:
-        return ""
-    if not isinstance(response_json, dict):
-        return ""
-
-    error = response_json.get("error", {})
-    if isinstance(error, dict):
-        message = error.get("message", "")
-        return message if isinstance(message, str) else str(message)
-    if isinstance(error, str):
-        return error
-    return ""
-
-
-def _map_health_check_response(response: httpx.Response) -> tuple[str, str]:
-    upstream_msg = _extract_upstream_error_message(response)
-    if 200 <= response.status_code < 300:
-        return "healthy", "Connection successful"
-    if response.status_code == 429:
-        return "healthy", "Rate limited (connection works)"
-    if response.status_code in (401, 403):
-        detail = f"Authentication failed (HTTP {response.status_code})"
-        if upstream_msg:
-            detail += f": {upstream_msg}"
-        return "unhealthy", detail
-
-    detail = f"HTTP {response.status_code}"
-    if upstream_msg:
-        detail += f": {upstream_msg}"
-    return "unhealthy", detail
-
-
-async def _execute_health_check_request(
-    client: httpx.AsyncClient,
-    *,
-    upstream_url: str,
-    headers: dict[str, str],
-    body: dict[str, object],
-) -> tuple[str, str, int]:
-    try:
-        start = time.monotonic()
-        response = await client.post(
-            upstream_url,
-            headers=headers,
-            json=body,
-            timeout=15.0,
-        )
-        response_time_ms = int((time.monotonic() - start) * 1000)
-        health_status, detail = _map_health_check_response(response)
-        return health_status, detail, response_time_ms
-    except httpx.ConnectError as exc:
-        return "unhealthy", f"Connection failed: {exc}", 0
-    except httpx.TimeoutException:
-        return "unhealthy", "Connection timed out", 0
-    except Exception as exc:
-        return "unhealthy", f"Error: {exc}", 0
-
-
 async def _probe_connection_health(
     *,
     client: httpx.AsyncClient,
@@ -174,13 +122,15 @@ async def _probe_connection_health(
         responses_basic_url = build_upstream_url(
             connection, responses_basic_path, endpoint=endpoint
         )
-        responses_basic_status, responses_basic_detail, responses_basic_response_time_ms = (
-            await _execute_health_check_request(
-                client,
-                upstream_url=responses_basic_url,
-                headers=headers,
-                body=responses_basic_body,
-            )
+        (
+            responses_basic_status,
+            responses_basic_detail,
+            responses_basic_response_time_ms,
+        ) = await _execute_health_check_request(
+            client,
+            upstream_url=responses_basic_url,
+            headers=headers,
+            body=responses_basic_body,
         )
         if responses_basic_status == "healthy":
             return (
@@ -194,13 +144,15 @@ async def _probe_connection_health(
             model_id
         )
         fallback_url = build_upstream_url(connection, fallback_path, endpoint=endpoint)
-        fallback_status, fallback_detail, fallback_response_time_ms = (
-            await _execute_health_check_request(
-                client,
-                upstream_url=fallback_url,
-                headers=headers,
-                body=fallback_body,
-            )
+        (
+            fallback_status,
+            fallback_detail,
+            fallback_response_time_ms,
+        ) = await _execute_health_check_request(
+            client,
+            upstream_url=fallback_url,
+            headers=headers,
+            body=fallback_body,
         )
         if fallback_status == "healthy":
             return (
@@ -231,7 +183,7 @@ async def _ensure_unique_endpoint_name(
     profile_id: int,
     endpoint_name: str,
     exclude_id: int | None = None,
- ) -> None:
+) -> None:
     query = select(Endpoint).where(
         Endpoint.profile_id == profile_id,
         Endpoint.name == endpoint_name,
@@ -253,7 +205,7 @@ async def _create_endpoint_from_inline(
     endpoint_name: str,
     base_url: str,
     api_key: str,
- ) -> Endpoint:
+) -> Endpoint:
     clean_name = endpoint_name.strip()
     if not clean_name:
         raise HTTPException(
@@ -281,13 +233,14 @@ async def _create_endpoint_from_inline(
     await db.flush()
     return endpoint
 
+
 async def _validate_pricing_template_id(
     db: AsyncSession,
     *,
     profile_id: int,
     pricing_template_id: int | None,
     allow_null: bool = True,
- ) -> int | None:
+) -> int | None:
     if pricing_template_id is None:
         if allow_null:
             return None
@@ -310,10 +263,13 @@ async def _load_connection_or_404(
     *,
     profile_id: int,
     connection_id: int,
- ) -> Connection:
+) -> Connection:
     result = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.endpoint_rel), selectinload(Connection.pricing_template_rel))
+        .options(
+            selectinload(Connection.endpoint_rel),
+            selectinload(Connection.pricing_template_rel),
+        )
         .where(
             Connection.id == connection_id,
             Connection.profile_id == profile_id,
@@ -327,7 +283,7 @@ async def _load_connection_or_404(
 
 @router.get(
     "/api/models/{model_config_id}/connections", response_model=list[ConnectionResponse]
- )
+)
 async def list_connections(
     model_config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -345,7 +301,10 @@ async def list_connections(
 
     result = await db.execute(
         select(Connection)
-        .options(selectinload(Connection.endpoint_rel), selectinload(Connection.pricing_template_rel))
+        .options(
+            selectinload(Connection.endpoint_rel),
+            selectinload(Connection.pricing_template_rel),
+        )
         .where(
             Connection.model_config_id == model_config_id,
             Connection.profile_id == profile_id,
@@ -354,11 +313,12 @@ async def list_connections(
     )
     return result.scalars().all()
 
+
 @router.post(
     "/api/models/{model_config_id}/connections",
     response_model=ConnectionResponse,
     status_code=201,
- )
+)
 async def create_connection(
     model_config_id: int,
     body: ConnectionCreate,
@@ -479,18 +439,23 @@ async def update_connection(
             json.dumps(custom_headers) if custom_headers else None
         )
 
-
     for key, value in update_data.items():
         setattr(connection, key, value)
 
     clear_recovery_state = False
     if "is_active" in update_data and update_data["is_active"] != previous_is_active:
         clear_recovery_state = True
-    if "endpoint_id" in update_data and update_data["endpoint_id"] != previous_endpoint_id:
+    if (
+        "endpoint_id" in update_data
+        and update_data["endpoint_id"] != previous_endpoint_id
+    ):
         clear_recovery_state = True
     if "auth_type" in update_data and update_data["auth_type"] != previous_auth_type:
         clear_recovery_state = True
-    if "custom_headers" in update_data and update_data["custom_headers"] != previous_custom_headers:
+    if (
+        "custom_headers" in update_data
+        and update_data["custom_headers"] != previous_custom_headers
+    ):
         clear_recovery_state = True
     if clear_recovery_state:
         mark_connection_recovered(profile_id, connection.id)
@@ -507,13 +472,13 @@ async def update_connection(
 @router.put(
     "/api/connections/{connection_id}/pricing-template",
     response_model=ConnectionResponse,
- )
+)
 async def set_connection_pricing_template(
     connection_id: int,
     body: ConnectionPricingTemplateUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     connection = await _load_connection_or_404(
         db,
         profile_id=profile_id,
@@ -532,6 +497,7 @@ async def set_connection_pricing_template(
         profile_id=profile_id,
         connection_id=connection.id,
     )
+
 
 @router.delete("/api/connections/{connection_id}")
 async def delete_connection(
@@ -552,10 +518,12 @@ async def delete_connection(
     await db.delete(connection)
     await db.flush()
     return {"deleted": True}
+
+
 @router.post(
     "/api/connections/{connection_id}/health-check",
     response_model=HealthCheckResponse,
- )
+)
 async def health_check_connection(
     connection_id: int,
     request: Request,
@@ -646,10 +614,11 @@ async def health_check_connection(
         response_time_ms=response_time_ms,
     )
 
+
 @router.get(
     "/api/connections/{connection_id}/owner",
     response_model=ConnectionOwnerResponse,
- )
+)
 async def get_connection_owner(
     connection_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
