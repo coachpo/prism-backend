@@ -1,3 +1,3 @@
 # ruff: noqa: F403
-from tests.smoke_defect_regressions.test_config_cases.part1 import *
-from tests.smoke_defect_regressions.test_config_cases.part2 import *
+from tests.smoke_defect_regressions.test_config_cases.user_settings_seed_and_config_schema_validation_tests import *
+from tests.smoke_defect_regressions.test_config_cases.config_roundtrip_numeric_ids_and_system_rule_timestamp_tests import *

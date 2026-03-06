@@ -37,7 +37,7 @@ from app.services.costing_service import (
     compute_cost_fields,
 )
 from app.services.audit_service import record_audit_log
-from app.routers.proxy_domains.helpers import (
+from app.routers.proxy_domains.proxy_request_helpers import (
     _classify_failover_failure,
     _classify_http_failure,
     _endpoint_is_active_now,

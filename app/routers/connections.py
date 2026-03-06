@@ -33,7 +33,7 @@ from app.services.proxy_service import (
     normalize_base_url,
     validate_base_url,
 )
-from app.routers.connections_domains.health_helpers import (
+from app.routers.connections_domains.health_check_request_helpers import (
     _execute_health_check_request,
     _extract_upstream_error_message,
     _map_health_check_response,
