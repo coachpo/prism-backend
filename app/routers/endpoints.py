@@ -7,7 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import Connection, Endpoint
+from app.models.models import Connection, Endpoint, Profile
 from app.schemas.schemas import (
     ConnectionDropdownResponse,
     EndpointCreate,
@@ -39,6 +39,12 @@ async def _ensure_unique_endpoint_name(
             status_code=409,
             detail=f"Endpoint name '{endpoint_name}' already exists",
         )
+
+
+async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
+    await db.execute(
+        select(Profile.id).where(Profile.id == profile_id).with_for_update()
+    )
 
 
 async def _list_ordered_endpoints(
@@ -94,6 +100,7 @@ async def create_endpoint(
     if url_warnings:
         raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
+    await _lock_profile_row(db, profile_id=profile_id)
     await _ensure_unique_endpoint_name(
         db, profile_id=profile_id, endpoint_name=endpoint_name
     )
@@ -120,6 +127,7 @@ async def move_endpoint_position(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
+    await _lock_profile_row(db, profile_id=profile_id)
     endpoints = await _list_ordered_endpoints(db, profile_id=profile_id)
     current_index = next(
         (
@@ -236,6 +244,7 @@ async def delete_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
+    await _lock_profile_row(db, profile_id=profile_id)
     endpoint_result = await db.execute(
         select(Endpoint).where(
             Endpoint.id == endpoint_id,

@@ -16,6 +16,7 @@ from app.models.models import (
     Endpoint,
     HeaderBlocklistRule,
     ModelConfig,
+    Profile,
     PricingTemplate,
 )
 from app.schemas.schemas import (
@@ -207,6 +208,12 @@ async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> i
     return int(max_position) + 1
 
 
+async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
+    await db.execute(
+        select(Profile.id).where(Profile.id == profile_id).with_for_update()
+    )
+
+
 
 async def _create_endpoint_from_inline(
     db: AsyncSession,
@@ -227,6 +234,7 @@ async def _create_endpoint_from_inline(
     if url_warnings:
         raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
+    await _lock_profile_row(db, profile_id=profile_id)
     await _ensure_unique_endpoint_name(
         db,
         profile_id=profile_id,

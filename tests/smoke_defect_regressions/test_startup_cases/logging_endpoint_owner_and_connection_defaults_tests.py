@@ -257,6 +257,7 @@ class TestDEF009_ConnectionDefaultsPersist:
         mock_db.get = AsyncMock(return_value=model)
         model_result = MagicMock()
         model_result.scalar_one_or_none.return_value = model
+        lock_result = MagicMock()
         no_conflict_result = MagicMock()
         no_conflict_result.scalar_one_or_none.return_value = None
         next_position_result = MagicMock()
@@ -268,6 +269,7 @@ class TestDEF009_ConnectionDefaultsPersist:
         mock_db.execute = AsyncMock(
             side_effect=[
                 model_result,
+                lock_result,
                 no_conflict_result,
                 next_position_result,
                 template_result,

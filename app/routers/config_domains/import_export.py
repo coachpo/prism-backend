@@ -12,13 +12,14 @@ from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import (
     Connection,
-    Provider,
-    ModelConfig,
     Endpoint,
-    HeaderBlocklistRule,
-    UserSetting,
     EndpointFxRateSetting,
+    HeaderBlocklistRule,
+    ModelConfig,
     PricingTemplate,
+    Profile,
+    Provider,
+    UserSetting,
 )
 from app.schemas.schemas import (
     ConfigExportResponse,
@@ -42,6 +43,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
+
+
+async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
+    await db.execute(
+        select(Profile.id).where(Profile.id == profile_id).with_for_update()
+    )
 
 
 def _normalize_custom_headers_for_export(
@@ -474,6 +481,7 @@ async def import_config(
     if data.version != 2:
         raise HTTPException(status_code=400, detail="Config import requires version=2")
 
+    await _lock_profile_row(db, profile_id=profile_id)
     await db.execute(
         delete(EndpointFxRateSetting).where(
             EndpointFxRateSetting.profile_id == profile_id
