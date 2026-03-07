@@ -13,11 +13,13 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 
+
 class TestDEF004_FrontendDeleteErrorHandling:
     """DEF-004 (P2): frontend must show error toast on failed model delete."""
 
     def test_api_client_throws_error_with_detail_message(self):
         pass
+
 
 class TestDEF058_StatsTimezoneFilterNormalization:
     """DEF-058 (P1): stats endpoints must accept ISO-8601 `Z` datetime filters."""
@@ -36,7 +38,9 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         aware_from = self._aware_utc_datetime()
         aware_to = self._aware_utc_datetime()
 
-        with patch("app.routers.stats.get_request_logs", new_callable=AsyncMock) as mock_get_request_logs:
+        with patch(
+            "app.routers.stats.get_request_logs", new_callable=AsyncMock
+        ) as mock_get_request_logs:
             mock_get_request_logs.return_value = ([], 0)
             response = await list_request_logs(
                 db=mock_db,
@@ -62,7 +66,9 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         aware_from = self._aware_utc_datetime()
         aware_to = self._aware_utc_datetime()
 
-        with patch("app.routers.stats.get_stats_summary", new_callable=AsyncMock) as mock_get_stats_summary:
+        with patch(
+            "app.routers.stats.get_stats_summary", new_callable=AsyncMock
+        ) as mock_get_stats_summary:
             mock_get_stats_summary.return_value = {
                 "total_requests": 0,
                 "success_count": 0,
@@ -97,7 +103,9 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         aware_from = self._aware_utc_datetime()
         aware_to = self._aware_utc_datetime()
 
-        with patch("app.routers.stats.get_connection_success_rates", new_callable=AsyncMock) as mock_get_success_rates:
+        with patch(
+            "app.routers.stats.get_connection_success_rates", new_callable=AsyncMock
+        ) as mock_get_success_rates:
             mock_get_success_rates.return_value = []
             response = await connection_success_rates(
                 db=mock_db,
@@ -121,7 +129,9 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         aware_from = self._aware_utc_datetime()
         aware_to = self._aware_utc_datetime()
 
-        with patch("app.routers.stats.get_spending_report", new_callable=AsyncMock) as mock_get_spending_report:
+        with patch(
+            "app.routers.stats.get_spending_report", new_callable=AsyncMock
+        ) as mock_get_spending_report:
             mock_get_spending_report.return_value = {
                 "summary": {
                     "total_cost_micros": 0,
@@ -158,6 +168,7 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["from_time"].tzinfo is not None
         assert call_kwargs["to_time"].tzinfo is not None
 
+
 class TestBatchDeleteValidation:
     """Validate flexible batch deletion for stats and audit endpoints."""
 
@@ -173,7 +184,9 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_request_logs(db=mock_db, profile_id=1, older_than_days=45, delete_all=False)
+        response = await delete_request_logs(
+            db=mock_db, profile_id=1, older_than_days=45, delete_all=False
+        )
         assert response.deleted_count == 5
         mock_db.execute.assert_awaited_once()
 
@@ -189,7 +202,9 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_request_logs(db=mock_db, profile_id=1, older_than_days=None, delete_all=True)
+        response = await delete_request_logs(
+            db=mock_db, profile_id=1, older_than_days=None, delete_all=True
+        )
         assert response.deleted_count == 100
 
     @pytest.mark.asyncio
@@ -199,7 +214,9 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_request_logs(db=mock_db, profile_id=1, older_than_days=7, delete_all=True)
+            await delete_request_logs(
+                db=mock_db, profile_id=1, older_than_days=7, delete_all=True
+            )
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -209,7 +226,9 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_request_logs(db=mock_db, profile_id=1, older_than_days=None, delete_all=False)
+            await delete_request_logs(
+                db=mock_db, profile_id=1, older_than_days=None, delete_all=False
+            )
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -224,7 +243,9 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=45, delete_all=False)
+        response = await delete_audit_logs(
+            db=mock_db, profile_id=1, before=None, older_than_days=45, delete_all=False
+        )
         assert response.deleted_count == 10
 
     @pytest.mark.asyncio
@@ -239,7 +260,9 @@ class TestBatchDeleteValidation:
         mock_db.execute = AsyncMock(return_value=mock_result)
         mock_db.flush = AsyncMock()
 
-        response = await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=True)
+        response = await delete_audit_logs(
+            db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=True
+        )
         assert response.deleted_count == 50
 
     @pytest.mark.asyncio
@@ -256,7 +279,13 @@ class TestBatchDeleteValidation:
         mock_db.flush = AsyncMock()
 
         cutoff = datetime(2025, 1, 1)
-        response = await delete_audit_logs(db=mock_db, profile_id=1, before=cutoff, older_than_days=None, delete_all=False)
+        response = await delete_audit_logs(
+            db=mock_db,
+            profile_id=1,
+            before=cutoff,
+            older_than_days=None,
+            delete_all=False,
+        )
         assert response.deleted_count == 3
 
     @pytest.mark.asyncio
@@ -269,17 +298,35 @@ class TestBatchDeleteValidation:
 
         # before + older_than_days
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(db=mock_db, profile_id=1, before=datetime(2025, 1, 1), older_than_days=7, delete_all=False)
+            await delete_audit_logs(
+                db=mock_db,
+                profile_id=1,
+                before=datetime(2025, 1, 1),
+                older_than_days=7,
+                delete_all=False,
+            )
         assert exc_info.value.status_code == 400
 
         # older_than_days + delete_all
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=7, delete_all=True)
+            await delete_audit_logs(
+                db=mock_db,
+                profile_id=1,
+                before=None,
+                older_than_days=7,
+                delete_all=True,
+            )
         assert exc_info.value.status_code == 400
 
         # all three
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(db=mock_db, profile_id=1, before=datetime(2025, 1, 1), older_than_days=7, delete_all=True)
+            await delete_audit_logs(
+                db=mock_db,
+                profile_id=1,
+                before=datetime(2025, 1, 1),
+                older_than_days=7,
+                delete_all=True,
+            )
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
@@ -289,8 +336,15 @@ class TestBatchDeleteValidation:
 
         mock_db = AsyncMock()
         with pytest.raises(HTTPException) as exc_info:
-            await delete_audit_logs(db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=False)
+            await delete_audit_logs(
+                db=mock_db,
+                profile_id=1,
+                before=None,
+                older_than_days=None,
+                delete_all=False,
+            )
         assert exc_info.value.status_code == 400
+
 
 class TestDEF061_ConnectionResponseEndpointMapping:
     """DEF-061 (P1): ConnectionResponse should map endpoint_rel to endpoint."""
@@ -307,6 +361,7 @@ class TestDEF061_ConnectionResponseEndpointMapping:
             name="primary-endpoint",
             base_url="https://api.openai.com/v1",
             api_key="sk-test",
+            position=0,
             created_at=now,
             updated_at=now,
         )
@@ -335,4 +390,3 @@ class TestDEF061_ConnectionResponseEndpointMapping:
         assert response.endpoint is not None
         assert response.endpoint.id == 3
         assert response.endpoint.name == "primary-endpoint"
-

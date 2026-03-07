@@ -156,6 +156,7 @@ class TestFailoverRecoveryFieldValidation:
                             "name": "openai-main",
                             "base_url": "https://api.openai.com/v1",
                             "api_key": "sk-test",
+                            "position": 0,
                         }
                     ],
                     "pricing_templates": [],
@@ -193,6 +194,7 @@ class TestFailoverRecoveryFieldValidation:
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
+                        "position": 0,
                     }
                 ],
                 "pricing_templates": [],
@@ -248,6 +250,7 @@ class TestFailoverRecoveryFieldValidation:
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
+                    position=0,
                 )
             ],
             pricing_templates=[],

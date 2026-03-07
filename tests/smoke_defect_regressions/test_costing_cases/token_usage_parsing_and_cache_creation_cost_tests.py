@@ -32,6 +32,8 @@ class TestDEF008_CacheCreationPricing:
             name="pricing-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+            profile_id=1,
+            position=0,
         )
         endpoint.id = 1
         pricing_template = PricingTemplate(

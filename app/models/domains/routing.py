@@ -74,6 +74,7 @@ class Endpoint(Base):
     __tablename__ = "endpoints"
     __table_args__ = (
         UniqueConstraint("profile_id", "name", name="uq_endpoints_profile_name"),
+        Index("idx_endpoints_profile_position", "profile_id", "position"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -83,6 +84,7 @@ class Endpoint(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     api_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )

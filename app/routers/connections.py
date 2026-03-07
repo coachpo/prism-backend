@@ -5,7 +5,7 @@ from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -197,6 +197,16 @@ async def _ensure_unique_endpoint_name(
             detail=f"Endpoint name '{endpoint_name}' already exists",
         )
 
+async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
+    result = await db.execute(
+        select(func.max(Endpoint.position)).where(Endpoint.profile_id == profile_id)
+    )
+    max_position = result.scalar_one_or_none()
+    if max_position is None:
+        return 0
+    return int(max_position) + 1
+
+
 
 async def _create_endpoint_from_inline(
     db: AsyncSession,
@@ -228,6 +238,7 @@ async def _create_endpoint_from_inline(
         name=clean_name,
         base_url=normalized_url,
         api_key=api_key,
+        position=await _get_next_endpoint_position(db, profile_id=profile_id),
     )
     db.add(endpoint)
     await db.flush()

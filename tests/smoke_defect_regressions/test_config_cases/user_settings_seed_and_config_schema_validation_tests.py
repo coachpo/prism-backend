@@ -95,6 +95,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "name",
             "base_url",
             "api_key",
+            "position",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -198,6 +199,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
+                    position=0,
                 )
             ],
             pricing_templates=[],
@@ -254,6 +256,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
+                        "position": 0,
                     }
                 ],
                 "pricing_templates": [],

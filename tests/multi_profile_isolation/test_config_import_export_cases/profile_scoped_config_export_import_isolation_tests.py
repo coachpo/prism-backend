@@ -75,6 +75,7 @@ class TestConfigExportImportIsolation:
             name="openai-main",
             base_url="https://api.openai.com/v1",
             api_key="sk-test",
+            position=0,
         )
         model = SimpleNamespace(
             id=20,
@@ -203,12 +204,14 @@ class TestConfigExportImportIsolation:
                 name=old_target_endpoint_name,
                 base_url="https://api.openai.com/v1",
                 api_key="sk-target-old",
+                position=0,
             )
             other_endpoint = Endpoint(
                 profile_id=other_profile.id,
                 name=other_endpoint_name,
                 base_url="https://api.openai.com/v1",
                 api_key="sk-other",
+                position=0,
             )
             db.add_all([target_endpoint, other_endpoint])
             await db.flush()
@@ -323,6 +326,7 @@ class TestConfigExportImportIsolation:
                                 "name": new_connection_name,
                                 "priority": 0,
                                 "is_active": True,
+                                "position": 0,
                             }
                         ],
                     }

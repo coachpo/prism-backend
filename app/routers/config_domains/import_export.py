@@ -68,7 +68,7 @@ async def export_config(
             await db.execute(
                 select(Endpoint)
                 .where(Endpoint.profile_id == profile_id)
-                .order_by(Endpoint.id.asc())
+                .order_by(Endpoint.position.asc(), Endpoint.id.asc())
             )
         )
         .scalars()
@@ -125,6 +125,7 @@ async def export_config(
                 name=endpoint.name,
                 base_url=endpoint.base_url,
                 api_key=endpoint.api_key,
+                position=endpoint.position,
             )
         )
 
@@ -302,6 +303,12 @@ def _validate_import(data: ConfigImportRequest) -> None:
                 detail=f"Endpoint '{endpoint_name}' has invalid base_url: {'; '.join(url_warnings)}",
             )
 
+        endpoint_position = endpoint.position
+        if endpoint_position is not None and endpoint_position < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Endpoint '{endpoint_name}' has invalid position '{endpoint_position}'",
+            )
     pricing_template_ids_in_file: set[int] = set()
     pricing_template_names_in_file: set[str] = set()
     for template in data.pricing_templates:
@@ -515,13 +522,22 @@ async def import_config(
 
     endpoint_id_map: dict[int, int] = {}
     endpoints_count = 0
-    for endpoint_data in data.endpoints:
+    sorted_endpoints = sorted(
+        enumerate(data.endpoints),
+        key=lambda item: (
+            item[1].position if item[1].position is not None else item[0],
+            item[0],
+        ),
+    )
+
+    for normalized_position, (_, endpoint_data) in enumerate(sorted_endpoints):
         normalized_url = normalize_base_url(endpoint_data.base_url)
         endpoint = Endpoint(
             profile_id=profile_id,
             name=endpoint_data.name.strip(),
             base_url=normalized_url,
             api_key=endpoint_data.api_key,
+            position=normalized_position,
         )
         db.add(endpoint)
         await db.flush()

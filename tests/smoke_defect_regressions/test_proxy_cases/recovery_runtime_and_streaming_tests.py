@@ -249,12 +249,14 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     profile=profile,
                     base_url="https://primary.example.com/v1",
                     api_key="sk-primary",
+                    position=0,
                 )
                 secondary_endpoint = Endpoint(
                     name="secondary",
                     profile=profile,
                     base_url="https://secondary.example.com/v1",
                     api_key="sk-secondary",
+                    position=1,
                 )
                 primary = Connection(
                     model_config_rel=model,

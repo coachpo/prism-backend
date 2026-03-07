@@ -13,6 +13,7 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 
+
 class TestDEF007_EndpointIdentityInLogs:
     """DEF-007 (P1): log_request returns ID and stores endpoint_description; audit_service accepts endpoint metadata."""
 
@@ -155,6 +156,7 @@ class TestDEF007_EndpointIdentityInLogs:
         fields = set(RequestLogResponse.model_fields.keys())
         assert "endpoint_description" in fields
 
+
 class TestEndpointOwnerRoute:
     def test_owner_response_schema_has_required_fields(self):
         from app.schemas.schemas import ConnectionOwnerResponse
@@ -220,6 +222,7 @@ class TestEndpointOwnerRoute:
 
         assert exc_info.value.status_code == 404
 
+
 class TestDEF009_ConnectionDefaultsPersist:
     """DEF-009 (P1): connection schema defaults and creation path remain intact."""
 
@@ -256,12 +259,19 @@ class TestDEF009_ConnectionDefaultsPersist:
         model_result.scalar_one_or_none.return_value = model
         no_conflict_result = MagicMock()
         no_conflict_result.scalar_one_or_none.return_value = None
+        next_position_result = MagicMock()
+        next_position_result.scalar_one_or_none.return_value = None
         template = MagicMock()
         template.id = 11
         template_result = MagicMock()
         template_result.scalar_one_or_none.return_value = template
         mock_db.execute = AsyncMock(
-            side_effect=[model_result, no_conflict_result, template_result]
+            side_effect=[
+                model_result,
+                no_conflict_result,
+                next_position_result,
+                template_result,
+            ]
         )
         mock_db.flush = AsyncMock()
         mock_db.refresh = AsyncMock()
@@ -286,6 +296,7 @@ class TestDEF009_ConnectionDefaultsPersist:
 
         assert connection.pricing_template_id == 11
 
+
 class TestDEF020_FrontendBuildTypeCheck:
     """DEF-020: Frontend build confirms renamed snapshot policy field compiles."""
 
@@ -297,4 +308,3 @@ class TestDEF020_FrontendBuildTypeCheck:
         pricing_snapshot_missing_special_token_price_policy compiles.
         """
         pass
-

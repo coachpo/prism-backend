@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -11,11 +11,13 @@ from app.models.models import Connection, Endpoint
 from app.schemas.schemas import (
     ConnectionDropdownResponse,
     EndpointCreate,
+    EndpointPositionMoveRequest,
     EndpointResponse,
     EndpointUpdate,
 )
 from app.services.loadbalancer import mark_connection_recovered
 from app.services.proxy_service import normalize_base_url, validate_base_url
+
 router = APIRouter(tags=["endpoints"])
 
 
@@ -26,7 +28,9 @@ async def _ensure_unique_endpoint_name(
     endpoint_name: str,
     exclude_id: int | None = None,
 ) -> None:
-    query = select(Endpoint).where(Endpoint.profile_id == profile_id, Endpoint.name == endpoint_name)
+    query = select(Endpoint).where(
+        Endpoint.profile_id == profile_id, Endpoint.name == endpoint_name
+    )
     if exclude_id is not None:
         query = query.where(Endpoint.id != exclude_id)
     existing = (await db.execute(query)).scalar_one_or_none()
@@ -37,13 +41,42 @@ async def _ensure_unique_endpoint_name(
         )
 
 
+async def _list_ordered_endpoints(
+    db: AsyncSession, *, profile_id: int
+) -> list[Endpoint]:
+    result = await db.execute(
+        select(Endpoint)
+        .where(Endpoint.profile_id == profile_id)
+        .order_by(Endpoint.position.asc(), Endpoint.id.asc())
+    )
+    return result.scalars().all()
+
+
+async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
+    result = await db.execute(
+        select(func.max(Endpoint.position)).where(Endpoint.profile_id == profile_id)
+    )
+    max_position = result.scalar_one_or_none()
+    if max_position is None:
+        return 0
+    return int(max_position) + 1
+
+
+def _normalize_endpoint_positions(endpoints: list[Endpoint]) -> None:
+    now = utc_now()
+    for index, endpoint in enumerate(endpoints):
+        if endpoint.position == index:
+            continue
+        endpoint.position = index
+        endpoint.updated_at = now
+
+
 @router.get("/api/endpoints", response_model=list[EndpointResponse])
 async def list_endpoints(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    result = await db.execute(select(Endpoint).where(Endpoint.profile_id == profile_id).order_by(Endpoint.id.asc()))
-    return result.scalars().all()
+    return await _list_ordered_endpoints(db, profile_id=profile_id)
 
 
 @router.post("/api/endpoints", response_model=EndpointResponse, status_code=201)
@@ -61,13 +94,16 @@ async def create_endpoint(
     if url_warnings:
         raise HTTPException(status_code=422, detail="; ".join(url_warnings))
 
-    await _ensure_unique_endpoint_name(db, profile_id=profile_id, endpoint_name=endpoint_name)
+    await _ensure_unique_endpoint_name(
+        db, profile_id=profile_id, endpoint_name=endpoint_name
+    )
 
     endpoint = Endpoint(
         profile_id=profile_id,
         name=endpoint_name,
         base_url=normalized_url,
         api_key=body.api_key,
+        position=await _get_next_endpoint_position(db, profile_id=profile_id),
     )
     db.add(endpoint)
     await db.flush()
@@ -75,15 +111,56 @@ async def create_endpoint(
     return endpoint
 
 
+@router.patch(
+    "/api/endpoints/{endpoint_id}/position", response_model=list[EndpointResponse]
+)
+async def move_endpoint_position(
+    endpoint_id: int,
+    body: EndpointPositionMoveRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    endpoints = await _list_ordered_endpoints(db, profile_id=profile_id)
+    current_index = next(
+        (
+            index
+            for index, endpoint in enumerate(endpoints)
+            if endpoint.id == endpoint_id
+        ),
+        None,
+    )
+    if current_index is None:
+        raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    if body.to_index >= len(endpoints):
+        raise HTTPException(
+            status_code=422,
+            detail=f"to_index must be between 0 and {len(endpoints) - 1}",
+        )
+
+    if body.to_index == current_index:
+        return endpoints
+
+    endpoint = endpoints.pop(current_index)
+    endpoints.insert(body.to_index, endpoint)
+    _normalize_endpoint_positions(endpoints)
+    await db.flush()
+    return endpoints
+
 
 @router.get("/api/endpoints/connections", response_model=ConnectionDropdownResponse)
 async def list_all_connections(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    result = await db.execute(select(Connection).where(Connection.profile_id == profile_id).order_by(Connection.id.asc()))
+    result = await db.execute(
+        select(Connection)
+        .where(Connection.profile_id == profile_id)
+        .order_by(Connection.id.asc())
+    )
     connections = result.scalars().all()
     return ConnectionDropdownResponse(items=connections)
+
 
 @router.put("/api/endpoints/{endpoint_id}", response_model=EndpointResponse)
 async def update_endpoint(
@@ -205,6 +282,32 @@ async def delete_endpoint(
             },
         )
 
+    deleted_position = endpoint.position
     await db.delete(endpoint)
     await db.flush()
+
+    remaining_endpoints = (
+        (
+            await db.execute(
+                select(Endpoint)
+                .where(
+                    Endpoint.profile_id == profile_id,
+                    Endpoint.position > deleted_position,
+                )
+                .order_by(Endpoint.position.asc(), Endpoint.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if remaining_endpoints:
+        now = utc_now()
+        for index, remaining_endpoint in enumerate(
+            remaining_endpoints,
+            start=deleted_position,
+        ):
+            remaining_endpoint.position = index
+            remaining_endpoint.updated_at = now
+        await db.flush()
+
     return {"deleted": True}

@@ -97,6 +97,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 name=f"DEF065 endpoint {suffix}",
                 base_url="https://api.openai.com/v1",
                 api_key="sk-test",
+                position=0,
             )
             db.add(endpoint)
             await db.flush()

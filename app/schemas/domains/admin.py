@@ -13,7 +13,7 @@ class ConfigEndpointExport(BaseModel):
     name: str
     base_url: str
     api_key: str
-
+    position: int | None = Field(default=None, ge=0)
 
 class ConfigPricingTemplateExport(BaseModel):
     pricing_template_id: int

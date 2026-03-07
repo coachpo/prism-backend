@@ -107,9 +107,13 @@ class EndpointResponse(BaseModel):
     name: str
     base_url: str
     api_key: str
+    position: int
     created_at: datetime
     updated_at: datetime
 
+
+class EndpointPositionMoveRequest(BaseModel):
+    to_index: int = Field(ge=0)
 
 # --- Pricing Template + Connection Schemas ---
 

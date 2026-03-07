@@ -32,6 +32,8 @@ class TestDEF016_MissingSpecialPriceFailsClosed:
             name="def016-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+            profile_id=1,
+            position=0,
         )
         endpoint.id = 1
         pricing_template = PricingTemplate(
@@ -113,6 +115,8 @@ class TestDEF017_ExplicitSpecialPricesAreUsed:
             name="def017-endpoint",
             base_url="https://api.example.com/v1",
             api_key="sk-test",
+            profile_id=1,
+            position=0,
         )
         endpoint.id = 1
         pricing_template = PricingTemplate(
