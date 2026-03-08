@@ -22,6 +22,7 @@ router = APIRouter(prefix="/api/audit", tags=["audit"])
 async def list_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    request_log_id: int | None = None,
     provider_id: int | None = None,
     model_id: str | None = None,
     status_code: int | None = None,
@@ -36,6 +37,8 @@ async def list_audit_logs(
     normalized_to_time = ensure_utc_datetime(to_time)
 
     filters = [AuditLog.profile_id == profile_id]
+    if request_log_id is not None:
+        filters.append(AuditLog.request_log_id == request_log_id)
     if provider_id is not None:
         filters.append(AuditLog.provider_id == provider_id)
     if model_id:
@@ -101,7 +104,9 @@ async def get_audit_log(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    result = await db.execute(select(AuditLog).where(AuditLog.id == log_id, AuditLog.profile_id == profile_id))
+    result = await db.execute(
+        select(AuditLog).where(AuditLog.id == log_id, AuditLog.profile_id == profile_id)
+    )
     row = result.scalar_one_or_none()
     if not row:
         raise HTTPException(status_code=404, detail="Audit log not found")
@@ -143,4 +148,5 @@ async def delete_audit_logs(
 
     result = await db.execute(stmt)
     await db.flush()
-    return AuditLogDeleteResponse(deleted_count=result.rowcount)
+    rowcount = getattr(result, "rowcount", 0)
+    return AuditLogDeleteResponse(deleted_count=int(rowcount or 0))

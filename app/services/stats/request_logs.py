@@ -10,6 +10,7 @@ async def get_request_logs(
     db: AsyncSession,
     *,
     profile_id: int,
+    request_id: int | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -22,6 +23,8 @@ async def get_request_logs(
     offset: int = 0,
 ) -> tuple[list[RequestLog], int]:
     filters = [RequestLog.profile_id == profile_id]
+    if request_id is not None:
+        filters.append(RequestLog.id == request_id)
     if model_id:
         filters.append(RequestLog.model_id == model_id)
     if provider_type:

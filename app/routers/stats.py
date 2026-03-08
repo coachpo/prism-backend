@@ -34,6 +34,7 @@ def _normalize_datetime_filter(value: datetime | None) -> datetime | None:
 async def list_request_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    request_id: int | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -50,6 +51,7 @@ async def list_request_logs(
 
     items, total = await get_request_logs(
         db,
+        request_id=request_id,
         model_id=model_id,
         profile_id=profile_id,
         provider_type=provider_type,

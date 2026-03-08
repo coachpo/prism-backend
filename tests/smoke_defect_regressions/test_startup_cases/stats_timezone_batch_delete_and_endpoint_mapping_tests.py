@@ -1,17 +1,9 @@
-import asyncio
-import json
-import logging
-from typing import AsyncGenerator, cast
+from datetime import datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
-from app.services.proxy_service import (
-    extract_model_from_body,
-    build_upstream_headers,
-)
-from app.services.stats_service import log_request
 
 
 class TestDEF004_FrontendDeleteErrorHandling:
@@ -52,11 +44,41 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             )
 
         assert response.total == 0
-        call_kwargs = mock_get_request_logs.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from
-        assert call_kwargs["to_time"] == aware_to
-        assert call_kwargs["from_time"].tzinfo is not None
-        assert call_kwargs["to_time"].tzinfo is not None
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_request_logs.await_args_list[0],
+        )
+        from_time: datetime = cast(datetime, call_kwargs["from_time"])
+        to_time: datetime = cast(datetime, call_kwargs["to_time"])
+        assert from_time == aware_from
+        assert to_time == aware_to
+        assert from_time.tzinfo is not None
+        assert to_time.tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_requests_route_passes_request_id_filter_to_service(self):
+        from app.routers.stats import list_request_logs
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_request_logs", new_callable=AsyncMock
+        ) as mock_get_request_logs:
+            mock_get_request_logs.return_value = ([], 0)
+            response = await list_request_logs(
+                db=mock_db,
+                profile_id=7,
+                request_id=321,
+                limit=50,
+                offset=0,
+            )
+
+        assert response.total == 0
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_request_logs.await_args_list[0],
+        )
+        assert call_kwargs["request_id"] == 321
 
     @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
@@ -89,11 +111,16 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             )
 
         assert response.total_requests == 0
-        call_kwargs = mock_get_stats_summary.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from
-        assert call_kwargs["to_time"] == aware_to
-        assert call_kwargs["from_time"].tzinfo is not None
-        assert call_kwargs["to_time"].tzinfo is not None
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_stats_summary.await_args_list[0],
+        )
+        from_time: datetime = cast(datetime, call_kwargs["from_time"])
+        to_time: datetime = cast(datetime, call_kwargs["to_time"])
+        assert from_time == aware_from
+        assert to_time == aware_to
+        assert from_time.tzinfo is not None
+        assert to_time.tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_connection_success_rates_route_normalizes_aware_datetimes(self):
@@ -115,11 +142,16 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             )
 
         assert response == []
-        call_kwargs = mock_get_success_rates.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from
-        assert call_kwargs["to_time"] == aware_to
-        assert call_kwargs["from_time"].tzinfo is not None
-        assert call_kwargs["to_time"].tzinfo is not None
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_success_rates.await_args_list[0],
+        )
+        from_time: datetime = cast(datetime, call_kwargs["from_time"])
+        to_time: datetime = cast(datetime, call_kwargs["to_time"])
+        assert from_time == aware_from
+        assert to_time == aware_to
+        assert from_time.tzinfo is not None
+        assert to_time.tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_spending_route_normalizes_aware_datetimes_before_service_call(self):
@@ -162,11 +194,16 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             )
 
         assert response["report_currency_code"] == "USD"
-        call_kwargs = mock_get_spending_report.await_args.kwargs
-        assert call_kwargs["from_time"] == aware_from
-        assert call_kwargs["to_time"] == aware_to
-        assert call_kwargs["from_time"].tzinfo is not None
-        assert call_kwargs["to_time"].tzinfo is not None
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_spending_report.await_args_list[0],
+        )
+        from_time: datetime = cast(datetime, call_kwargs["from_time"])
+        to_time: datetime = cast(datetime, call_kwargs["to_time"])
+        assert from_time == aware_from
+        assert to_time == aware_to
+        assert from_time.tzinfo is not None
+        assert to_time.tzinfo is not None
 
 
 class TestBatchDeleteValidation:
@@ -344,6 +381,50 @@ class TestBatchDeleteValidation:
                 delete_all=False,
             )
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_audit_list_filters_by_request_log_id(self):
+        from app.routers.audit import list_audit_logs
+
+        row = MagicMock()
+        row.id = 9
+        row.request_log_id = 321
+        row.provider_id = 1
+        row.profile_id = 1
+        row.model_id = "gpt-4o-mini"
+        row.endpoint_id = 5
+        row.connection_id = 8
+        row.endpoint_base_url = "https://api.openai.com/v1"
+        row.endpoint_description = "Primary endpoint"
+        row.request_method = "POST"
+        row.request_url = "https://api.openai.com/v1/responses"
+        row.request_headers = "{}"
+        row.request_body = '{"model":"gpt-4o-mini"}'
+        row.response_status = 200
+        row.is_stream = False
+        row.duration_ms = 123
+        row.created_at = "2026-03-08T00:00:00Z"
+
+        count_result = MagicMock()
+        count_result.scalar.return_value = 1
+
+        rows_result = MagicMock()
+        rows_result.scalars.return_value.all.return_value = [row]
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=[count_result, rows_result])
+
+        response = await list_audit_logs(
+            db=mock_db,
+            profile_id=1,
+            request_log_id=321,
+            limit=50,
+            offset=0,
+        )
+
+        assert response.total == 1
+        assert len(response.items) == 1
+        assert response.items[0].request_log_id == 321
 
 
 class TestDEF061_ConnectionResponseEndpointMapping:
