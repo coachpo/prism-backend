@@ -1,8 +1,8 @@
-"""Squashed baseline schema.
+"""Squashed baseline schema
 
 Revision ID: 0001_initial_status
 Revises:
-Create Date: 2026-03-08 12:00:00
+Create Date: 2026-03-01 03:30:00
 """
 
 from __future__ import annotations
@@ -28,9 +28,9 @@ def upgrade() -> None:
         sa.Column("version", sa.Integer(), nullable=False),
         sa.Column("is_default", sa.Boolean(), nullable=False),
         sa.Column("is_editable", sa.Boolean(), nullable=False),
-        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(), nullable=True),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
     )
@@ -58,8 +58,8 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column("audit_enabled", sa.Boolean(), nullable=False),
         sa.Column("audit_capture_bodies", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("name"),
     )
@@ -77,8 +77,8 @@ def upgrade() -> None:
         sa.Column("failover_recovery_enabled", sa.Boolean(), nullable=False),
         sa.Column("failover_recovery_cooldown_seconds", sa.Integer(), nullable=False),
         sa.Column("is_enabled", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["provider_id"], ["providers.id"]),
         sa.PrimaryKeyConstraint("id"),
@@ -103,77 +103,14 @@ def upgrade() -> None:
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("base_url", sa.String(length=500), nullable=False),
         sa.Column("api_key", sa.String(length=500), nullable=False),
-        sa.Column("position", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("profile_id", "name", name="uq_endpoints_profile_name"),
     )
     op.create_index(
         "ix_endpoints_profile_id", "endpoints", ["profile_id"], unique=False
-    )
-    op.create_index(
-        "idx_endpoints_profile_position",
-        "endpoints",
-        ["profile_id", "position"],
-        unique=False,
-    )
-
-    op.create_table(
-        "pricing_templates",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("profile_id", sa.Integer(), nullable=False),
-        sa.Column("name", sa.String(length=200), nullable=False),
-        sa.Column("description", sa.Text(), nullable=True),
-        sa.Column(
-            "pricing_unit",
-            sa.String(length=20),
-            nullable=False,
-            server_default="PER_1M",
-        ),
-        sa.Column("pricing_currency_code", sa.String(length=3), nullable=False),
-        sa.Column("input_price", sa.String(length=20), nullable=False),
-        sa.Column("output_price", sa.String(length=20), nullable=False),
-        sa.Column("cached_input_price", sa.String(length=20), nullable=True),
-        sa.Column("cache_creation_price", sa.String(length=20), nullable=True),
-        sa.Column("reasoning_price", sa.String(length=20), nullable=True),
-        sa.Column(
-            "missing_special_token_price_policy",
-            sa.String(length=20),
-            nullable=False,
-            server_default="MAP_TO_OUTPUT",
-        ),
-        sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("timezone('utc', now())"),
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            nullable=False,
-            server_default=sa.text("timezone('utc', now())"),
-        ),
-        sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "profile_id", "name", name="uq_pricing_templates_profile_name"
-        ),
-    )
-    op.create_index(
-        "ix_pricing_templates_profile_id",
-        "pricing_templates",
-        ["profile_id"],
-        unique=False,
-    )
-    op.create_index(
-        "idx_pricing_templates_profile_id",
-        "pricing_templates",
-        ["profile_id"],
-        unique=False,
     )
 
     op.create_table(
@@ -182,7 +119,6 @@ def upgrade() -> None:
         sa.Column("profile_id", sa.Integer(), nullable=False),
         sa.Column("model_config_id", sa.Integer(), nullable=False),
         sa.Column("endpoint_id", sa.Integer(), nullable=False),
-        sa.Column("pricing_template_id", sa.Integer(), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("priority", sa.Integer(), nullable=False),
         sa.Column("name", sa.Text(), nullable=True),
@@ -190,17 +126,25 @@ def upgrade() -> None:
         sa.Column("custom_headers", sa.Text(), nullable=True),
         sa.Column("health_status", sa.String(length=20), nullable=False),
         sa.Column("health_detail", sa.Text(), nullable=True),
-        sa.Column("last_health_check", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("last_health_check", sa.DateTime(), nullable=True),
+        sa.Column("pricing_enabled", sa.Boolean(), nullable=False),
+        sa.Column("pricing_currency_code", sa.String(length=3), nullable=True),
+        sa.Column("input_price", sa.String(length=20), nullable=True),
+        sa.Column("output_price", sa.String(length=20), nullable=True),
+        sa.Column("cached_input_price", sa.String(length=20), nullable=True),
+        sa.Column("cache_creation_price", sa.String(length=20), nullable=True),
+        sa.Column("reasoning_price", sa.String(length=20), nullable=True),
+        sa.Column(
+            "missing_special_token_price_policy", sa.String(length=20), nullable=False
+        ),
+        sa.Column("pricing_config_version", sa.Integer(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
             ["model_config_id"], ["model_configs.id"], ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(["endpoint_id"], ["endpoints.id"], ondelete="RESTRICT"),
-        sa.ForeignKeyConstraint(
-            ["pricing_template_id"], ["pricing_templates.id"], ondelete="RESTRICT"
-        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -225,12 +169,6 @@ def upgrade() -> None:
         "idx_connections_profile_id", "connections", ["profile_id"], unique=False
     )
     op.create_index(
-        "idx_connections_pricing_template_id",
-        "connections",
-        ["pricing_template_id"],
-        unique=False,
-    )
-    op.create_index(
         "idx_connections_profile_model_active_priority",
         "connections",
         ["profile_id", "model_config_id", "is_active", "priority"],
@@ -244,8 +182,8 @@ def upgrade() -> None:
         sa.Column("report_currency_code", sa.String(length=3), nullable=False),
         sa.Column("report_currency_symbol", sa.String(length=5), nullable=False),
         sa.Column("timezone_preference", sa.String(length=100), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("profile_id", name="uq_user_settings_profile_id"),
@@ -261,8 +199,8 @@ def upgrade() -> None:
         sa.Column("model_id", sa.String(length=200), nullable=False),
         sa.Column("endpoint_id", sa.Integer(), nullable=False),
         sa.Column("fx_rate", sa.String(length=20), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["endpoint_id"], ["endpoints.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -295,8 +233,8 @@ def upgrade() -> None:
         sa.Column("pattern", sa.String(length=200), nullable=False),
         sa.Column("enabled", sa.Boolean(), nullable=False),
         sa.Column("is_system", sa.Boolean(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.CheckConstraint(
             "((is_system = true AND profile_id IS NULL) OR (is_system = false AND profile_id IS NOT NULL))",
             name="ck_hbr_profile_scope",
@@ -361,16 +299,12 @@ def upgrade() -> None:
         sa.Column("cache_read_input_tokens", sa.Integer(), nullable=True),
         sa.Column("cache_creation_input_tokens", sa.Integer(), nullable=True),
         sa.Column("cache_read_input_cost_micros", sa.BigInteger(), nullable=True),
-        sa.Column(
-            "cache_creation_input_cost_micros", sa.BigInteger(), nullable=True
-        ),
+        sa.Column("cache_creation_input_cost_micros", sa.BigInteger(), nullable=True),
         sa.Column(
             "pricing_snapshot_cache_read_input", sa.String(length=20), nullable=True
         ),
         sa.Column(
-            "pricing_snapshot_cache_creation_input",
-            sa.String(length=20),
-            nullable=True,
+            "pricing_snapshot_cache_creation_input", sa.String(length=20), nullable=True
         ),
         sa.Column(
             "pricing_snapshot_missing_special_token_price_policy",
@@ -381,7 +315,7 @@ def upgrade() -> None:
         sa.Column("request_path", sa.String(length=500), nullable=False),
         sa.Column("error_detail", sa.Text(), nullable=True),
         sa.Column("endpoint_description", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -442,7 +376,7 @@ def upgrade() -> None:
         sa.Column("response_body", sa.Text(), nullable=True),
         sa.Column("is_stream", sa.Boolean(), nullable=False),
         sa.Column("duration_ms", sa.Integer(), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["provider_id"], ["providers.id"]),
         sa.ForeignKeyConstraint(
@@ -527,7 +461,6 @@ def downgrade() -> None:
     op.drop_index(
         "idx_connections_profile_model_active_priority", table_name="connections"
     )
-    op.drop_index("idx_connections_pricing_template_id", table_name="connections")
     op.drop_index("idx_connections_profile_id", table_name="connections")
     op.drop_index("idx_connections_priority", table_name="connections")
     op.drop_index("idx_connections_is_active", table_name="connections")
@@ -536,11 +469,6 @@ def downgrade() -> None:
     op.drop_index("ix_connections_profile_id", table_name="connections")
     op.drop_table("connections")
 
-    op.drop_index("idx_pricing_templates_profile_id", table_name="pricing_templates")
-    op.drop_index("ix_pricing_templates_profile_id", table_name="pricing_templates")
-    op.drop_table("pricing_templates")
-
-    op.drop_index("idx_endpoints_profile_position", table_name="endpoints")
     op.drop_index("ix_endpoints_profile_id", table_name="endpoints")
     op.drop_table("endpoints")
 

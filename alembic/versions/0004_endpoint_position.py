@@ -1,7 +1,8 @@
 """Add persisted endpoint ordering positions.
 
-Compatibility migration for databases created before the squashed baseline.
-Fresh databases already have the target schema in ``0001_initial``.
+Revision ID: 0004_endpoint_position
+Revises: 0003_pricing_templates_v2
+Create Date: 2026-03-07 00:00:00
 """
 
 from __future__ import annotations
@@ -16,22 +17,9 @@ branch_labels = None
 depends_on = None
 
 
-def _get_position_column() -> dict[str, object] | None:
-    inspector = sa.inspect(op.get_bind())
-    for column in inspector.get_columns("endpoints"):
-        if column["name"] == "position":
-            return column
-    return None
+def upgrade() -> None:
+    op.add_column("endpoints", sa.Column("position", sa.Integer(), nullable=True))
 
-
-def _index_exists(index_name: str) -> bool:
-    inspector = sa.inspect(op.get_bind())
-    return any(
-        index["name"] == index_name for index in inspector.get_indexes("endpoints")
-    )
-
-
-def _normalize_positions() -> None:
     op.execute(
         sa.text(
             """
@@ -52,25 +40,15 @@ def _normalize_positions() -> None:
         )
     )
 
-
-def upgrade() -> None:
-    position_column = _get_position_column()
-    if position_column is None:
-        op.add_column("endpoints", sa.Column("position", sa.Integer(), nullable=True))
-        position_column = _get_position_column()
-
-    if position_column is None or bool(position_column.get("nullable", True)):
-        _normalize_positions()
-        op.alter_column("endpoints", "position", nullable=False)
-
-    if not _index_exists("idx_endpoints_profile_position"):
-        op.create_index(
-            "idx_endpoints_profile_position",
-            "endpoints",
-            ["profile_id", "position"],
-            unique=False,
-        )
+    op.alter_column("endpoints", "position", nullable=False)
+    op.create_index(
+        "idx_endpoints_profile_position",
+        "endpoints",
+        ["profile_id", "position"],
+        unique=False,
+    )
 
 
 def downgrade() -> None:
-    pass
+    op.drop_index("idx_endpoints_profile_position", table_name="endpoints")
+    op.drop_column("endpoints", "position")
