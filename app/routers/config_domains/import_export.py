@@ -31,9 +31,6 @@ from app.schemas.schemas import (
     ConfigEndpointFxRateExport,
     ConfigImportRequest,
     ConfigImportResponse,
-    HeaderBlocklistRuleCreate,
-    HeaderBlocklistRuleUpdate,
-    HeaderBlocklistRuleResponse,
     HeaderBlocklistRuleExport,
 )
 from app.services.proxy_service import normalize_base_url, validate_base_url
@@ -63,6 +60,21 @@ def _normalize_custom_headers_for_export(
     if isinstance(decoded, dict) and len(decoded) > 0:
         return decoded
     return None
+
+
+def _sorted_import_connections(
+    connections: list[ConfigConnectionExport],
+) -> list[ConfigConnectionExport]:
+    return [
+        connection
+        for _, connection in sorted(
+            enumerate(connections),
+            key=lambda item: (
+                item[1].priority,
+                item[0],
+            ),
+        )
+    ]
 
 
 @router.get("/export")
@@ -603,7 +615,9 @@ async def import_config(
         if is_proxy:
             continue
 
-        for connection_data in model.connections:
+        for normalized_priority, connection_data in enumerate(
+            _sorted_import_connections(model.connections)
+        ):
             mapped_endpoint_id = endpoint_id_map.get(connection_data.endpoint_id)
             if mapped_endpoint_id is None:
                 raise HTTPException(
@@ -624,7 +638,7 @@ async def import_config(
                     else None
                 ),
                 is_active=connection_data.is_active,
-                priority=connection_data.priority,
+                priority=normalized_priority,
                 name=connection_data.name,
                 auth_type=connection_data.auth_type,
                 custom_headers=json.dumps(connection_data.custom_headers)
@@ -634,7 +648,6 @@ async def import_config(
             db.add(connection)
             connections_count += 1
             imported_connection_pairs.add((model.model_id, connection_data.endpoint_id))
-
     await db.flush()
 
     user_settings = (

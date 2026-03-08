@@ -115,6 +115,10 @@ class EndpointResponse(BaseModel):
 class EndpointPositionMoveRequest(BaseModel):
     to_index: int = Field(ge=0)
 
+
+class ConnectionPriorityMoveRequest(BaseModel):
+    to_index: int = Field(ge=0)
+
 # --- Pricing Template + Connection Schemas ---
 
 
@@ -299,7 +303,6 @@ class ConnectionPricingTemplateSummary(BaseModel):
 
 class ConnectionBase(BaseModel):
     is_active: bool = True
-    priority: int = 0
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
@@ -329,7 +332,6 @@ class ConnectionUpdate(BaseModel):
     endpoint_id: int | None = None
     endpoint_create: EndpointCreate | None = None
     is_active: bool | None = None
-    priority: int | None = None
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None

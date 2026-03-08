@@ -15,6 +15,7 @@ class ConfigEndpointExport(BaseModel):
     api_key: str
     position: int | None = Field(default=None, ge=0)
 
+
 class ConfigPricingTemplateExport(BaseModel):
     pricing_template_id: int
     name: str
@@ -37,7 +38,7 @@ class ConfigConnectionExport(BaseModel):
     endpoint_id: int
     pricing_template_id: int | None = None
     is_active: bool = True
-    priority: int = 0
+    priority: int = Field(default=0, ge=0)
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None

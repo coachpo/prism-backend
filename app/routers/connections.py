@@ -22,9 +22,10 @@ from app.models.models import (
 from app.schemas.schemas import (
     ConnectionCreate,
     ConnectionOwnerResponse,
+    ConnectionPriorityMoveRequest,
+    ConnectionPricingTemplateUpdate,
     ConnectionResponse,
     ConnectionUpdate,
-    ConnectionPricingTemplateUpdate,
     HealthCheckResponse,
 )
 from app.services.loadbalancer import mark_connection_recovered
@@ -300,24 +301,30 @@ async def _load_connection_or_404(
     return connection
 
 
-@router.get(
-    "/api/models/{model_config_id}/connections", response_model=list[ConnectionResponse]
-)
-async def list_connections(
+async def _load_model_or_404(
+    db: AsyncSession,
+    *,
+    profile_id: int,
     model_config_id: int,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)],
-):
-    model_result = await db.execute(
+) -> ModelConfig:
+    result = await db.execute(
         select(ModelConfig).where(
             ModelConfig.id == model_config_id,
             ModelConfig.profile_id == profile_id,
         )
     )
-    model = model_result.scalar_one_or_none()
+    model = result.scalar_one_or_none()
     if model is None:
         raise HTTPException(status_code=404, detail="Model configuration not found")
+    return model
 
+
+async def _list_ordered_connections(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    model_config_id: int,
+) -> list[Connection]:
     result = await db.execute(
         select(Connection)
         .options(
@@ -333,26 +340,51 @@ async def list_connections(
     return result.scalars().all()
 
 
+def _normalize_connection_priorities(connections: list[Connection]) -> None:
+    now = utc_now()
+    for index, connection in enumerate(connections):
+        if connection.priority == index:
+            continue
+        connection.priority = index
+        connection.updated_at = now
+
+
+@router.get(
+    "/api/models/{model_config_id}/connections", response_model=list[ConnectionResponse]
+ )
+async def list_connections(
+    model_config_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    await _load_model_or_404(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+    return await _list_ordered_connections(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+
+
 @router.post(
     "/api/models/{model_config_id}/connections",
     response_model=ConnectionResponse,
     status_code=201,
-)
+ )
 async def create_connection(
     model_config_id: int,
     body: ConnectionCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    model_result = await db.execute(
-        select(ModelConfig).where(
-            ModelConfig.id == model_config_id,
-            ModelConfig.profile_id == profile_id,
-        )
+    await _load_model_or_404(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
     )
-    model = model_result.scalar_one_or_none()
-    if model is None:
-        raise HTTPException(status_code=404, detail="Model configuration not found")
 
     endpoint: Endpoint | None = None
     if body.endpoint_id is not None:
@@ -385,12 +417,22 @@ async def create_connection(
         profile_id=profile_id,
         pricing_template_id=body.pricing_template_id,
     )
+
+    await _lock_profile_row(db, profile_id=profile_id)
+    ordered_connections = await _list_ordered_connections(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+    _normalize_connection_priorities(ordered_connections)
+    await db.flush()
+
     connection = Connection(
         profile_id=profile_id,
         model_config_id=model_config_id,
         endpoint_id=endpoint.id,
         is_active=body.is_active,
-        priority=body.priority,
+        priority=len(ordered_connections),
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=json.dumps(body.custom_headers) if body.custom_headers else None,
@@ -488,10 +530,61 @@ async def update_connection(
     )
 
 
+@router.patch(
+    "/api/models/{model_config_id}/connections/{connection_id}/priority",
+    response_model=list[ConnectionResponse],
+)
+async def move_connection_priority(
+    model_config_id: int,
+    connection_id: int,
+    body: ConnectionPriorityMoveRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    await _load_model_or_404(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+    await _lock_profile_row(db, profile_id=profile_id)
+    connections = await _list_ordered_connections(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+    current_index = next(
+        (
+            index
+            for index, connection in enumerate(connections)
+            if connection.id == connection_id
+        ),
+        None,
+    )
+    if current_index is None:
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    if body.to_index >= len(connections):
+        raise HTTPException(
+            status_code=422,
+            detail=f"to_index must be between 0 and {len(connections) - 1}",
+        )
+
+    if body.to_index == current_index:
+        _normalize_connection_priorities(connections)
+        await db.flush()
+        return connections
+
+    connection = connections.pop(current_index)
+    connections.insert(body.to_index, connection)
+    _normalize_connection_priorities(connections)
+    await db.flush()
+    return connections
+
+
 @router.put(
     "/api/connections/{connection_id}/pricing-template",
     response_model=ConnectionResponse,
-)
+ )
 async def set_connection_pricing_template(
     connection_id: int,
     body: ConnectionPricingTemplateUpdate,
@@ -524,6 +617,7 @@ async def delete_connection(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
+    await _lock_profile_row(db, profile_id=profile_id)
     connection_result = await db.execute(
         select(Connection).where(
             Connection.id == connection_id,
@@ -533,8 +627,18 @@ async def delete_connection(
     connection = connection_result.scalar_one_or_none()
     if connection is None:
         raise HTTPException(status_code=404, detail="Connection not found")
+
+    model_config_id = connection.model_config_id
     mark_connection_recovered(profile_id, connection.id)
     await db.delete(connection)
+    await db.flush()
+
+    remaining_connections = await _list_ordered_connections(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
+    _normalize_connection_priorities(remaining_connections)
     await db.flush()
     return {"deleted": True}
 

@@ -1,16 +1,9 @@
 import asyncio
-import json
-import logging
-from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from app.services.proxy_service import (
-    extract_model_from_body,
-    build_upstream_headers,
-)
 from app.services.stats_service import log_request
 
 
@@ -262,6 +255,8 @@ class TestDEF009_ConnectionDefaultsPersist:
         no_conflict_result.scalar_one_or_none.return_value = None
         next_position_result = MagicMock()
         next_position_result.scalar_one_or_none.return_value = None
+        ordered_connections_result = MagicMock()
+        ordered_connections_result.scalars.return_value.all.return_value = []
         template = MagicMock()
         template.id = 11
         template_result = MagicMock()
@@ -273,6 +268,8 @@ class TestDEF009_ConnectionDefaultsPersist:
                 no_conflict_result,
                 next_position_result,
                 template_result,
+                lock_result,
+                ordered_connections_result,
             ]
         )
         mock_db.flush = AsyncMock()

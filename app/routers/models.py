@@ -143,6 +143,7 @@ async def get_model(
     config = result.scalar_one_or_none()
     if not config:
         raise HTTPException(status_code=404, detail="Model configuration not found")
+    config.connections.sort(key=lambda connection: (connection.priority, connection.id))
     return config
 
 
