@@ -1,8 +1,7 @@
 """Convert all datetime columns to timezone-aware UTC.
 
-Revision ID: 0002_utc_timestamps
-Revises: 0001_initial_status
-Create Date: 2026-03-03 12:00:00
+Compatibility migration for databases created before the squashed baseline.
+Fresh databases already have timezone-aware columns in ``0001_initial``.
 """
 
 from __future__ import annotations
@@ -42,8 +41,19 @@ TIMESTAMP_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _column_uses_timezone(table_name: str, column_name: str) -> bool | None:
+    inspector = sa.inspect(op.get_bind())
+    for column in inspector.get_columns(table_name):
+        if column["name"] == column_name:
+            return bool(getattr(column["type"], "timezone", False))
+    return None
+
+
 def upgrade() -> None:
     for table_name, column_name in TIMESTAMP_COLUMNS:
+        column_uses_timezone = _column_uses_timezone(table_name, column_name)
+        if column_uses_timezone in (None, True):
+            continue
         op.alter_column(
             table_name,
             column_name,
@@ -53,10 +63,4 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for table_name, column_name in TIMESTAMP_COLUMNS:
-        op.alter_column(
-            table_name,
-            column_name,
-            type_=sa.DateTime(timezone=False),
-            postgresql_using=f"{column_name} AT TIME ZONE 'UTC'",
-        )
+    pass

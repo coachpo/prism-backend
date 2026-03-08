@@ -1,13 +1,13 @@
 """Introduce profile-scoped pricing templates and connection references.
 
-Revision ID: 0003_pricing_templates_v2
-Revises: 0002_utc_timestamps
-Create Date: 2026-03-03 13:30:00
+Compatibility migration for databases created before the squashed baseline.
+Fresh databases already have the target schema in ``0001_initial``.
 """
 
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -18,7 +18,49 @@ branch_labels = None
 depends_on = None
 
 
-_NUMERIC_RE = r"^[0-9]+(\.[0-9]+)?$"
+LEGACY_CONNECTION_COLUMNS: tuple[str, ...] = (
+    "pricing_enabled",
+    "pricing_currency_code",
+    "input_price",
+    "output_price",
+    "cached_input_price",
+    "cache_creation_price",
+    "reasoning_price",
+    "missing_special_token_price_policy",
+    "pricing_config_version",
+)
+
+
+def _table_exists(table_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return table_name in inspector.get_table_names()
+
+
+def _column_exists(table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        column["name"] == column_name for column in inspector.get_columns(table_name)
+    )
+
+
+def _index_exists(table_name: str, index_name: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return any(index["name"] == index_name for index in inspector.get_indexes(table_name))
+
+
+def _foreign_key_exists(
+    table_name: str,
+    *,
+    constrained_columns: list[str],
+    referred_table: str,
+) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    for foreign_key in inspector.get_foreign_keys(table_name):
+        if foreign_key.get("referred_table") != referred_table:
+            continue
+        if foreign_key.get("constrained_columns") == constrained_columns:
+            return True
+    return False
 
 
 def _parse_optional_decimal(value: str | None) -> Decimal | None:
@@ -34,8 +76,7 @@ def _parse_optional_decimal(value: str | None) -> Decimal | None:
 
 
 def _parse_required_decimal(value: str | None) -> Decimal | None:
-    parsed = _parse_optional_decimal(value)
-    return parsed
+    return _parse_optional_decimal(value)
 
 
 def _is_effective_legacy_pricing(row: sa.Row) -> bool:
@@ -47,23 +88,37 @@ def _is_effective_legacy_pricing(row: sa.Row) -> bool:
     output_price = _parse_required_decimal(row.output_price)
     if input_price is None or output_price is None:
         return False
-    if row.cached_input_price is not None and _parse_optional_decimal(row.cached_input_price) is None:
+    if (
+        row.cached_input_price is not None
+        and _parse_optional_decimal(row.cached_input_price) is None
+    ):
         return False
-    if row.cache_creation_price is not None and _parse_optional_decimal(row.cache_creation_price) is None:
+    if (
+        row.cache_creation_price is not None
+        and _parse_optional_decimal(row.cache_creation_price) is None
+    ):
         return False
-    if row.reasoning_price is not None and _parse_optional_decimal(row.reasoning_price) is None:
+    if (
+        row.reasoning_price is not None
+        and _parse_optional_decimal(row.reasoning_price) is None
+    ):
         return False
     return True
 
 
-def upgrade() -> None:
+def _create_pricing_templates_table() -> None:
     op.create_table(
         "pricing_templates",
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("profile_id", sa.Integer(), nullable=False),
         sa.Column("name", sa.String(length=200), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
-        sa.Column("pricing_unit", sa.String(length=20), nullable=False, server_default="PER_1M"),
+        sa.Column(
+            "pricing_unit",
+            sa.String(length=20),
+            nullable=False,
+            server_default="PER_1M",
+        ),
         sa.Column("pricing_currency_code", sa.String(length=3), nullable=False),
         sa.Column("input_price", sa.String(length=20), nullable=False),
         sa.Column("output_price", sa.String(length=20), nullable=False),
@@ -77,32 +132,29 @@ def upgrade() -> None:
             server_default="MAP_TO_OUTPUT",
         ),
         sa.Column("version", sa.Integer(), nullable=False, server_default="1"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("timezone('utc', now())")),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("timezone('utc', now())")),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("timezone('utc', now())"),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("timezone('utc', now())"),
+        ),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("profile_id", "name", name="uq_pricing_templates_profile_name"),
-    )
-    op.create_index(
-        "ix_pricing_templates_profile_id",
-        "pricing_templates",
-        ["profile_id"],
-        unique=False,
-    )
-    op.create_index(
-        "idx_pricing_templates_profile_id",
-        "pricing_templates",
-        ["profile_id"],
-        unique=False,
+        sa.UniqueConstraint(
+            "profile_id", "name", name="uq_pricing_templates_profile_name"
+        ),
     )
 
-    op.add_column(
-        "connections",
-        sa.Column("pricing_template_id", sa.Integer(), nullable=True),
-    )
 
-    connection = op.get_bind()
-    rows = connection.execute(
+def _migrate_legacy_pricing_rows() -> None:
+    bind = op.get_bind()
+    rows = bind.execute(
         sa.text(
             """
             SELECT
@@ -162,13 +214,15 @@ def upgrade() -> None:
             groups[key] = group
         else:
             max_version = int(group["max_config_version"])
-            group["max_config_version"] = max(max_version, row.pricing_config_version or 1)
+            group["max_config_version"] = max(
+                max_version, row.pricing_config_version or 1
+            )
 
         connection_to_template_key[row.id] = key
 
     template_ids_by_key: dict[tuple, int] = {}
     for key, group in groups.items():
-        insert_result = connection.execute(
+        insert_result = bind.execute(
             sa.text(
                 """
                 INSERT INTO pricing_templates (
@@ -220,112 +274,70 @@ def upgrade() -> None:
         template_ids_by_key[key] = int(insert_result.scalar_one())
 
     for connection_id, key in connection_to_template_key.items():
-        template_id = template_ids_by_key[key]
-        connection.execute(
+        bind.execute(
             sa.text(
                 "UPDATE connections SET pricing_template_id = :template_id WHERE id = :connection_id"
             ),
-            {"template_id": template_id, "connection_id": connection_id},
+            {
+                "template_id": template_ids_by_key[key],
+                "connection_id": connection_id,
+            },
         )
 
-    op.create_index(
-        "idx_connections_pricing_template_id",
-        "connections",
-        ["pricing_template_id"],
-        unique=False,
-    )
-    op.create_foreign_key(
-        "fk_connections_pricing_template_id",
-        "connections",
-        "pricing_templates",
-        ["pricing_template_id"],
-        ["id"],
-        ondelete="RESTRICT",
-    )
 
-    op.drop_column("connections", "pricing_enabled")
-    op.drop_column("connections", "pricing_currency_code")
-    op.drop_column("connections", "input_price")
-    op.drop_column("connections", "output_price")
-    op.drop_column("connections", "cached_input_price")
-    op.drop_column("connections", "cache_creation_price")
-    op.drop_column("connections", "reasoning_price")
-    op.drop_column("connections", "missing_special_token_price_policy")
-    op.drop_column("connections", "pricing_config_version")
+def upgrade() -> None:
+    if not _table_exists("pricing_templates"):
+        _create_pricing_templates_table()
+
+    if not _index_exists("pricing_templates", "ix_pricing_templates_profile_id"):
+        op.create_index(
+            "ix_pricing_templates_profile_id",
+            "pricing_templates",
+            ["profile_id"],
+            unique=False,
+        )
+    if not _index_exists("pricing_templates", "idx_pricing_templates_profile_id"):
+        op.create_index(
+            "idx_pricing_templates_profile_id",
+            "pricing_templates",
+            ["profile_id"],
+            unique=False,
+        )
+
+    if not _column_exists("connections", "pricing_template_id"):
+        op.add_column(
+            "connections",
+            sa.Column("pricing_template_id", sa.Integer(), nullable=True),
+        )
+
+    if all(_column_exists("connections", column) for column in LEGACY_CONNECTION_COLUMNS):
+        _migrate_legacy_pricing_rows()
+
+    if not _index_exists("connections", "idx_connections_pricing_template_id"):
+        op.create_index(
+            "idx_connections_pricing_template_id",
+            "connections",
+            ["pricing_template_id"],
+            unique=False,
+        )
+    if not _foreign_key_exists(
+        "connections",
+        constrained_columns=["pricing_template_id"],
+        referred_table="pricing_templates",
+    ):
+        op.create_foreign_key(
+            "fk_connections_pricing_template_id",
+            "connections",
+            "pricing_templates",
+            ["pricing_template_id"],
+            ["id"],
+            ondelete="RESTRICT",
+        )
+
+    for column_name in LEGACY_CONNECTION_COLUMNS:
+        if _column_exists("connections", column_name):
+            op.drop_column("connections", column_name)
 
 
 def downgrade() -> None:
-    op.add_column(
-        "connections",
-        sa.Column("pricing_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("pricing_currency_code", sa.String(length=3), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("input_price", sa.String(length=20), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("output_price", sa.String(length=20), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("cached_input_price", sa.String(length=20), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("cache_creation_price", sa.String(length=20), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("reasoning_price", sa.String(length=20), nullable=True),
-    )
-    op.add_column(
-        "connections",
-        sa.Column(
-            "missing_special_token_price_policy",
-            sa.String(length=20),
-            nullable=False,
-            server_default="MAP_TO_OUTPUT",
-        ),
-    )
-    op.add_column(
-        "connections",
-        sa.Column("pricing_config_version", sa.Integer(), nullable=False, server_default="0"),
-    )
-
-    connection = op.get_bind()
-    connection.execute(
-        sa.text(
-            """
-            UPDATE connections AS c
-            SET
-                pricing_enabled = CASE WHEN c.pricing_template_id IS NULL THEN false ELSE true END,
-                pricing_currency_code = p.pricing_currency_code,
-                input_price = p.input_price,
-                output_price = p.output_price,
-                cached_input_price = p.cached_input_price,
-                cache_creation_price = p.cache_creation_price,
-                reasoning_price = p.reasoning_price,
-                missing_special_token_price_policy = COALESCE(p.missing_special_token_price_policy, 'MAP_TO_OUTPUT'),
-                pricing_config_version = COALESCE(p.version, 0)
-            FROM pricing_templates AS p
-            WHERE c.pricing_template_id = p.id
-            """
-        )
-    )
-
-    op.drop_constraint(
-        "fk_connections_pricing_template_id",
-        "connections",
-        type_="foreignkey",
-    )
-    op.drop_index("idx_connections_pricing_template_id", table_name="connections")
-    op.drop_column("connections", "pricing_template_id")
-
-    op.drop_index("idx_pricing_templates_profile_id", table_name="pricing_templates")
-    op.drop_index("ix_pricing_templates_profile_id", table_name="pricing_templates")
-    op.drop_table("pricing_templates")
+    pass
