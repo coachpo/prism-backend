@@ -1,9 +1,55 @@
-from tests.smoke_defect_regressions.test_proxy import TestDEF001_LogsSurviveFailoverRollback, TestDEF002_ModelExtraction, TestDEF003_AuthHeaderPerEndpoint, TestDEF005_GeminiPathModelRewrite, TestDEF059_HealthCheckRequestBuilder, TestDEF066_OpenAIHealthCheckFallback, TestDEF060_ProxyProviderPathValidation, TestDEF011_RuntimeEndpointActivityCheck, TestDEF012_RuntimeEndpointToggleFailoverE2E, TestDEF021_StreamingCancellationResilience, TestDEF032_ProxyModelUpdateInvariants
-from tests.smoke_defect_regressions.test_config import TestDEF031_StartupUserSettingsSeed, TestDEF006_ConfigExportImportFieldCoverage, TestDEF023_ConfigImportReferenceValidation, TestDEF024_ConfigImportExportRefRoundtrip, TestDEF026_ConfigImportSystemRuleTimestamp
-from tests.smoke_defect_regressions.test_costing import TestDEF008_CacheCreationPricing, TestDEF013_AnthropicTopLevelCacheReadTokens, TestDEF014_MissingSpecialFieldsYieldZero, TestDEF015_NoUsageBlockYieldsNull, TestDEF016_MissingSpecialPriceFailsClosed, TestDEF017_ExplicitSpecialPricesAreUsed, TestDEF018_SpecialTokensNeverCopiedFromOutput
-from tests.smoke_defect_regressions.test_failover import TestFailoverRecoveryFieldValidation, TestDEF010_EndpointToggleClearsRecoveryState
+from tests.smoke_defect_regressions.test_proxy import (
+    TestDEF001_LogsSurviveFailoverRollback,
+    TestDEF002_ModelExtraction,
+    TestDEF003_AuthHeaderPerEndpoint,
+    TestDEF005_GeminiPathModelRewrite,
+    TestDEF059_HealthCheckRequestBuilder,
+    TestDEF066_OpenAIHealthCheckFallback,
+    TestDEF060_ProxyProviderPathValidation,
+    TestDEF011_RuntimeEndpointActivityCheck,
+    TestDEF012_RuntimeEndpointToggleFailoverE2E,
+    TestDEF021_StreamingCancellationResilience,
+    TestDEF032_ProxyModelUpdateInvariants,
+)
+from tests.smoke_defect_regressions.test_config import (
+    TestDEF031_StartupUserSettingsSeed,
+    TestDEF006_ConfigExportImportFieldCoverage,
+    TestDEF023_ConfigImportReferenceValidation,
+    TestDEF024_ConfigImportExportRefRoundtrip,
+    TestDEF026_ConfigImportSystemRuleTimestamp,
+)
+from tests.smoke_defect_regressions.test_costing import (
+    TestDEF008_CacheCreationPricing,
+    TestDEF013_AnthropicTopLevelCacheReadTokens,
+    TestDEF014_MissingSpecialFieldsYieldZero,
+    TestDEF015_NoUsageBlockYieldsNull,
+    TestDEF016_MissingSpecialPriceFailsClosed,
+    TestDEF017_ExplicitSpecialPricesAreUsed,
+    TestDEF018_SpecialTokensNeverCopiedFromOutput,
+)
+from tests.smoke_defect_regressions.test_failover import (
+    TestFailoverRecoveryFieldValidation,
+    TestDEF010_EndpointToggleClearsRecoveryState,
+)
 from tests.smoke_defect_regressions.test_headers import TestHeaderBlocklist
-from tests.smoke_defect_regressions.test_startup import TestDEF004_FrontendDeleteErrorHandling, TestDEF058_StatsTimezoneFilterNormalization, TestBatchDeleteValidation, TestDEF061_ConnectionResponseEndpointMapping, TestDEF007_EndpointIdentityInLogs, TestEndpointOwnerRoute, TestDEF009_ConnectionDefaultsPersist, TestDEF020_FrontendBuildTypeCheck, TestDEF022_ProfileIsolationRuntimeDependencies, TestDEF065_ModelDetailEndpointEagerLoad, TestDEF025_ModelHealthStatsProfileScope
+from tests.smoke_defect_regressions.test_startup import (
+    TestDEF004_FrontendDeleteErrorHandling,
+    TestDEF058_StatsTimezoneFilterNormalization,
+    TestBatchDeleteValidation,
+    TestDEF061_ConnectionResponseEndpointMapping,
+    TestDEF007_EndpointIdentityInLogs,
+    TestEndpointOwnerRoute,
+    TestDEF009_ConnectionDefaultsPersist,
+    TestDEF020_FrontendBuildTypeCheck,
+    TestDEF022_ProfileIsolationRuntimeDependencies,
+    TestDEF065_ModelDetailEndpointEagerLoad,
+    TestDEF025_ModelHealthStatsProfileScope,
+    TestDEF068_CorsPreflightBypassesAuthMiddleware,
+    TestDEF069_AuthSessionLifecycle,
+    TestDEF070_PasswordResetInvalidatesSessions,
+    TestDEF071_ProxyApiKeyHeaderAcceptance,
+    TestDEF072_SecretSanitization,
+)
 
 __all__ = [
     "TestBatchDeleteValidation",
@@ -40,6 +86,11 @@ __all__ = [
     "TestDEF061_ConnectionResponseEndpointMapping",
     "TestDEF065_ModelDetailEndpointEagerLoad",
     "TestDEF066_OpenAIHealthCheckFallback",
+    "TestDEF068_CorsPreflightBypassesAuthMiddleware",
+    "TestDEF069_AuthSessionLifecycle",
+    "TestDEF070_PasswordResetInvalidatesSessions",
+    "TestDEF071_ProxyApiKeyHeaderAcceptance",
+    "TestDEF072_SecretSanitization",
     "TestEndpointOwnerRoute",
     "TestFailoverRecoveryFieldValidation",
     "TestHeaderBlocklist",

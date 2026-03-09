@@ -299,8 +299,24 @@ app.add_middleware(
 )
 
 
+def build_auth_error_response(
+    request, *, status_code: int, detail: str
+) -> JSONResponse:
+    response = JSONResponse(status_code=status_code, content={"detail": detail})
+    origin = request.headers.get("origin")
+    allowed_origins = settings.cors_allowed_origins_list
+    if origin and origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
 @app.middleware("http")
 async def authentication_middleware(request, call_next):
+    if request.method.upper() == "OPTIONS":
+        return await call_next(request)
+
     path = request.url.path
     if not (
         path.startswith("/api/")
@@ -331,14 +347,14 @@ async def authentication_middleware(request, call_next):
 
             token = request.cookies.get(settings.auth_cookie_name)
             if not token:
-                return JSONResponse(
-                    status_code=401, content={"detail": "Authentication required"}
+                return build_auth_error_response(
+                    request, status_code=401, detail="Authentication required"
                 )
             try:
                 payload = decode_access_token(token)
             except Exception:
-                return JSONResponse(
-                    status_code=401, content={"detail": "Authentication required"}
+                return build_auth_error_response(
+                    request, status_code=401, detail="Authentication required"
                 )
 
             payload_subject = payload.get("sub")
@@ -347,16 +363,16 @@ async def authentication_middleware(request, call_next):
                 subject_id = int(str(payload_subject))
                 token_version = int(str(payload_token_version))
             except (TypeError, ValueError):
-                return JSONResponse(
-                    status_code=401, content={"detail": "Authentication required"}
+                return build_auth_error_response(
+                    request, status_code=401, detail="Authentication required"
                 )
 
             if (
                 subject_id != auth_settings.id
                 or token_version != auth_settings.token_version
             ):
-                return JSONResponse(
-                    status_code=401, content={"detail": "Authentication required"}
+                return build_auth_error_response(
+                    request, status_code=401, detail="Authentication required"
                 )
 
             request.state.auth_subject = {
@@ -373,13 +389,13 @@ async def authentication_middleware(request, call_next):
             {k.lower(): v for k, v in request.headers.items()}
         )
         if not raw_key:
-            return JSONResponse(
-                status_code=401, content={"detail": "Proxy API key required"}
+            return build_auth_error_response(
+                request, status_code=401, detail="Proxy API key required"
             )
         proxy_key = await verify_proxy_api_key(session, raw_key=raw_key)
         if proxy_key is None:
-            return JSONResponse(
-                status_code=401, content={"detail": "Invalid proxy API key"}
+            return build_auth_error_response(
+                request, status_code=401, detail="Invalid proxy API key"
             )
         proxy_key.last_used_ip = request.client.host if request.client else None
         request.state.proxy_api_key_id = proxy_key.id

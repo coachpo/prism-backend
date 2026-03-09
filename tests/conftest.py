@@ -45,6 +45,7 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     container.start()
     sync_url = container.get_connection_url()
     async_url = _to_asyncpg_url(sync_url)
+    os.environ["APP_ENV"] = "test"
     os.environ["DATABASE_URL"] = async_url
     _run_alembic_upgrade(async_url)
 
