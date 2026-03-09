@@ -2,7 +2,7 @@ import asyncio
 import logging
 from typing import Annotated, AsyncGenerator
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,7 +33,7 @@ async def _get_non_deleted_profile(
     db: AsyncSession,
     *,
     profile_id: int,
- ) -> Profile | None:
+) -> Profile | None:
     result = await db.execute(
         select(Profile)
         .where(Profile.id == profile_id, Profile.deleted_at.is_(None))
@@ -52,7 +52,7 @@ async def get_active_profile(
 async def get_effective_profile(
     db: Annotated[AsyncSession, Depends(get_db)],
     x_profile_id: Annotated[str | None, Header(alias=PROFILE_ID_HEADER)] = None,
- ) -> Profile:
+) -> Profile:
     if x_profile_id is None:
         raise HTTPException(
             status_code=400, detail=f"{PROFILE_ID_HEADER} header is required"
@@ -77,11 +77,18 @@ async def get_effective_profile(
 
 async def get_active_profile_id(
     profile: Annotated[Profile, Depends(get_active_profile)],
- ) -> int:
+) -> int:
     return profile.id
 
 
 async def get_effective_profile_id(
     profile: Annotated[Profile, Depends(get_effective_profile)],
- ) -> int:
+) -> int:
     return profile.id
+
+
+async def get_request_auth_subject(request: Request) -> dict[str, object]:
+    auth_subject = getattr(request.state, "auth_subject", None)
+    if not isinstance(auth_subject, dict):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return auth_subject

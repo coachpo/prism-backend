@@ -5,6 +5,7 @@ from typing import AsyncGenerator
 
 import httpx
 
+from app.core.crypto import decrypt_secret
 from app.models.models import Connection, Endpoint, HeaderBlocklistRule
 
 logger = logging.getLogger(__name__)
@@ -137,7 +138,7 @@ def build_upstream_headers(
     if config is None:
         raise ValueError(f"Unsupported auth_type: {auth_key}")
     endpoint_obj = endpoint or connection
-    api_key = getattr(endpoint_obj, "api_key", None)
+    api_key = decrypt_secret(getattr(endpoint_obj, "api_key", None))
     custom_headers = getattr(connection, "custom_headers", None)
 
     proxy_controlled_headers = {

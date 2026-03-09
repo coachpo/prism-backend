@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # ruff: noqa: F821,F401
 from datetime import datetime
 
@@ -13,6 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.crypto import decrypt_secret, mask_secret
 from app.core.database import Base
 from app.core.time import utc_now
 
@@ -96,6 +99,14 @@ class Endpoint(Base):
     connections: Mapped[list["Connection"]] = relationship(
         back_populates="endpoint_rel"
     )
+
+    @property
+    def has_api_key(self) -> bool:
+        return bool(decrypt_secret(self.api_key))
+
+    @property
+    def masked_api_key(self) -> str | None:
+        return mask_secret(self.api_key)
 
 
 class PricingTemplate(Base):
@@ -210,4 +221,4 @@ class Connection(Base):
     def api_key(self) -> str | None:
         if self.endpoint_rel is None:
             return None
-        return self.endpoint_rel.api_key
+        return decrypt_secret(self.endpoint_rel.api_key)

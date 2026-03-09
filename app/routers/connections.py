@@ -9,6 +9,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.crypto import encrypt_secret
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import (
@@ -199,6 +200,7 @@ async def _ensure_unique_endpoint_name(
             detail=f"Endpoint name '{endpoint_name}' already exists",
         )
 
+
 async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
     result = await db.execute(
         select(func.max(Endpoint.position)).where(Endpoint.profile_id == profile_id)
@@ -213,7 +215,6 @@ async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
     await db.execute(
         select(Profile.id).where(Profile.id == profile_id).with_for_update()
     )
-
 
 
 async def _create_endpoint_from_inline(
@@ -246,7 +247,7 @@ async def _create_endpoint_from_inline(
         profile_id=profile_id,
         name=clean_name,
         base_url=normalized_url,
-        api_key=api_key,
+        api_key=encrypt_secret(api_key),
         position=await _get_next_endpoint_position(db, profile_id=profile_id),
     )
     db.add(endpoint)
@@ -351,7 +352,7 @@ def _normalize_connection_priorities(connections: list[Connection]) -> None:
 
 @router.get(
     "/api/models/{model_config_id}/connections", response_model=list[ConnectionResponse]
- )
+)
 async def list_connections(
     model_config_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -373,7 +374,7 @@ async def list_connections(
     "/api/models/{model_config_id}/connections",
     response_model=ConnectionResponse,
     status_code=201,
- )
+)
 async def create_connection(
     model_config_id: int,
     body: ConnectionCreate,
@@ -584,7 +585,7 @@ async def move_connection_priority(
 @router.put(
     "/api/connections/{connection_id}/pricing-template",
     response_model=ConnectionResponse,
- )
+)
 async def set_connection_pricing_template(
     connection_id: int,
     body: ConnectionPricingTemplateUpdate,

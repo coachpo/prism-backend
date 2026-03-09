@@ -8,6 +8,7 @@ from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.crypto import encrypt_secret
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import (
@@ -143,7 +144,7 @@ async def export_config(
                 endpoint_id=endpoint.id,
                 name=endpoint.name,
                 base_url=endpoint.base_url,
-                api_key=endpoint.api_key,
+                api_key="",
                 position=endpoint.position,
             )
         )
@@ -556,7 +557,7 @@ async def import_config(
             profile_id=profile_id,
             name=endpoint_data.name.strip(),
             base_url=normalized_url,
-            api_key=endpoint_data.api_key,
+            api_key=encrypt_secret(endpoint_data.api_key),
             position=normalized_position,
         )
         db.add(endpoint)

@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint, Profile
@@ -109,7 +110,7 @@ async def create_endpoint(
         profile_id=profile_id,
         name=endpoint_name,
         base_url=normalized_url,
-        api_key=body.api_key,
+        api_key=encrypt_secret(body.api_key),
         position=await _get_next_endpoint_position(db, profile_id=profile_id),
     )
     db.add(endpoint)
@@ -210,8 +211,14 @@ async def update_endpoint(
     clear_dependent_recovery_state = False
     if "base_url" in update_data and update_data["base_url"] != endpoint.base_url:
         clear_dependent_recovery_state = True
-    if "api_key" in update_data and update_data["api_key"] != endpoint.api_key:
-        clear_dependent_recovery_state = True
+    if "api_key" in update_data:
+        incoming_api_key = update_data["api_key"]
+        if incoming_api_key:
+            if incoming_api_key != decrypt_secret(endpoint.api_key):
+                clear_dependent_recovery_state = True
+            update_data["api_key"] = encrypt_secret(incoming_api_key)
+        else:
+            update_data.pop("api_key")
 
     for key, value in update_data.items():
         setattr(endpoint, key, value)

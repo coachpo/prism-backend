@@ -2,7 +2,14 @@ import re
 from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from typing import Literal
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 import json
 
 _HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
@@ -106,7 +113,8 @@ class EndpointResponse(BaseModel):
     profile_id: int
     name: str
     base_url: str
-    api_key: str
+    has_api_key: bool = False
+    masked_api_key: str | None = None
     position: int
     created_at: datetime
     updated_at: datetime
@@ -118,6 +126,7 @@ class EndpointPositionMoveRequest(BaseModel):
 
 class ConnectionPriorityMoveRequest(BaseModel):
     to_index: int = Field(ge=0)
+
 
 # --- Pricing Template + Connection Schemas ---
 
@@ -351,7 +360,9 @@ class ConnectionResponse(BaseModel):
     profile_id: int
     model_config_id: int
     endpoint_id: int
-    endpoint: EndpointResponse | None = Field(default=None, validation_alias=AliasChoices("endpoint", "endpoint_rel"))
+    endpoint: EndpointResponse | None = Field(
+        default=None, validation_alias=AliasChoices("endpoint", "endpoint_rel")
+    )
     is_active: bool
     priority: int
     name: str | None
@@ -376,6 +387,7 @@ class ConnectionResponse(BaseModel):
         if isinstance(v, dict):
             return v
         return json.loads(v)
+
 
 class HealthCheckResponse(BaseModel):
     connection_id: int
