@@ -37,6 +37,24 @@ PROXY_KEY_LIMIT = 10
 logger = logging.getLogger(__name__)
 
 
+def _send_smtp_message(*, message: EmailMessage, recipient: str) -> None:
+    settings = get_settings()
+    smtp_username = settings.smtp_username
+    smtp_password = settings.smtp_password
+    try:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
+            if settings.smtp_use_tls:
+                smtp.starttls()
+            if smtp_username and smtp_password:
+                smtp.login(smtp_username, smtp_password)
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException) as exc:
+        logger.warning("SMTP delivery failed for %s: %s", recipient, exc)
+        raise HTTPException(
+            status_code=503, detail="Email service temporarily unavailable"
+        ) from exc
+
+
 async def get_or_create_app_auth_settings(db: AsyncSession) -> AppAuthSettings:
     settings_row = (
         await db.execute(
@@ -411,14 +429,7 @@ def send_password_reset_email(*, recipient: str, otp_code: str) -> None:
     )
     if settings.log_level.lower() == "debug":
         logger.debug("Prism password reset OTP for %s: %s", recipient, otp_code)
-    smtp_username = settings.smtp_username
-    smtp_password = settings.smtp_password
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
-        if settings.smtp_use_tls:
-            smtp.starttls()
-        if smtp_username and smtp_password:
-            smtp.login(smtp_username, smtp_password)
-        smtp.send_message(message)
+    _send_smtp_message(message=message, recipient=recipient)
 
 
 def send_email_verification_otp(*, recipient: str, otp_code: str) -> None:
@@ -439,14 +450,7 @@ def send_email_verification_otp(*, recipient: str, otp_code: str) -> None:
     )
     if settings.log_level.lower() == "debug":
         logger.debug("Prism email verification OTP for %s: %s", recipient, otp_code)
-    smtp_username = settings.smtp_username
-    smtp_password = settings.smtp_password
-    with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as smtp:
-        if settings.smtp_use_tls:
-            smtp.starttls()
-        if smtp_username and smtp_password:
-            smtp.login(smtp_username, smtp_password)
-        smtp.send_message(message)
+    _send_smtp_message(message=message, recipient=recipient)
 
 
 async def consume_password_reset_challenge(

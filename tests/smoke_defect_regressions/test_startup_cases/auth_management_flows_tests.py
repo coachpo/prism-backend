@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import socket
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, func, select
 
@@ -11,8 +13,19 @@ from app.core.crypto import hash_password
 from app.core.database import AsyncSessionLocal, get_engine
 from app.core.time import utc_now
 from app.main import app
-from app.models.models import PasswordResetChallenge, ProxyApiKey, RefreshToken
-from app.services.auth_service import get_or_create_app_auth_settings
+from app.models.models import (
+    Connection,
+    Endpoint,
+    ModelConfig,
+    PasswordResetChallenge,
+    Provider,
+    ProxyApiKey,
+    RefreshToken,
+)
+from app.services.auth_service import (
+    get_or_create_app_auth_settings,
+    send_password_reset_email,
+)
 from app.services.profile_invariants import ensure_profile_invariants
 
 
@@ -326,3 +339,259 @@ class TestDEF072_SecretSanitization:
                 assert export_endpoint["api_key"] == ""
         finally:
             await _cleanup_auth_state()
+
+    def test_connection_response_serializes_unreadable_endpoint_secret(self):
+        from app.schemas.schemas import ConnectionResponse
+
+        now = utc_now()
+        endpoint = Endpoint(
+            id=31,
+            profile_id=1,
+            name="broken-secret-endpoint",
+            base_url="https://example.com/v1",
+            api_key="enc:not-a-valid-token",
+            position=0,
+            created_at=now,
+            updated_at=now,
+        )
+        connection = Connection(
+            id=41,
+            profile_id=1,
+            model_config_id=11,
+            endpoint_id=31,
+            endpoint_rel=endpoint,
+            is_active=True,
+            priority=0,
+            name="primary",
+            auth_type=None,
+            custom_headers=None,
+            pricing_template_id=None,
+            pricing_template_rel=None,
+            health_status="unknown",
+            health_detail=None,
+            last_health_check=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        response = ConnectionResponse.model_validate(connection, from_attributes=True)
+
+        assert response.endpoint is not None
+        assert response.endpoint.has_api_key is True
+        assert response.endpoint.masked_api_key == "********"
+
+    @pytest.mark.asyncio
+    async def test_list_connections_route_serializes_unreadable_endpoint_secret(self):
+        profile_id = await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        suffix = uuid4().hex[:8]
+
+        try:
+            async with AsyncSessionLocal() as session:
+                provider = (
+                    await session.execute(
+                        select(Provider)
+                        .where(Provider.provider_type == "openai")
+                        .order_by(Provider.id.asc())
+                        .limit(1)
+                    )
+                ).scalar_one_or_none()
+                if provider is None:
+                    provider = Provider(
+                        name=f"DEF072 OpenAI {suffix}",
+                        provider_type="openai",
+                    )
+                    session.add(provider)
+                    await session.flush()
+
+                model = ModelConfig(
+                    profile_id=profile_id,
+                    provider_id=provider.id,
+                    model_id=f"def072-model-{suffix}",
+                    model_type="native",
+                    lb_strategy="single",
+                    failover_recovery_enabled=True,
+                    failover_recovery_cooldown_seconds=60,
+                    is_enabled=True,
+                )
+                session.add(model)
+                await session.flush()
+
+                endpoint = Endpoint(
+                    profile_id=profile_id,
+                    name=f"DEF072 broken secret {suffix}",
+                    base_url="https://example.com/v1",
+                    api_key="enc:not-a-valid-token",
+                    position=0,
+                )
+                session.add(endpoint)
+                await session.flush()
+
+                connection = Connection(
+                    profile_id=profile_id,
+                    model_config_id=model.id,
+                    endpoint_id=endpoint.id,
+                    is_active=True,
+                    priority=0,
+                    name=f"DEF072 connection {suffix}",
+                )
+                session.add(connection)
+                await session.commit()
+
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+                response = await client.get(
+                    f"/api/models/{model.id}/connections",
+                    headers={"X-Profile-Id": str(profile_id)},
+                )
+
+            assert response.status_code == 200
+            payload = response.json()
+            assert len(payload) == 1
+            assert payload[0]["endpoint"]["has_api_key"] is True
+            assert payload[0]["endpoint"]["masked_api_key"] == "********"
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_endpoint_update_recovers_from_unreadable_stored_secret(self):
+        profile_id = await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        endpoint_name = f"DEF072 recovery endpoint {uuid4().hex[:8]}"
+        profile_headers = {"X-Profile-Id": str(profile_id)}
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                create_response = await client.post(
+                    "/api/endpoints",
+                    headers=profile_headers,
+                    json={
+                        "name": endpoint_name,
+                        "base_url": "https://example.com/v1",
+                        "api_key": "sk-initial-secret",
+                    },
+                )
+                assert create_response.status_code == 201
+                endpoint_id = create_response.json()["id"]
+
+                async with AsyncSessionLocal() as session:
+                    endpoint = await session.get(Endpoint, endpoint_id)
+                    assert endpoint is not None
+                    endpoint.api_key = "enc:not-a-valid-token"
+                    await session.commit()
+
+                update_response = await client.put(
+                    f"/api/endpoints/{endpoint_id}",
+                    headers=profile_headers,
+                    json={"api_key": "sk-recovered-secret"},
+                )
+
+                assert update_response.status_code == 200
+                updated = update_response.json()
+                assert updated["has_api_key"] is True
+                assert updated["masked_api_key"]
+                assert "sk-recovered-secret" not in updated["masked_api_key"]
+        finally:
+            await _cleanup_auth_state()
+
+
+class TestDEF073_AuthEmailDeliveryFailures:
+    @pytest.mark.asyncio
+    async def test_password_reset_request_still_succeeds_when_email_send_raises_503(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+
+        def fail_password_reset_email(*, recipient: str, otp_code: str) -> None:
+            raise HTTPException(
+                status_code=503, detail="Email service temporarily unavailable"
+            )
+
+        monkeypatch.setattr(
+            "app.routers.auth.send_password_reset_email",
+            fail_password_reset_email,
+        )
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                response = await client.post(
+                    "/api/auth/password-reset/request",
+                    json={"username_or_email": TEST_USERNAME},
+                )
+
+            assert response.status_code == 200
+            assert response.json() == {"success": True}
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_email_verification_request_returns_503_when_smtp_lookup_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        settings = get_settings()
+        original_smtp_host = settings.smtp_host
+        original_sender_email = settings.smtp_sender_email
+        settings.smtp_host = "smtp.example.invalid"
+        settings.smtp_sender_email = "prism@example.com"
+
+        def fail_smtp(*args, **kwargs):
+            raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+        monkeypatch.setattr("app.services.auth_service.smtplib.SMTP", fail_smtp)
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+                response = await client.post(
+                    "/api/settings/auth/email-verification/request",
+                    json={"email": "new-admin@example.com"},
+                )
+
+            assert response.status_code == 503
+            assert response.json() == {
+                "detail": "Email service temporarily unavailable"
+            }
+        finally:
+            settings.smtp_host = original_smtp_host
+            settings.smtp_sender_email = original_sender_email
+            await _cleanup_auth_state()
+
+    def test_password_reset_email_raises_503_when_smtp_lookup_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        settings = get_settings()
+        original_smtp_host = settings.smtp_host
+        original_sender_email = settings.smtp_sender_email
+        settings.smtp_host = "smtp.example.invalid"
+        settings.smtp_sender_email = "prism@example.com"
+
+        def fail_smtp(*args, **kwargs):
+            raise socket.gaierror(8, "nodename nor servname provided, or not known")
+
+        monkeypatch.setattr("app.services.auth_service.smtplib.SMTP", fail_smtp)
+
+        try:
+            with pytest.raises(HTTPException) as exc_info:
+                send_password_reset_email(
+                    recipient=TEST_EMAIL,
+                    otp_code="123456",
+                )
+
+            assert exc_info.value.status_code == 503
+            assert exc_info.value.detail == "Email service temporarily unavailable"
+        finally:
+            settings.smtp_host = original_smtp_host
+            settings.smtp_sender_email = original_sender_email

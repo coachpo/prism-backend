@@ -11,6 +11,7 @@ from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import Connection, Endpoint, Profile
 from app.schemas.schemas import (
     ConnectionDropdownResponse,
+    ConnectionDropdownItem,
     EndpointCreate,
     EndpointPositionMoveRequest,
     EndpointResponse,
@@ -56,7 +57,7 @@ async def _list_ordered_endpoints(
         .where(Endpoint.profile_id == profile_id)
         .order_by(Endpoint.position.asc(), Endpoint.id.asc())
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
@@ -167,8 +168,10 @@ async def list_all_connections(
         .where(Connection.profile_id == profile_id)
         .order_by(Connection.id.asc())
     )
-    connections = result.scalars().all()
-    return ConnectionDropdownResponse(items=connections)
+    connections = list(result.scalars().all())
+    return ConnectionDropdownResponse(
+        items=[ConnectionDropdownItem.model_validate(item) for item in connections]
+    )
 
 
 @router.put("/api/endpoints/{endpoint_id}", response_model=EndpointResponse)
@@ -214,7 +217,11 @@ async def update_endpoint(
     if "api_key" in update_data:
         incoming_api_key = update_data["api_key"]
         if incoming_api_key:
-            if incoming_api_key != decrypt_secret(endpoint.api_key):
+            try:
+                existing_api_key = decrypt_secret(endpoint.api_key)
+            except ValueError:
+                existing_api_key = None
+            if incoming_api_key != existing_api_key:
                 clear_dependent_recovery_state = True
             update_data["api_key"] = encrypt_secret(incoming_api_key)
         else:

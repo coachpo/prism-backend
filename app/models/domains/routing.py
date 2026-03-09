@@ -20,6 +20,9 @@ from app.core.database import Base
 from app.core.time import utc_now
 
 
+_UNREADABLE_SECRET_MASK = "********"
+
+
 class ModelConfig(Base):
     __tablename__ = "model_configs"
     __table_args__ = (
@@ -102,11 +105,21 @@ class Endpoint(Base):
 
     @property
     def has_api_key(self) -> bool:
-        return bool(decrypt_secret(self.api_key))
+        if not self.api_key.strip():
+            return False
+        try:
+            return bool(decrypt_secret(self.api_key))
+        except ValueError:
+            return True
 
     @property
     def masked_api_key(self) -> str | None:
-        return mask_secret(self.api_key)
+        if not self.api_key.strip():
+            return None
+        try:
+            return mask_secret(self.api_key)
+        except ValueError:
+            return _UNREADABLE_SECRET_MASK
 
 
 class PricingTemplate(Base):
@@ -221,4 +234,7 @@ class Connection(Base):
     def api_key(self) -> str | None:
         if self.endpoint_rel is None:
             return None
-        return decrypt_secret(self.endpoint_rel.api_key)
+        try:
+            return decrypt_secret(self.endpoint_rel.api_key)
+        except ValueError:
+            return None
