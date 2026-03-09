@@ -18,9 +18,15 @@ tests/
 - Container lifecycle and migrated DB setup: `conftest.py`
 - DEF regression exports: `test_smoke_defect_regressions.py`
 - Profile-isolation exports: `test_multi_profile_isolation.py`
-- Proxy/failover regressions: `smoke_defect_regressions/test_proxy_cases/`
+- Proxy/failover regressions: `smoke_defect_regressions/`, `smoke_defect_regressions/test_proxy_cases/`
 - Config/costing/startup regressions: `smoke_defect_regressions/test_config_cases/`, `smoke_defect_regressions/test_costing_cases/`, `smoke_defect_regressions/test_startup_cases/`
-- Profile isolation details: `multi_profile_isolation/`
+- Auth session, password reset, secret handling, and proxy-key cases: `smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`
+- Profile isolation details: `multi_profile_isolation/`, `multi_profile_isolation/AGENTS.md`
+
+## CHILD DOCS
+
+- `smoke_defect_regressions/AGENTS.md`: defect-regression domain map and aggregator expectations.
+- `multi_profile_isolation/AGENTS.md`: selected-vs-active profile isolation test map.
 
 ## COMMANDS
 
@@ -36,6 +42,7 @@ tests/
 - `conftest.py` starts `postgres:16-alpine`, converts the sync URL to `asyncpg`, and applies Alembic migrations before tests run.
 - Smoke regressions use `TestDEF###_*` naming and are grouped by semantic domain, then re-exported through aggregator files.
 - Multi-profile tests group by concern (`lifecycle`, `scoping`, `runtime`, `observability`, `config import/export`) and re-export through `test_multi_profile_isolation.py`.
+- Startup smoke cases now also cover auth middleware, session lifecycle, password reset, proxy API key acceptance, and secret sanitization.
 - Aggregator files are part of the suite shape; when you add a new case, update the relevant aggregator.
 
 ## ANTI-PATTERNS

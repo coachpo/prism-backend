@@ -49,6 +49,7 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF070_PasswordResetInvalidatesSessions,
     TestDEF071_ProxyApiKeyHeaderAcceptance,
     TestDEF072_SecretSanitization,
+    TestDEF073_AuthEmailDeliveryFailures,
 )
 
 __all__ = [
@@ -91,6 +92,7 @@ __all__ = [
     "TestDEF070_PasswordResetInvalidatesSessions",
     "TestDEF071_ProxyApiKeyHeaderAcceptance",
     "TestDEF072_SecretSanitization",
+    "TestDEF073_AuthEmailDeliveryFailures",
     "TestEndpointOwnerRoute",
     "TestFailoverRecoveryFieldValidation",
     "TestHeaderBlocklist",
