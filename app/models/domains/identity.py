@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 # ruff: noqa: F821,F401
 from datetime import datetime
 
@@ -20,6 +22,21 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.core.time import utc_now
+
+if TYPE_CHECKING:
+    from app.models.domains.observability import (
+        AuditLog,
+        EndpointFxRateSetting,
+        HeaderBlocklistRule,
+        RequestLog,
+        UserSetting,
+    )
+    from app.models.domains.routing import (
+        Connection,
+        Endpoint,
+        ModelConfig,
+        PricingTemplate,
+    )
 
 
 class Profile(Base):
@@ -163,6 +180,9 @@ class RefreshToken(Base):
         index=True,
     )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    session_duration: Mapped[str] = mapped_column(
+        String(20), default="7_days", nullable=False
+    )
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

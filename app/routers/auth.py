@@ -1,10 +1,12 @@
 import asyncio
 import logging
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import RefreshSessionDuration, get_refresh_cookie_max_age
 from app.dependencies import get_db, get_request_auth_subject
 from app.schemas.schemas import (
     AuthStatusResponse,
@@ -31,11 +33,23 @@ logger = logging.getLogger(__name__)
 
 
 def _set_auth_cookies(
-    response: Response, *, access_token: str, refresh_token: str
+    response: Response,
+    *,
+    access_token: str,
+    refresh_token: str,
+    refresh_expires_at: datetime,
+    session_duration: RefreshSessionDuration,
 ) -> None:
     settings = get_settings()
-    max_age_access = settings.auth_access_token_ttl_seconds
-    max_age_refresh = settings.auth_refresh_token_ttl_seconds
+    max_age_access = (
+        settings.auth_access_token_ttl_seconds
+        if session_duration != "session"
+        else None
+    )
+    max_age_refresh = get_refresh_cookie_max_age(
+        session_duration=session_duration,
+        expires_at=refresh_expires_at,
+    )
     response.set_cookie(
         settings.auth_cookie_name,
         access_token,
@@ -75,14 +89,27 @@ async def login(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    settings_row, access_token, refresh_token = await authenticate_user(
+    (
+        settings_row,
+        access_token,
+        refresh_token,
+        refresh_expires_at,
+        session_duration,
+    ) = await authenticate_user(
         db,
         username=body.username.strip(),
         password=body.password,
+        session_duration=body.session_duration,
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
-    _set_auth_cookies(response, access_token=access_token, refresh_token=refresh_token)
+    _set_auth_cookies(
+        response,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        refresh_expires_at=refresh_expires_at,
+        session_duration=session_duration,
+    )
     return SessionResponse(
         authenticated=True,
         auth_enabled=settings_row.auth_enabled,
@@ -117,7 +144,13 @@ async def refresh_session(
         _clear_auth_cookies(response)
         return SessionResponse(authenticated=False, auth_enabled=True, username=None)
     try:
-        settings_row, access_token, new_refresh_token = await rotate_refresh_token(
+        (
+            settings_row,
+            access_token,
+            new_refresh_token,
+            refresh_expires_at,
+            session_duration,
+        ) = await rotate_refresh_token(
             db,
             raw_refresh_token=refresh_cookie,
             user_agent=request.headers.get("user-agent"),
@@ -129,7 +162,11 @@ async def refresh_session(
         _clear_auth_cookies(response)
         return SessionResponse(authenticated=False, auth_enabled=True, username=None)
     _set_auth_cookies(
-        response, access_token=access_token, refresh_token=new_refresh_token
+        response,
+        access_token=access_token,
+        refresh_token=new_refresh_token,
+        refresh_expires_at=refresh_expires_at,
+        session_duration=session_duration,
     )
     return SessionResponse(
         authenticated=True,

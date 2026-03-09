@@ -12,6 +12,8 @@ from app.core.crypto import hash_opaque_token
 
 PROXY_API_KEY_PREFIX = "pm-"
 PROXY_API_KEY_LOOKUP_LENGTH = 8
+REFRESH_SESSION_DURATION_VALUES = ("session", "7_days", "30_days")
+RefreshSessionDuration = Literal["session", "7_days", "30_days"]
 
 
 def utc_now() -> datetime:
@@ -46,11 +48,38 @@ def decode_access_token(token: str) -> dict[str, object]:
     return payload
 
 
-def build_refresh_token_record() -> tuple[str, str, datetime]:
-    settings = get_settings()
+def build_refresh_token_record(*, expires_at: datetime) -> tuple[str, str, datetime]:
     raw_token = secrets.token_urlsafe(48)
-    expires_at = utc_now() + timedelta(seconds=settings.auth_refresh_token_ttl_seconds)
     return raw_token, hash_opaque_token(raw_token), expires_at
+
+
+def get_refresh_token_expiry(*, session_duration: RefreshSessionDuration) -> datetime:
+    now = utc_now()
+    if session_duration == "session":
+        settings = get_settings()
+        return now + timedelta(seconds=settings.auth_refresh_token_ttl_seconds)
+    if session_duration == "7_days":
+        return now + timedelta(days=7)
+    return now + timedelta(days=30)
+
+
+def get_refresh_cookie_max_age(
+    *, session_duration: RefreshSessionDuration, expires_at: datetime
+) -> int | None:
+    if session_duration == "session":
+        return None
+    remaining_seconds = int((expires_at - utc_now()).total_seconds())
+    return max(0, remaining_seconds)
+
+
+def normalize_refresh_session_duration(session_duration: str) -> RefreshSessionDuration:
+    if session_duration == "session":
+        return "session"
+    if session_duration == "7_days":
+        return "7_days"
+    if session_duration == "30_days":
+        return "30_days"
+    raise ValueError("Invalid refresh session duration")
 
 
 def build_proxy_api_key(prefix: str = PROXY_API_KEY_PREFIX) -> tuple[str, str, str]:

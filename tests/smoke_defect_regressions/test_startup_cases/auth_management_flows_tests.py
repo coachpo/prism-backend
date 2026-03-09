@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from http.cookies import SimpleCookie
 import socket
 from uuid import uuid4
 
@@ -10,6 +11,7 @@ from sqlalchemy import delete, func, select
 
 from app.core.config import get_settings
 from app.core.crypto import hash_password
+from app.core.crypto import hash_opaque_token
 from app.core.database import AsyncSessionLocal, get_engine
 from app.core.time import utc_now
 from app.main import app
@@ -33,6 +35,18 @@ TEST_USERNAME = "admin"
 TEST_PASSWORD = "11111111"
 UPDATED_PASSWORD = "22222222"
 TEST_EMAIL = "admin@example.com"
+
+
+def _get_cookie_max_age(headers: list[str], cookie_name: str) -> int | None:
+    for header in headers:
+        cookie = SimpleCookie()
+        cookie.load(header)
+        morsel = cookie.get(cookie_name)
+        if morsel is None:
+            continue
+        max_age = morsel["max-age"]
+        return int(max_age) if max_age else None
+    return None
 
 
 async def _reset_auth_state() -> int:
@@ -80,11 +94,17 @@ async def _cleanup_auth_state() -> None:
 
 
 async def _login(
-    client: AsyncClient, password: str = TEST_PASSWORD
+    client: AsyncClient,
+    password: str = TEST_PASSWORD,
+    session_duration: str = "7_days",
 ) -> tuple[str | None, str | None]:
     response = await client.post(
         "/api/auth/login",
-        json={"username": TEST_USERNAME, "password": password},
+        json={
+            "username": TEST_USERNAME,
+            "password": password,
+            "session_duration": session_duration,
+        },
     )
     assert response.status_code == 200
     assert response.json()["authenticated"] is True
@@ -142,6 +162,226 @@ class TestDEF069_AuthSessionLifecycle:
                     "auth_enabled": True,
                     "username": None,
                 }
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_login_session_duration_controls_cookie_persistence_and_refresh_rotation(
+        self,
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                session_login = await client.post(
+                    "/api/auth/login",
+                    json={
+                        "username": TEST_USERNAME,
+                        "password": TEST_PASSWORD,
+                        "session_duration": "session",
+                    },
+                )
+                assert session_login.status_code == 200
+                session_set_cookie_headers = session_login.headers.get_list(
+                    "set-cookie"
+                )
+                assert (
+                    _get_cookie_max_age(
+                        session_set_cookie_headers,
+                        get_settings().auth_refresh_cookie_name,
+                    )
+                    is None
+                )
+
+                session_refresh = await client.post("/api/auth/refresh")
+                assert session_refresh.status_code == 200
+                rotated_session_headers = session_refresh.headers.get_list("set-cookie")
+                assert (
+                    _get_cookie_max_age(
+                        rotated_session_headers,
+                        get_settings().auth_refresh_cookie_name,
+                    )
+                    is None
+                )
+
+                await client.post("/api/auth/logout")
+
+                default_login = await client.post(
+                    "/api/auth/login",
+                    json={
+                        "username": TEST_USERNAME,
+                        "password": TEST_PASSWORD,
+                    },
+                )
+                assert default_login.status_code == 200
+                default_headers = default_login.headers.get_list("set-cookie")
+                default_max_age = _get_cookie_max_age(
+                    default_headers,
+                    get_settings().auth_refresh_cookie_name,
+                )
+                assert default_max_age is not None
+                assert 604_700 <= default_max_age <= 604_800
+
+                default_refresh = await client.post("/api/auth/refresh")
+                assert default_refresh.status_code == 200
+
+                await client.post("/api/auth/logout")
+
+                remembered_login = await client.post(
+                    "/api/auth/login",
+                    json={
+                        "username": TEST_USERNAME,
+                        "password": TEST_PASSWORD,
+                        "session_duration": "30_days",
+                    },
+                )
+                assert remembered_login.status_code == 200
+                remembered_headers = remembered_login.headers.get_list("set-cookie")
+                remembered_max_age = _get_cookie_max_age(
+                    remembered_headers,
+                    get_settings().auth_refresh_cookie_name,
+                )
+                assert remembered_max_age is not None
+                assert 2_591_900 <= remembered_max_age <= 2_592_000
+
+                remembered_refresh = await client.post("/api/auth/refresh")
+                assert remembered_refresh.status_code == 200
+                rotated_remembered_headers = remembered_refresh.headers.get_list(
+                    "set-cookie"
+                )
+                assert any(
+                    get_settings().auth_refresh_cookie_name in header
+                    and "Max-Age=" in header
+                    for header in rotated_remembered_headers
+                )
+
+            async with AsyncSessionLocal() as session:
+                refresh_tokens = list(
+                    (
+                        await session.execute(
+                            select(RefreshToken).order_by(RefreshToken.id.asc())
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                assert refresh_tokens[0].expires_at == refresh_tokens[1].expires_at
+                assert refresh_tokens[2].expires_at == refresh_tokens[3].expires_at
+                assert refresh_tokens[4].expires_at == refresh_tokens[5].expires_at
+                assert [token.session_duration for token in refresh_tokens] == [
+                    "session",
+                    "session",
+                    "7_days",
+                    "7_days",
+                    "30_days",
+                    "30_days",
+                ]
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_revoked_token_replay_revokes_only_matching_refresh_family(self):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as family_client, AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as other_client:
+                _, stale_family_refresh_cookie = await _login(family_client)
+                assert stale_family_refresh_cookie
+
+                family_refresh = await family_client.post("/api/auth/refresh")
+                assert family_refresh.status_code == 200
+                active_family_refresh_cookie = family_refresh.cookies.get(
+                    get_settings().auth_refresh_cookie_name
+                )
+                assert active_family_refresh_cookie
+                assert active_family_refresh_cookie != stale_family_refresh_cookie
+
+                _, other_refresh_cookie = await _login(other_client)
+                assert other_refresh_cookie
+
+                async with AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as replay_client:
+                    replay_client.cookies.set(
+                        get_settings().auth_refresh_cookie_name,
+                        stale_family_refresh_cookie,
+                    )
+                    replay_response = await replay_client.post("/api/auth/refresh")
+                    assert replay_response.status_code == 200
+                    assert replay_response.json() == {
+                        "authenticated": False,
+                        "auth_enabled": True,
+                        "username": None,
+                    }
+
+                family_client.cookies.set(
+                    get_settings().auth_refresh_cookie_name,
+                    active_family_refresh_cookie,
+                )
+                family_after_replay = await family_client.post("/api/auth/refresh")
+                assert family_after_replay.status_code == 200
+                assert family_after_replay.json() == {
+                    "authenticated": False,
+                    "auth_enabled": True,
+                    "username": None,
+                }
+
+                other_after_replay = await other_client.post("/api/auth/refresh")
+                assert other_after_replay.status_code == 200
+                assert other_after_replay.json()["authenticated"] is True
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_refresh_fails_closed_when_persisted_session_duration_is_invalid(self):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                _, refresh_cookie = await _login(client)
+                assert refresh_cookie
+
+                refresh_hash = hash_opaque_token(refresh_cookie)
+                async with AsyncSessionLocal() as session:
+                    refresh_row = (
+                        await session.execute(
+                            select(RefreshToken)
+                            .where(RefreshToken.token_hash == refresh_hash)
+                            .limit(1)
+                        )
+                    ).scalar_one()
+                    refresh_row.session_duration = "invalid"
+                    await session.commit()
+
+                refresh_response = await client.post("/api/auth/refresh")
+                assert refresh_response.status_code == 200
+                assert refresh_response.json() == {
+                    "authenticated": False,
+                    "auth_enabled": True,
+                    "username": None,
+                }
+
+                async with AsyncSessionLocal() as session:
+                    stored_refresh_row = (
+                        await session.execute(
+                            select(RefreshToken)
+                            .where(RefreshToken.token_hash == refresh_hash)
+                            .limit(1)
+                        )
+                    ).scalar_one()
+                    assert stored_refresh_row.revoked_at is not None
+                    refresh_token_count = await session.scalar(
+                        select(func.count(RefreshToken.id))
+                    )
+                    assert refresh_token_count == 1
         finally:
             await _cleanup_auth_state()
 

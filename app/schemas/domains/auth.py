@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import (
     BaseModel,
@@ -7,6 +8,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+
+LoginSessionDuration = Literal["session", "7_days", "30_days"]
 
 
 class AuthStatusResponse(BaseModel):
@@ -63,6 +67,7 @@ class AuthSettingsUpdate(BaseModel):
 class LoginRequest(BaseModel):
     username: str
     password: str
+    session_duration: LoginSessionDuration = "7_days"
 
 
 class SessionResponse(BaseModel):
