@@ -292,10 +292,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[]
-    if settings.cors_allows_any_origin
-    else settings.cors_allowed_origins_list,
-    allow_origin_regex=".*" if settings.cors_allows_any_origin else None,
+    allow_origins=settings.cors_allowed_origins_list or ["http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=True,
@@ -308,7 +305,7 @@ def build_auth_error_response(
     response = JSONResponse(status_code=status_code, content={"detail": detail})
     origin = request.headers.get("origin")
     allowed_origins = settings.cors_allowed_origins_list
-    if origin and (settings.cors_allows_any_origin or origin in allowed_origins):
+    if origin and origin in allowed_origins:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "info"
     app_env: Literal["development", "test", "production"] = "development"
-    cors_allowed_origins: str = "*"
+    cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     # Timeout settings for upstream LLM requests
     connect_timeout: float = 10.0
     read_timeout: float = 120.0
@@ -48,10 +48,6 @@ class Settings(BaseSettings):
             for origin in self.cors_allowed_origins.split(",")
             if origin.strip()
         ]
-
-    @property
-    def cors_allows_any_origin(self) -> bool:
-        return "*" in self.cors_allowed_origins_list
 
     @property
     def docs_enabled(self) -> bool:
