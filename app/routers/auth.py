@@ -41,10 +41,9 @@ def _set_auth_cookies(
     session_duration: RefreshSessionDuration,
 ) -> None:
     settings = get_settings()
-    max_age_access = (
-        settings.auth_access_token_ttl_seconds
-        if session_duration != "session"
-        else None
+    max_age_access = get_refresh_cookie_max_age(
+        session_duration=session_duration,
+        expires_at=refresh_expires_at,
     )
     max_age_refresh = get_refresh_cookie_max_age(
         session_duration=session_duration,
