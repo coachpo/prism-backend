@@ -419,7 +419,7 @@ async def _handle_proxy(
                                         request_body=_audit_raw_body,
                                         response_status=_log_status_code,
                                         response_headers=_audit_resp_headers,
-                                        response_body=None,
+                                        response_body=payload,
                                         is_stream=True,
                                         duration_ms=_log_elapsed_ms,
                                         capture_bodies=_audit_capture_bodies,

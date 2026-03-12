@@ -132,6 +132,43 @@ class TestDEF007_EndpointIdentityInLogs:
                 capture_bodies=False,
             )
 
+    @pytest.mark.asyncio
+    async def test_record_audit_log_persists_stream_body_when_capture_enabled(self):
+        from app.services.audit_service import record_audit_log
+
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            await record_audit_log(
+                request_log_id=2,
+                profile_id=1,
+                provider_id=1,
+                model_id="gpt-4o-mini",
+                request_method="POST",
+                request_url="https://api.openai.com/v1/responses",
+                request_headers={"authorization": "Bearer sk-test"},
+                request_body=b'{"model":"gpt-4o-mini"}',
+                response_status=200,
+                response_headers={"content-type": "text/event-stream"},
+                response_body=b'data: {"id":"resp_123"}\n\n',
+                is_stream=True,
+                duration_ms=15,
+                capture_bodies=True,
+            )
+
+        mock_session.add.assert_called_once()
+        audit_entry = mock_session.add.call_args[0][0]
+        assert audit_entry.response_body == 'data: {"id":"resp_123"}\n\n'
+
     def test_audit_log_schema_includes_endpoint_fields(self):
         from app.schemas.schemas import AuditLogListItem, AuditLogDetail
 

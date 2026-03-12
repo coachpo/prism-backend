@@ -83,7 +83,7 @@ async def record_audit_log(
                 req_body_str = _truncate_body(
                     request_body.decode("utf-8", errors="replace")
                 )
-            if response_body and not is_stream:
+            if response_body:
                 resp_body_str = _truncate_body(
                     response_body.decode("utf-8", errors="replace")
                 )

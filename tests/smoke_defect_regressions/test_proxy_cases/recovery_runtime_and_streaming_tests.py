@@ -6,13 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
-from app.services.proxy_service import (
-    extract_model_from_body,
-    build_upstream_headers,
-)
-from app.services.stats_service import log_request
 
 class TestDEF062_NonFailover4xxRecoveryState:
     @pytest.mark.asyncio
@@ -143,6 +137,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         finally:
             _recovery_state.pop(state_key, None)
 
+
 class TestDEF011_RuntimeEndpointActivityCheck:
     @pytest.mark.asyncio
     async def test_endpoint_is_active_now_returns_true_for_active_row(self):
@@ -172,16 +167,25 @@ class TestDEF011_RuntimeEndpointActivityCheck:
         is_active = await _endpoint_is_active_now(mock_db, 999)
         assert is_active is False
 
+
 class TestDEF012_RuntimeEndpointToggleFailoverE2E:
     @pytest.mark.asyncio
-    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(self):
+    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(
+        self,
+    ):
         import httpx
         from fastapi import FastAPI
         from sqlalchemy import select, update
         from starlette.requests import Request
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import Connection, Endpoint, ModelConfig, Profile, Provider
+        from app.models.models import (
+            Connection,
+            Endpoint,
+            ModelConfig,
+            Profile,
+            Provider,
+        )
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
             _recovery_state,
@@ -190,6 +194,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
         # Prevent cross-loop pooled asyncpg connections from previous tests.
         await get_engine().dispose()
+
         class DummyHttpClient:
             def __init__(self):
                 self.sent_urls: list[str] = []
@@ -325,9 +330,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 toggle_applied = False
 
                 def build_plan_with_assert(profile_id, model_config, now_mono):
-                    plan = real_build_attempt_plan(
-                        profile_id, model_config, now_mono
-                    )
+                    plan = real_build_attempt_plan(profile_id, model_config, now_mono)
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
                     return plan
 
@@ -382,6 +385,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 assert secondary_row.scalar_one() is True
         finally:
             _recovery_state.clear()
+
 
 class TestDEF021_StreamingCancellationResilience:
     @staticmethod
@@ -517,6 +521,7 @@ class TestDEF021_StreamingCancellationResilience:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
 
         with (
             patch(
@@ -562,6 +567,118 @@ class TestDEF021_StreamingCancellationResilience:
             assert upstream_resp.closed is True
             log_mock.assert_awaited_once()
             audit_mock.assert_awaited_once()
+            audit_call = audit_mock.await_args
+            assert audit_call is not None
+            assert audit_call.kwargs["response_body"] == first
+            assert audit_call.kwargs["capture_bodies"] is True
+            assert "Failed to log streaming request" not in caplog.text
+            assert "Failed to record streaming audit log" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_stream_success_audits_buffered_payload_when_capture_enabled(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        chunk_one = b'data: {"usage":{"prompt_tokens":1,'
+        chunk_two = b'"completion_tokens":1,"total_tokens":2}}\n\n'
+        expected_payload = chunk_one + chunk_two
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield chunk_one
+                yield chunk_two
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy.log_request", AsyncMock(return_value=888)
+            ) as log_mock,
+            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+                profile_id=1,
+            )
+
+            assert response.status_code == 200
+            assert isinstance(response, StreamingResponse)
+
+            stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+            received = [chunk async for chunk in stream]
+
+            await self._wait_for_asyncmock_calls(log_mock)
+            await self._wait_for_asyncmock_calls(audit_mock)
+
+            assert b"".join(received) == expected_payload
+            assert upstream_resp.closed is True
+            log_mock.assert_awaited_once()
+            audit_mock.assert_awaited_once()
+            audit_call = audit_mock.await_args
+            assert audit_call is not None
+            assert audit_call.kwargs["response_body"] == expected_payload
+            assert audit_call.kwargs["capture_bodies"] is True
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
 
@@ -664,4 +781,3 @@ class TestDEF021_StreamingCancellationResilience:
             audit_mock.assert_awaited_once()
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
-

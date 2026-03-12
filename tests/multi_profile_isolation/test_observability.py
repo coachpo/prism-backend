@@ -58,6 +58,7 @@ from app.services.stats_service import (
 )
 from app.services.audit_service import record_audit_log
 
+
 class TestCostingAndSettingsIsolation:
     """FR-008: Costing and Settings Isolation"""
 
@@ -105,6 +106,7 @@ class TestCostingAndSettingsIsolation:
 
         # Both can coexist due to different profile_id
         assert fx1.profile_id != fx2.profile_id
+
 
 class TestObservabilityAttribution:
     """FR-009: Observability and Audit Attribution"""
@@ -175,6 +177,7 @@ class TestObservabilityAttribution:
         mock_session.add.assert_called_once()
         audit_entry = mock_session.add.call_args[0][0]
         assert audit_entry.profile_id == 1
+        assert audit_entry.response_body == '{"choices":[]}'
 
     @pytest.mark.asyncio
     async def test_stats_queries_filter_by_profile(self):
@@ -210,6 +213,7 @@ class TestObservabilityAttribution:
         assert total == 2
         assert all(log.profile_id == 1 for log in items)
 
+
 class TestHeaderBlocklistScoping:
     """Header blocklist rules: system rules are global, user rules are profile-scoped."""
 
@@ -236,4 +240,3 @@ class TestHeaderBlocklistScoping:
         # Check constraint enforces: is_system=false → profile_id IS NOT NULL
         assert user_rule.is_system is False
         assert user_rule.profile_id is not None
-
