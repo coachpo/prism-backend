@@ -28,6 +28,7 @@ if TYPE_CHECKING:
         AuditLog,
         EndpointFxRateSetting,
         HeaderBlocklistRule,
+        LoadbalanceEvent,
         RequestLog,
         UserSetting,
     )
@@ -95,6 +96,9 @@ class Profile(Base):
         back_populates="profile", cascade="all, delete-orphan"
     )
     pricing_templates: Mapped[list["PricingTemplate"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    loadbalance_events: Mapped[list["LoadbalanceEvent"]] = relationship(
         back_populates="profile", cascade="all, delete-orphan"
     )
 

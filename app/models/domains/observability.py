@@ -9,6 +9,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -262,3 +263,45 @@ class AuditLog(Base):
     )
 
     profile: Mapped["Profile"] = relationship(back_populates="audit_logs")
+
+
+class LoadbalanceEvent(Base):
+    __tablename__ = "loadbalance_events"
+    __table_args__ = (
+        Index("idx_loadbalance_events_profile_created", "profile_id", "created_at"),
+        Index("idx_loadbalance_events_connection", "connection_id", "created_at"),
+        Index("idx_loadbalance_events_event_type", "event_type"),
+        CheckConstraint(
+            "event_type IN ('opened', 'extended', 'probe_eligible', 'recovered', 'not_opened')",
+            name="chk_event_type",
+        ),
+        CheckConstraint(
+            "failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR failure_kind IS NULL",
+            name="chk_failure_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    connection_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False)
+    cooldown_seconds: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    blocked_until_mono: Mapped[float | None] = mapped_column(Numeric(20, 6), nullable=True)
+    model_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_id: Mapped[int | None] = mapped_column(
+        ForeignKey("providers.id"), nullable=True
+    )
+    failure_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    backoff_multiplier: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    max_cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+    profile: Mapped["Profile"] = relationship(back_populates="loadbalance_events")
+    provider: Mapped["Provider"] = relationship()

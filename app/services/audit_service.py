@@ -3,7 +3,7 @@ import json
 import logging
 import re
 
-from app.models.models import AuditLog
+from app.models.models import AuditLog, LoadbalanceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -116,3 +116,47 @@ async def record_audit_log(
         logger.debug("Audit logging cancelled")
     except Exception:
         logger.exception("Failed to record audit log")
+
+
+async def record_loadbalance_event(
+    *,
+    profile_id: int,
+    connection_id: int,
+    event_type: str,
+    failure_kind: str | None,
+    consecutive_failures: int,
+    cooldown_seconds: float,
+    blocked_until_mono: float | None,
+    model_id: str | None = None,
+    endpoint_id: int | None = None,
+    provider_id: int | None = None,
+    failure_threshold: int | None = None,
+    backoff_multiplier: float | None = None,
+    max_cooldown_seconds: int | None = None,
+) -> None:
+    """Record loadbalance event asynchronously (fire-and-forget)."""
+    from app.core.database import AsyncSessionLocal
+
+    try:
+        entry = LoadbalanceEvent(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            event_type=event_type,
+            failure_kind=failure_kind,
+            consecutive_failures=consecutive_failures,
+            cooldown_seconds=cooldown_seconds,
+            blocked_until_mono=blocked_until_mono,
+            model_id=model_id,
+            endpoint_id=endpoint_id,
+            provider_id=provider_id,
+            failure_threshold=failure_threshold,
+            backoff_multiplier=backoff_multiplier,
+            max_cooldown_seconds=max_cooldown_seconds,
+        )
+        async with AsyncSessionLocal() as session:
+            session.add(entry)
+            await session.commit()
+    except asyncio.CancelledError:
+        logger.debug("Loadbalance event logging cancelled")
+    except Exception:
+        logger.exception("Failed to record loadbalance event")

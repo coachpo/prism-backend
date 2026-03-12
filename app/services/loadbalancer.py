@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import random
 from typing import Literal, TypedDict
@@ -24,6 +25,20 @@ class RecoveryStateEntry(TypedDict):
 
 _settings = get_settings()
 _recovery_state: dict[tuple[int, int], RecoveryStateEntry] = {}
+
+
+def _record_loadbalance_event(**event_payload: object) -> None:
+    from app.services.audit_service import record_loadbalance_event
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug(
+            "Skipping loadbalance event persistence because no running event loop"
+        )
+        return
+
+    loop.create_task(record_loadbalance_event(**event_payload))
 
 
 async def get_model_config_with_connections(
@@ -148,6 +163,21 @@ def build_attempt_plan(
                 state["last_cooldown_seconds"],
                 state["consecutive_failures"],
             )
+            _record_loadbalance_event(
+                profile_id=profile_id,
+                connection_id=connection.id,
+                event_type="probe_eligible",
+                failure_kind=state["last_failure_kind"],
+                consecutive_failures=state["consecutive_failures"],
+                cooldown_seconds=state["last_cooldown_seconds"],
+                blocked_until_mono=None,
+                model_id=model_config.model_id,
+                endpoint_id=connection.endpoint_id,
+                provider_id=model_config.provider_id,
+                failure_threshold=_settings.failover_failure_threshold,
+                backoff_multiplier=_settings.failover_backoff_multiplier,
+                max_cooldown_seconds=_settings.failover_max_cooldown_seconds,
+            )
 
         attempt_plan.append(connection)
 
@@ -165,7 +195,7 @@ def _compute_base_cooldown(
     base_cooldown_seconds: float,
     consecutive_failures: int,
     failure_kind: FailureKind,
- ) -> float:
+) -> float:
     if failure_kind == "auth_like":
         return float(_settings.failover_auth_error_cooldown_seconds)
 
@@ -196,7 +226,10 @@ def mark_connection_failed(
     base_cooldown_seconds: float,
     now_mono: float,
     failure_kind: FailureKind,
- ) -> None:
+    model_id: str | None = None,
+    endpoint_id: int | None = None,
+    provider_id: int | None = None,
+) -> None:
     key = (profile_id, connection_id)
     previous_state = _recovery_state.get(key)
     previous_blocked_until = (
@@ -228,6 +261,21 @@ def mark_connection_failed(
             failure_kind,
             consecutive_failures,
         )
+        _record_loadbalance_event(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            event_type="not_opened",
+            failure_kind=failure_kind,
+            consecutive_failures=consecutive_failures,
+            cooldown_seconds=0.0,
+            blocked_until_mono=None,
+            model_id=model_id,
+            endpoint_id=endpoint_id,
+            provider_id=provider_id,
+            failure_threshold=_settings.failover_failure_threshold,
+            backoff_multiplier=_settings.failover_backoff_multiplier,
+            max_cooldown_seconds=_settings.failover_max_cooldown_seconds,
+        )
         return
 
     blocked_until = now_mono + cooldown_seconds
@@ -252,9 +300,30 @@ def mark_connection_failed(
         consecutive_failures,
         blocked_until,
     )
+    _record_loadbalance_event(
+        profile_id=profile_id,
+        connection_id=connection_id,
+        event_type=transition,
+        failure_kind=failure_kind,
+        consecutive_failures=consecutive_failures,
+        cooldown_seconds=cooldown_seconds,
+        blocked_until_mono=blocked_until,
+        model_id=model_id,
+        endpoint_id=endpoint_id,
+        provider_id=provider_id,
+        failure_threshold=_settings.failover_failure_threshold,
+        backoff_multiplier=_settings.failover_backoff_multiplier,
+        max_cooldown_seconds=_settings.failover_max_cooldown_seconds,
+    )
 
 
-def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
+def mark_connection_recovered(
+    profile_id: int,
+    connection_id: int,
+    model_id: str | None = None,
+    endpoint_id: int | None = None,
+    provider_id: int | None = None,
+) -> None:
     key = (profile_id, connection_id)
     state = _recovery_state.pop(key, None)
     if state is None:
@@ -267,4 +336,19 @@ def mark_connection_recovered(profile_id: int, connection_id: int) -> None:
         state["last_failure_kind"],
         state["last_cooldown_seconds"],
         state["consecutive_failures"],
+    )
+    _record_loadbalance_event(
+        profile_id=profile_id,
+        connection_id=connection_id,
+        event_type="recovered",
+        failure_kind=state["last_failure_kind"],
+        consecutive_failures=state["consecutive_failures"],
+        cooldown_seconds=state["last_cooldown_seconds"],
+        blocked_until_mono=None,
+        model_id=model_id,
+        endpoint_id=endpoint_id,
+        provider_id=provider_id,
+        failure_threshold=_settings.failover_failure_threshold,
+        backoff_multiplier=_settings.failover_backoff_multiplier,
+        max_cooldown_seconds=_settings.failover_max_cooldown_seconds,
     )

@@ -174,7 +174,7 @@ async def _handle_proxy(
             logger.warning("Skipping connection %d because endpoint is missing", ep.id)
             continue
         if not await _endpoint_is_active_now(db, ep.id):
-            mark_connection_recovered(profile_id, ep.id)
+            mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
             logger.info(
                 "Skipping endpoint %d because it is currently disabled",
                 ep.id,
@@ -267,6 +267,9 @@ async def _handle_proxy(
                                 model_config.failover_recovery_cooldown_seconds,
                                 time.monotonic(),
                                 failure_kind,
+                                model_id,
+                                ep.endpoint_id,
+                                provider_id,
                             )
                         continue
 
@@ -314,7 +317,7 @@ async def _handle_proxy(
                     if recovery_active and _is_recovery_success_status(
                         upstream_resp.status_code
                     ):
-                        mark_connection_recovered(profile_id, ep.id)
+                        mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
                     return Response(
                         content=body,
                         status_code=upstream_resp.status_code,
@@ -325,7 +328,7 @@ async def _handle_proxy(
                 if recovery_active and _is_recovery_success_status(
                     upstream_resp.status_code
                 ):
-                    mark_connection_recovered(profile_id, ep.id)
+                    mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
                 _log_model_id = model_id
                 _log_provider_type = provider_type
                 _log_endpoint_id = ep.id
@@ -538,6 +541,9 @@ async def _handle_proxy(
                             model_config.failover_recovery_cooldown_seconds,
                             time.monotonic(),
                             failure_kind,
+                            model_id,
+                            ep.endpoint_id,
+                            provider_id,
                         )
                     continue
 
@@ -591,7 +597,7 @@ async def _handle_proxy(
                 if recovery_active and _is_recovery_success_status(
                     response.status_code
                 ):
-                    mark_connection_recovered(profile_id, ep.id)
+                    mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
                 return Response(
                     content=response.content,
                     status_code=response.status_code,
@@ -646,6 +652,9 @@ async def _handle_proxy(
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
                     failure_kind,
+                    model_id,
+                    ep.endpoint_id,
+                    provider_id,
                 )
             continue
         except httpx.TimeoutException as e:
@@ -696,6 +705,9 @@ async def _handle_proxy(
                     model_config.failover_recovery_cooldown_seconds,
                     time.monotonic(),
                     failure_kind,
+                    model_id,
+                    ep.endpoint_id,
+                    provider_id,
                 )
             continue
 

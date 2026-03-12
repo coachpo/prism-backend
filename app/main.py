@@ -38,6 +38,7 @@ from app.routers import (
     stats,
     config,
     audit,
+    loadbalance,
     settings as settings_router,
     pricing_templates,
 )
@@ -412,6 +413,7 @@ app.include_router(endpoints.router)
 app.include_router(connections.router)
 app.include_router(stats.router)
 app.include_router(audit.router)
+app.include_router(loadbalance.router)
 app.include_router(config.router)
 app.include_router(settings_router.router)
 app.include_router(pricing_templates.router)

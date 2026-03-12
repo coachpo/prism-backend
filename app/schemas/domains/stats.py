@@ -214,3 +214,46 @@ class SpendingReportResponse(BaseModel):
     unpriced_breakdown: dict[str, int]
     report_currency_code: str
     report_currency_symbol: str
+
+
+# --- Loadbalance Event Schemas ---
+
+
+class LoadbalanceEventListItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    profile_id: int
+    connection_id: int
+    event_type: str
+    failure_kind: str | None
+    consecutive_failures: int
+    cooldown_seconds: float
+    blocked_until_mono: float | None
+    model_id: str | None
+    endpoint_id: int | None
+    provider_id: int | None
+    created_at: datetime
+
+
+class LoadbalanceEventDetail(LoadbalanceEventListItem):
+    failure_threshold: int | None
+    backoff_multiplier: float | None
+    max_cooldown_seconds: int | None
+
+
+class LoadbalanceEventListResponse(BaseModel):
+    items: list[LoadbalanceEventListItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class LoadbalanceEventDeleteResponse(BaseModel):
+    deleted_count: int
+
+
+class LoadbalanceStatsResponse(BaseModel):
+    total_events: int
+    events_by_type: dict[str, int]
+    most_failed_connections: list[dict]
