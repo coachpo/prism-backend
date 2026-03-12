@@ -14,6 +14,7 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 
+
 class TestDEF001_LogsSurviveFailoverRollback:
     """DEF-001 (P0): request_logs must persist even when HTTPException(502) is raised."""
 
@@ -78,6 +79,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
         mock_session.add.assert_called_once()
         mock_session.commit.assert_awaited_once()
 
+
 class TestDEF002_ModelExtraction:
     """DEF-002 (P1): routing model must be extracted from request body only."""
 
@@ -96,6 +98,7 @@ class TestDEF002_ModelExtraction:
 
     def test_extract_model_returns_none_for_invalid_json(self):
         assert extract_model_from_body(b"not json") is None
+
 
 class TestDEF003_AuthHeaderPerEndpoint:
     """DEF-003 (P1): auth header must be configurable per-endpoint via auth_type."""
@@ -147,6 +150,7 @@ class TestDEF003_AuthHeaderPerEndpoint:
         assert headers["Authorization"] == "Bearer sk-test"
         assert "x-api-key" not in headers
 
+
 class TestDEF005_GeminiPathModelRewrite:
     """DEF-005 (P0): proxy must rewrite model ID in Gemini-style URL paths."""
 
@@ -190,6 +194,22 @@ class TestDEF005_GeminiPathModelRewrite:
             == "gemini-3-flash"
         )
 
+    def test_extract_model_from_other_gemini_model_scoped_path(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert (
+            _extract_model_from_path("/v1beta/models/gemini-3-flash:countTokens")
+            == "gemini-3-flash"
+        )
+
+    def test_extract_model_ignores_non_beta_gemini_path(self):
+        from app.routers.proxy import _extract_model_from_path
+
+        assert (
+            _extract_model_from_path("/v1/models/gemini-3-flash:generateContent")
+            is None
+        )
+
     def test_resolve_model_prefers_body_then_path(self):
         from app.routers.proxy import _resolve_model_id
 
@@ -215,4 +235,3 @@ class TestDEF005_GeminiPathModelRewrite:
             )
             == "gemini-3-flash"
         )
-

@@ -152,9 +152,11 @@ docker compose up -d postgres
 
 ### Proxy API
 
-- `POST /v1/*` and `POST /v1beta/*` - Catch-all proxy endpoints (OpenAI-compatible request/response shapes)
+- `POST /v1/*` - OpenAI runtime proxy routes
+- `POST /v1/messages*` - Anthropic runtime proxy routes
+- `POST /v1beta/models/*` - Gemini native runtime proxy routes
 
-Both `/v1/*` and `/v1beta/*` requests are forwarded to the appropriate upstream provider based on the `model` field in the request body (or Gemini model path).
+Prism accepts provider-native path families only: OpenAI models on `/v1/*`, Anthropic models on `/v1/messages`, and Gemini models on `/v1beta/models/*`.
 
 ---
 
@@ -201,7 +203,7 @@ Streaming responses use a separate `AsyncSessionLocal()` in the generator's `fin
 Provider-specific auth headers are built in `proxy_service.py`:
 - OpenAI: `Authorization: Bearer {api_key}`
 - Anthropic: `x-api-key: {api_key}`
-- Gemini: `x-goog-api-key: {api_key}`
+- Gemini: `Authorization: Bearer {api_key}`
 
 ### Schema Migrations
 

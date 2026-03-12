@@ -14,11 +14,8 @@ from app.services.proxy_service import extract_model_from_body
 
 logger = logging.getLogger(__name__)
 
-# Gemini-style URL pattern: /models/{model_id}:{action}
-_GEMINI_MODEL_RE = re.compile(r"/models/([^/:]+)")
-_GEMINI_NATIVE_PATH_RE = re.compile(
-    r"^/v1(?:beta)?/models/[^/:]+:(?:generateContent|streamGenerateContent)/?$"
- )
+_GEMINI_MODEL_RE = re.compile(r"^/v1beta/models/([^/:]+)")
+_GEMINI_NATIVE_PATH_RE = re.compile(r"^/v1beta/models/[^/:]+(?:[:/].*)?/?$")
 _ANTHROPIC_MESSAGES_PATH_RE = re.compile(r"^/v1/messages(?:/count_tokens)?/?$")
 
 
@@ -55,7 +52,7 @@ def _rewrite_model_in_path(
 
 async def _endpoint_is_active_now(
     db: AsyncSession, connection_id: int, profile_id: int | None = None
- ) -> bool:
+) -> bool:
     query = select(Connection.is_active).where(Connection.id == connection_id)
     if profile_id is not None:
         query = query.where(Connection.profile_id == profile_id)
@@ -84,11 +81,13 @@ def _classify_request_path(request_path: str) -> str:
 _PROVIDER_PATH_FAMILIES: dict[str, set[str]] = {
     "openai": {"generic"},
     "anthropic": {"anthropic_messages"},
-    "gemini": {"generic", "gemini_native"},
+    "gemini": {"gemini_native"},
 }
 
 
-def _validate_provider_path_compatibility(provider_type: str, request_path: str) -> None:
+def _validate_provider_path_compatibility(
+    provider_type: str, request_path: str
+) -> None:
     allowed_path_families = _PROVIDER_PATH_FAMILIES.get(provider_type)
     if allowed_path_families is None:
         return
@@ -173,7 +172,11 @@ def _classify_failover_failure(
     exception: Exception | None = None,
 ) -> FailureKind:
     if exception is not None:
-        return "timeout" if isinstance(exception, httpx.TimeoutException) else "connect_error"
+        return (
+            "timeout"
+            if isinstance(exception, httpx.TimeoutException)
+            else "connect_error"
+        )
     if status_code is None:
         return "transient_http"
     return _classify_http_failure(status_code, raw_body)

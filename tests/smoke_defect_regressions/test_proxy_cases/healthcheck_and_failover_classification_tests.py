@@ -8,11 +8,13 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 
+from app.models.models import Connection, Endpoint
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
+
 
 class TestDEF059_HealthCheckRequestBuilder:
     """DEF-059 (P0): health checks must use provider-native paths and payloads."""
@@ -62,29 +64,32 @@ class TestDEF059_HealthCheckRequestBuilder:
     def test_gemini_health_check_uses_generate_content_endpoint(self):
         from app.routers.connections import _build_health_check_request
 
-        path, body = _build_health_check_request(
-            "gemini", "gemini-3.1-pro-preview"
-        )
+        path, body = _build_health_check_request("gemini", "gemini-3.1-pro-preview")
+        payload = cast(dict[str, object], body)
+        contents = cast(list[dict[str, object]], payload["contents"])
+        parts = cast(list[dict[str, str]], contents[0]["parts"])
+        generation_config = cast(dict[str, int], payload["generationConfig"])
 
         assert path == "/v1beta/models/gemini-3.1-pro-preview:generateContent"
-        assert body["contents"][0]["parts"][0]["text"] == "hi"
-        assert body["generationConfig"]["maxOutputTokens"] == 1
+        assert parts[0]["text"] == "hi"
+        assert generation_config["maxOutputTokens"] == 1
 
     def test_cross_provider_model_id_still_uses_provider_native_path(self):
         from app.routers.connections import _build_health_check_request
 
-        path, body = _build_health_check_request(
-            "anthropic", "gemini-3.1-pro-preview"
-        )
+        path, body = _build_health_check_request("anthropic", "gemini-3.1-pro-preview")
 
         assert path == "/v1/messages"
         assert body["model"] == "gemini-3.1-pro-preview"
+
 
 class TestDEF066_OpenAIHealthCheckFallback:
     """DEF-066 (P1): OpenAI health checks should try responses-basic fallback before legacy."""
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(self):
+    async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(
+        self,
+    ):
         from types import SimpleNamespace
         from app.routers.connections import _probe_connection_health
 
@@ -96,15 +101,18 @@ class TestDEF066_OpenAIHealthCheckFallback:
             new_callable=AsyncMock,
         ) as execute_mock:
             execute_mock.return_value = ("healthy", "Connection successful", 6)
-            health_status, detail, response_time_ms, log_url = (
-                await _probe_connection_health(
-                    client=AsyncMock(),
-                    connection=connection,
-                    endpoint=endpoint,
-                    provider_type="openai",
-                    model_id="gpt-4o-mini",
-                    headers={},
-                )
+            (
+                health_status,
+                detail,
+                response_time_ms,
+                log_url,
+            ) = await _probe_connection_health(
+                client=AsyncMock(),
+                connection=cast(Connection, connection),
+                endpoint=cast(Endpoint, endpoint),
+                provider_type="openai",
+                model_id="gpt-4o-mini",
+                headers={},
             )
 
         assert health_status == "healthy"
@@ -131,15 +139,18 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 ("unhealthy", "HTTP 404", 8),
                 ("healthy", "Connection successful", 5),
             ]
-            health_status, detail, response_time_ms, log_url = (
-                await _probe_connection_health(
-                    client=AsyncMock(),
-                    connection=connection,
-                    endpoint=endpoint,
-                    provider_type="openai",
-                    model_id="gpt-4o-mini",
-                    headers={},
-                )
+            (
+                health_status,
+                detail,
+                response_time_ms,
+                log_url,
+            ) = await _probe_connection_health(
+                client=AsyncMock(),
+                connection=cast(Connection, connection),
+                endpoint=cast(Endpoint, endpoint),
+                provider_type="openai",
+                model_id="gpt-4o-mini",
+                headers={},
             )
 
         assert health_status == "healthy"
@@ -147,11 +158,15 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert response_time_ms == 5
         assert log_url == "https://api.openai.com/v1/responses"
         assert execute_mock.await_count == 2
-        assert execute_mock.await_args_list[0].kwargs["upstream_url"].endswith(
-            "/v1/responses"
+        assert (
+            execute_mock.await_args_list[0]
+            .kwargs["upstream_url"]
+            .endswith("/v1/responses")
         )
-        assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
-            "/v1/responses"
+        assert (
+            execute_mock.await_args_list[1]
+            .kwargs["upstream_url"]
+            .endswith("/v1/responses")
         )
         assert (
             execute_mock.await_args_list[0].kwargs["body"]["input"][0]["content"][0][
@@ -160,10 +175,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
             == "hi"
         )
         assert execute_mock.await_args_list[0].kwargs["body"]["max_output_tokens"] == 1
-        assert (
-            execute_mock.await_args_list[1].kwargs["body"]["input"]
-            == "hi"
-        )
+        assert execute_mock.await_args_list[1].kwargs["body"]["input"] == "hi"
 
     @pytest.mark.asyncio
     async def test_openai_health_check_uses_legacy_fallback_when_responses_fallback_fails(
@@ -184,15 +196,18 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 ("unhealthy", "HTTP 400", 6),
                 ("healthy", "Connection successful", 4),
             ]
-            health_status, detail, response_time_ms, log_url = (
-                await _probe_connection_health(
-                    client=AsyncMock(),
-                    connection=connection,
-                    endpoint=endpoint,
-                    provider_type="openai",
-                    model_id="gpt-4o-mini",
-                    headers={},
-                )
+            (
+                health_status,
+                detail,
+                response_time_ms,
+                log_url,
+            ) = await _probe_connection_health(
+                client=AsyncMock(),
+                connection=cast(Connection, connection),
+                endpoint=cast(Endpoint, endpoint),
+                provider_type="openai",
+                model_id="gpt-4o-mini",
+                headers={},
             )
 
         assert health_status == "healthy"
@@ -200,14 +215,20 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert response_time_ms == 4
         assert log_url == "https://api.openai.com/v1/chat/completions"
         assert execute_mock.await_count == 3
-        assert execute_mock.await_args_list[0].kwargs["upstream_url"].endswith(
-            "/v1/responses"
+        assert (
+            execute_mock.await_args_list[0]
+            .kwargs["upstream_url"]
+            .endswith("/v1/responses")
         )
-        assert execute_mock.await_args_list[1].kwargs["upstream_url"].endswith(
-            "/v1/responses"
+        assert (
+            execute_mock.await_args_list[1]
+            .kwargs["upstream_url"]
+            .endswith("/v1/responses")
         )
-        assert execute_mock.await_args_list[2].kwargs["upstream_url"].endswith(
-            "/v1/chat/completions"
+        assert (
+            execute_mock.await_args_list[2]
+            .kwargs["upstream_url"]
+            .endswith("/v1/chat/completions")
         )
 
     @pytest.mark.asyncio
@@ -223,15 +244,18 @@ class TestDEF066_OpenAIHealthCheckFallback:
             new_callable=AsyncMock,
         ) as execute_mock:
             execute_mock.return_value = ("unhealthy", "HTTP 500", 7)
-            health_status, detail, response_time_ms, log_url = (
-                await _probe_connection_health(
-                    client=AsyncMock(),
-                    connection=connection,
-                    endpoint=endpoint,
-                    provider_type="anthropic",
-                    model_id="claude-sonnet-4",
-                    headers={},
-                )
+            (
+                health_status,
+                detail,
+                response_time_ms,
+                log_url,
+            ) = await _probe_connection_health(
+                client=AsyncMock(),
+                connection=cast(Connection, connection),
+                endpoint=cast(Endpoint, endpoint),
+                provider_type="anthropic",
+                model_id="claude-sonnet-4",
+                headers={},
             )
 
         assert health_status == "unhealthy"
@@ -239,6 +263,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert response_time_ms == 7
         assert log_url == "https://api.anthropic.com/v1/messages"
         assert execute_mock.await_count == 1
+
 
 class TestDEF060_ProxyProviderPathValidation:
     """DEF-060 (P0): proxy must fail fast on provider/path mismatch."""
@@ -305,6 +330,30 @@ class TestDEF060_ProxyProviderPathValidation:
         assert exc_info.value.status_code == 400
         assert "incompatible with provider 'anthropic'" in exc_info.value.detail
 
+    def test_validation_rejects_generic_openai_path_for_gemini(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_path_compatibility(
+                "gemini",
+                "/v1/chat/completions",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'gemini'" in exc_info.value.detail
+
+    def test_validation_rejects_non_beta_gemini_native_path_for_gemini(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_provider_path_compatibility(
+                "gemini",
+                "/v1/models/gemini-3.1-pro-preview:generateContent",
+            )
+
+        assert exc_info.value.status_code == 400
+        assert "incompatible with provider 'gemini'" in exc_info.value.detail
+
     def test_validation_allows_gemini_native_path_for_gemini(self):
         from app.routers.proxy import _validate_provider_path_compatibility
 
@@ -313,6 +362,13 @@ class TestDEF060_ProxyProviderPathValidation:
             "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
         )
 
+    def test_validation_allows_other_gemini_model_scoped_path_for_gemini(self):
+        from app.routers.proxy import _validate_provider_path_compatibility
+
+        _validate_provider_path_compatibility(
+            "gemini",
+            "/v1beta/models/gemini-3.1-pro-preview:countTokens",
+        )
 
     @pytest.mark.asyncio
     async def test_handle_proxy_fails_before_upstream_attempt_on_mismatch(self):
@@ -354,8 +410,11 @@ class TestDEF060_ProxyProviderPathValidation:
         assert "incompatible with provider 'anthropic'" in exc_info.value.detail
         attempt_plan_mock.assert_not_called()
 
+
 class TestDEF061_FailoverFailureClassification:
-    def test_classify_http_failure_marks_403_auth_like_when_body_matches_auth_patterns(self):
+    def test_classify_http_failure_marks_403_auth_like_when_body_matches_auth_patterns(
+        self,
+    ):
         from app.routers.proxy import _classify_http_failure
 
         raw_body = json.dumps(
@@ -389,7 +448,9 @@ class TestDEF061_FailoverFailureClassification:
         import httpx
         from app.routers.proxy import _classify_failover_failure
 
-        failure_kind = _classify_failover_failure(exception=httpx.TimeoutException("timeout"))
+        failure_kind = _classify_failover_failure(
+            exception=httpx.TimeoutException("timeout")
+        )
 
         assert failure_kind == "timeout"
 
@@ -425,4 +486,3 @@ class TestDEF061_FailoverFailureClassification:
         assert _is_recovery_success_status(399) is True
         assert _is_recovery_success_status(400) is False
         assert _is_recovery_success_status(503) is False
-
