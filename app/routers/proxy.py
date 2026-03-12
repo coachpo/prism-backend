@@ -250,7 +250,7 @@ async def _handle_proxy(
                                 request_headers=headers,
                                 request_body=endpoint_body,
                                 response_status=upstream_resp.status_code,
-                                response_headers=dict(upstream_resp.headers),
+                                response_headers=resp_headers_filtered,
                                 response_body=body,
                                 is_stream=True,
                                 duration_ms=elapsed_ms,
@@ -304,7 +304,7 @@ async def _handle_proxy(
                             request_headers=headers,
                             request_body=endpoint_body,
                             response_status=upstream_resp.status_code,
-                            response_headers=dict(upstream_resp.headers),
+                            response_headers=resp_headers_filtered,
                             response_body=body,
                             is_stream=True,
                             duration_ms=elapsed_ms,
@@ -342,7 +342,7 @@ async def _handle_proxy(
                 _audit_upstream_url = upstream_url
                 _audit_headers = headers
                 _audit_raw_body = endpoint_body
-                _audit_resp_headers = dict(upstream_resp.headers)
+                _audit_resp_headers = resp_headers_filtered
 
                 async def _iter_and_log(
                     resp: httpx.Response,
@@ -521,7 +521,7 @@ async def _handle_proxy(
                             request_headers=headers,
                             request_body=endpoint_body,
                             response_status=response.status_code,
-                            response_headers=dict(response.headers),
+                            response_headers=resp_headers,
                             response_body=response.content,
                             is_stream=False,
                             duration_ms=elapsed_ms,
@@ -581,7 +581,7 @@ async def _handle_proxy(
                         request_headers=headers,
                         request_body=endpoint_body,
                         response_status=response.status_code,
-                        response_headers=dict(response.headers),
+                        response_headers=resp_headers,
                         response_body=response.content,
                         is_stream=False,
                         duration_ms=elapsed_ms,

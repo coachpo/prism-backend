@@ -1,17 +1,12 @@
-import asyncio
-import json
-import logging
-from typing import AsyncGenerator, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from app.services.proxy_service import (
-    extract_model_from_body,
     build_upstream_headers,
+    filter_response_headers,
 )
-from app.services.stats_service import log_request
+
 
 class TestHeaderBlocklist:
     """Header blocklist feature: exact/prefix matching, sanitization, and schema validation."""
@@ -135,6 +130,31 @@ class TestHeaderBlocklist:
 
         assert headers["Authorization"] == "Bearer sk-test"
 
+    def test_build_upstream_headers_drops_accept_encoding_but_keeps_content_encoding(
+        self,
+    ):
+        ep = MagicMock()
+        ep.auth_type = None
+        ep.api_key = "sk-test"
+        ep.custom_headers = None
+
+        headers = build_upstream_headers(
+            ep,
+            "openai",
+            client_headers={
+                "Accept-Encoding": "gzip, br",
+                "Content-Encoding": "gzip",
+                "Content-Length": "42",
+                "X-Trace": "trace-1",
+            },
+        )
+
+        header_names = {key.lower() for key in headers}
+        assert "accept-encoding" not in header_names
+        assert "content-length" not in header_names
+        assert headers["Content-Encoding"] == "gzip"
+        assert headers["X-Trace"] == "trace-1"
+
     def test_build_upstream_headers_skips_invalid_custom_auth_override(self):
         """HBL-008A (P0): invalid custom auth override must not clobber valid auth header."""
         from app.services.proxy_service import build_upstream_headers
@@ -226,3 +246,24 @@ class TestHeaderBlocklist:
         assert len(config.header_blocklist_rules) == 1
         assert config.header_blocklist_rules[0].pattern == "x-custom-"
 
+    def test_filter_response_headers_removes_stale_compression_metadata(self):
+        import httpx
+
+        filtered = filter_response_headers(
+            httpx.Headers(
+                {
+                    "Content-Type": "application/json",
+                    "Content-Encoding": "gzip",
+                    "Content-Length": "128",
+                    "Transfer-Encoding": "chunked",
+                    "X-Trace": "trace-1",
+                }
+            )
+        )
+
+        header_names = {key.lower() for key in filtered}
+        assert "content-encoding" not in header_names
+        assert "content-length" not in header_names
+        assert "transfer-encoding" not in header_names
+        assert filtered["content-type"] == "application/json"
+        assert filtered["x-trace"] == "trace-1"

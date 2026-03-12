@@ -592,7 +592,11 @@ class TestDEF021_StreamingCancellationResilience:
         class CompletedStreamResponse:
             def __init__(self):
                 self.status_code = 200
-                self.headers = {"content-type": "text/event-stream"}
+                self.headers = {
+                    "content-type": "text/event-stream",
+                    "content-encoding": "gzip",
+                    "content-length": "999",
+                }
                 self.closed = False
 
             async def aiter_bytes(self):
@@ -664,6 +668,9 @@ class TestDEF021_StreamingCancellationResilience:
 
             assert response.status_code == 200
             assert isinstance(response, StreamingResponse)
+            assert response.headers["content-type"] == "text/event-stream"
+            assert "content-encoding" not in response.headers
+            assert "content-length" not in response.headers
 
             stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
             received = [chunk async for chunk in stream]
@@ -679,8 +686,205 @@ class TestDEF021_StreamingCancellationResilience:
             assert audit_call is not None
             assert audit_call.kwargs["response_body"] == expected_payload
             assert audit_call.kwargs["capture_bodies"] is True
+            assert audit_call.kwargs["response_headers"] == {
+                "content-type": "text/event-stream"
+            }
             assert "Failed to log streaming request" not in caplog.text
             assert "Failed to record streaming audit log" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_non_stream_response_and_audit_use_sanitized_headers(self):
+        import httpx
+        from fastapi import FastAPI
+        from app.routers.proxy import _handle_proxy
+
+        payload = json.dumps(
+            {
+                "id": "resp_123",
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            }
+        ).encode("utf-8")
+
+        class DecodedResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {
+                    "content-type": "application/json",
+                    "content-encoding": "gzip",
+                    "content-length": "999",
+                }
+                self.content = payload
+
+        class DummyHttpClient:
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                return DecodedResponse()
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "input": "hello",
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=444)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+                profile_id=1,
+            )
+
+            assert response.status_code == 200
+            assert response.body == payload
+            assert response.headers["content-type"] == "application/json"
+            assert "content-encoding" not in response.headers
+            assert response.headers["content-length"] == str(len(payload))
+
+            audit_mock.assert_awaited_once()
+            audit_call = audit_mock.await_args
+            assert audit_call is not None
+            assert audit_call.kwargs["response_headers"] == {
+                "content-type": "application/json"
+            }
+            assert audit_call.kwargs["response_body"] == payload
+
+    @pytest.mark.asyncio
+    async def test_stream_error_response_and_audit_use_sanitized_headers(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        payload = json.dumps(
+            {"error": {"message": "bad request", "type": "invalid_request"}}
+        ).encode("utf-8")
+
+        class ErrorStreamResponse:
+            def __init__(self):
+                self.status_code = 400
+                self.headers = {
+                    "content-type": "application/json",
+                    "content-encoding": "gzip",
+                    "content-length": "999",
+                }
+                self.content = payload
+                self.closed = False
+
+            async def aread(self):
+                return payload
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.response = ErrorStreamResponse()
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self.response
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
+
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=445)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+                profile_id=1,
+            )
+
+            assert response.status_code == 400
+            assert not isinstance(response, StreamingResponse)
+            assert response.body == payload
+            assert response.headers["content-type"] == "application/json"
+            assert "content-encoding" not in response.headers
+            assert response.headers["content-length"] == str(len(payload))
+            assert app.state.http_client.response.closed is True
+
+            audit_mock.assert_awaited_once()
+            audit_call = audit_mock.await_args
+            assert audit_call is not None
+            assert audit_call.kwargs["response_headers"] == {
+                "content-type": "application/json"
+            }
+            assert audit_call.kwargs["response_body"] == payload
 
     @pytest.mark.asyncio
     async def test_stream_generator_close_triggers_detached_finalize_without_error(

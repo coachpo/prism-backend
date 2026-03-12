@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 import json
 import logging
 import re
@@ -56,6 +57,13 @@ CLIENT_AUTH_HEADERS = frozenset(
     }
 )
 
+AUTO_DECOMPRESSED_RESPONSE_HEADERS = frozenset(
+    {
+        "content-encoding",
+        "content-length",
+    }
+)
+
 
 def normalize_base_url(raw_url: str) -> str:
     """Strip trailing slashes from a base URL for consistent path joining."""
@@ -106,7 +114,7 @@ def _normalize_header_value(value: object | None) -> str | None:
     return normalized
 
 
-def _normalize_header_values(headers: dict[str, object]) -> dict[str, str]:
+def _normalize_header_values(headers: Mapping[str, object]) -> dict[str, str]:
     normalized_headers: dict[str, str] = {}
     for key, raw_value in headers.items():
         normalized_value = _normalize_header_value(raw_value)
@@ -225,11 +233,14 @@ def sanitize_headers(
 
 
 def filter_response_headers(response_headers: httpx.Headers) -> dict[str, str]:
-    """Filter upstream response headers, removing hop-by-hop headers."""
     filtered: dict[str, str] = {}
     for key, value in response_headers.items():
-        if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "content-length":
-            filtered[key] = value
+        key_lower = key.lower()
+        if key_lower in HOP_BY_HOP_HEADERS:
+            continue
+        if key_lower in AUTO_DECOMPRESSED_RESPONSE_HEADERS:
+            continue
+        filtered[key] = value
     return filtered
 
 
