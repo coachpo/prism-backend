@@ -225,6 +225,42 @@ async def authenticate_user(
     return settings_row, access_token, raw_refresh_token, expires_at, session_duration
 
 
+async def create_session_for_auth_subject(
+    db: AsyncSession,
+    *,
+    auth_subject_id: int,
+    session_duration: RefreshSessionDuration,
+    user_agent: str | None,
+    ip_address: str | None,
+) -> tuple[AppAuthSettings, str, str, datetime, RefreshSessionDuration]:
+    settings_row = await get_or_create_app_auth_settings(db)
+    if not settings_row.auth_enabled or settings_row.id != auth_subject_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    access_token = create_access_token(
+        subject_id=settings_row.id,
+        username=settings_row.username or "",
+        token_version=settings_row.token_version,
+    )
+    expires_at = get_refresh_token_expiry(session_duration=session_duration)
+    raw_refresh_token, refresh_hash, expires_at = build_refresh_token_record(
+        expires_at=expires_at
+    )
+    db.add(
+        RefreshToken(
+            auth_subject_id=settings_row.id,
+            token_hash=refresh_hash,
+            session_duration=session_duration,
+            expires_at=expires_at,
+            user_agent=user_agent,
+            ip_address=ip_address,
+        )
+    )
+    settings_row.last_login_at = utc_now()
+    await db.flush()
+    return settings_row, access_token, raw_refresh_token, expires_at, session_duration
+
+
 async def rotate_refresh_token(
     db: AsyncSession,
     *,

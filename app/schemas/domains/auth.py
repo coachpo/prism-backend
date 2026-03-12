@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -158,3 +158,68 @@ class ProxyApiKeyCreateResponse(BaseModel):
 class ProxyApiKeyRotateResponse(BaseModel):
     key: str
     item: ProxyApiKeyResponse
+
+
+# --- WebAuthn / Passkey Schemas ---
+
+
+class WebAuthnRegistrationOptionsResponse(BaseModel):
+    """WebAuthn registration options for client."""
+    challenge: str
+    rp: dict[str, str]
+    user: dict[str, str]
+    pubKeyCredParams: list[dict[str, Any]]
+    timeout: int
+    excludeCredentials: list[dict[str, Any]]
+    authenticatorSelection: dict[str, str]
+    attestation: str
+
+
+class WebAuthnRegistrationVerifyRequest(BaseModel):
+    """Client registration response for verification."""
+    credential: dict[str, Any]
+    device_name: str | None = None
+
+    @field_validator("device_name")
+    @classmethod
+    def validate_device_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        if len(trimmed) > 200:
+            raise ValueError("device_name must be at most 200 characters")
+        return trimmed
+
+
+class WebAuthnAuthenticationOptionsResponse(BaseModel):
+    """WebAuthn authentication options for client."""
+    challenge: str
+    timeout: int
+    rpId: str
+    allowCredentials: list[dict[str, Any]]
+    userVerification: str
+
+
+class WebAuthnAuthenticationVerifyRequest(BaseModel):
+    """Client authentication response for verification."""
+    credential: dict[str, Any]
+
+
+class WebAuthnCredentialResponse(BaseModel):
+    """WebAuthn credential info for management UI."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    device_name: str | None
+    backup_eligible: bool | None
+    backup_state: bool | None
+    last_used_at: datetime | None
+    created_at: datetime
+
+
+class WebAuthnCredentialListResponse(BaseModel):
+    """List of user's WebAuthn credentials."""
+    items: list[WebAuthnCredentialResponse]
+    total: int

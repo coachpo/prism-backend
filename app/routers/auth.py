@@ -16,16 +16,24 @@ from app.schemas.schemas import (
     PasswordResetRequest,
     PasswordResetRequestResponse,
     SessionResponse,
+    WebAuthnRegistrationOptionsResponse,
+    WebAuthnRegistrationVerifyRequest,
+    WebAuthnAuthenticationOptionsResponse,
+    WebAuthnAuthenticationVerifyRequest,
+    WebAuthnCredentialResponse,
+    WebAuthnCredentialListResponse,
 )
 from app.services.auth_service import (
     authenticate_user,
     consume_password_reset_challenge,
+    create_session_for_auth_subject,
     create_password_reset_challenge,
     get_or_create_app_auth_settings,
     revoke_refresh_token,
     rotate_refresh_token,
     send_password_reset_email,
 )
+from app.services import webauthn_service
 from app.core.config import get_settings
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -233,3 +241,146 @@ async def confirm_password_reset(
     )
     _clear_auth_cookies(response)
     return PasswordResetConfirmResponse(success=True)
+
+
+# --- WebAuthn / Passkey Endpoints ---
+
+
+@router.post(
+    "/webauthn/register/options", response_model=WebAuthnRegistrationOptionsResponse
+)
+async def webauthn_registration_options(
+    auth_subject: Annotated[dict, Depends(get_request_auth_subject)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Generate WebAuthn registration options for authenticated user."""
+    auth_subject_id = auth_subject["id"]
+    username = auth_subject.get("username") or "operator"
+
+    options = await webauthn_service.generate_registration_options_for_user(
+        db, auth_subject_id=auth_subject_id, username=username
+    )
+    return WebAuthnRegistrationOptionsResponse(**options)
+
+
+@router.post("/webauthn/register/verify")
+async def webauthn_registration_verify(
+    body: WebAuthnRegistrationVerifyRequest,
+    auth_subject: Annotated[dict, Depends(get_request_auth_subject)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Verify and save WebAuthn registration."""
+    auth_subject_id = auth_subject["id"]
+
+    try:
+        credential = await webauthn_service.verify_and_save_registration(
+            db,
+            auth_subject_id=auth_subject_id,
+            credential=body.credential,
+            device_name=body.device_name,
+        )
+        return {"success": True, "credential_id": credential.id}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post(
+    "/webauthn/authenticate/options",
+    response_model=WebAuthnAuthenticationOptionsResponse,
+)
+async def webauthn_authentication_options(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    username: str | None = None,
+):
+    """Generate WebAuthn authentication options."""
+    auth_subject_id: int | None = None
+    normalized_username = username.strip() if username else None
+    if normalized_username:
+        settings_row = await get_or_create_app_auth_settings(db)
+        if settings_row.username == normalized_username:
+            auth_subject_id = settings_row.id
+
+    options = await webauthn_service.generate_authentication_options_for_user(
+        db, auth_subject_id=auth_subject_id
+    )
+    return WebAuthnAuthenticationOptionsResponse(**options)
+
+
+@router.post("/webauthn/authenticate/verify")
+async def webauthn_authentication_verify(
+    body: WebAuthnAuthenticationVerifyRequest,
+    response: Response,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Verify WebAuthn authentication and create session."""
+    try:
+        _, auth_subject_id = await webauthn_service.verify_authentication(
+            db,
+            credential=body.credential,
+            client_ip=request.client.host if request.client else None,
+        )
+        (
+            settings_row,
+            access_token,
+            refresh_token,
+            refresh_expires_at,
+            session_duration,
+        ) = await create_session_for_auth_subject(
+            db,
+            auth_subject_id=auth_subject_id,
+            session_duration="7_days",
+            user_agent=request.headers.get("user-agent"),
+            ip_address=request.client.host if request.client else None,
+        )
+
+        _set_auth_cookies(
+            response,
+            access_token=access_token,
+            refresh_token=refresh_token,
+            refresh_expires_at=refresh_expires_at,
+            session_duration=session_duration,
+        )
+
+        return {
+            "success": True,
+            "authenticated": True,
+            "username": settings_row.username,
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@router.get("/webauthn/credentials", response_model=WebAuthnCredentialListResponse)
+async def list_webauthn_credentials(
+    auth_subject: Annotated[dict, Depends(get_request_auth_subject)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """List user's WebAuthn credentials."""
+    auth_subject_id = auth_subject["id"]
+    credentials = await webauthn_service.list_credentials_for_user(
+        db, auth_subject_id=auth_subject_id
+    )
+    return WebAuthnCredentialListResponse(
+        items=[WebAuthnCredentialResponse.model_validate(c) for c in credentials],
+        total=len(credentials),
+    )
+
+
+@router.delete("/webauthn/credentials/{credential_id}")
+async def revoke_webauthn_credential(
+    credential_id: int,
+    auth_subject: Annotated[dict, Depends(get_request_auth_subject)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """Revoke a WebAuthn credential."""
+    auth_subject_id = auth_subject["id"]
+
+    success = await webauthn_service.revoke_credential(
+        db, credential_id=credential_id, auth_subject_id=auth_subject_id
+    )
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Credential not found")
+
+    return {"success": True}

@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.models.models import RequestLog
+from app.services.realtime import connection_manager
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,17 @@ async def log_request(
             log_db.add(entry)
             await log_db.commit()
             await log_db.refresh(entry)
+
+            # Emit realtime event for dashboard updates
+            try:
+                await connection_manager.broadcast_to_profile(
+                    profile_id=profile_id,
+                    channel="dashboard",
+                    message={"type": "dashboard.dirty", "sections": ["summary", "recentRequests"]}
+                )
+            except Exception:
+                logger.debug("Failed to broadcast realtime event (non-critical)")
+
             return entry.id
     except asyncio.CancelledError:
         logger.debug("Request logging cancelled")

@@ -15,12 +15,14 @@ from app.schemas.schemas import (
     ConnectionSuccessRateResponse,
     BatchDeleteResponse,
     SpendingReportResponse,
+    ThroughputStatsResponse,
 )
 from app.services.stats_service import (
     get_request_logs,
     get_stats_summary,
     get_connection_success_rates,
     get_spending_report,
+    get_throughput_stats,
 )
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
@@ -200,3 +202,32 @@ async def delete_request_logs(
     await db.flush()
     rowcount = getattr(result, "rowcount", 0)
     return BatchDeleteResponse(deleted_count=int(rowcount or 0))
+
+
+@router.get("/throughput", response_model=ThroughputStatsResponse)
+async def get_throughput(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    model_id: str | None = None,
+    provider_type: str | None = None,
+    endpoint_id: int | None = None,
+    connection_id: int | None = None,
+):
+    """Get TPS/QPS throughput metrics with time-bucketed aggregation."""
+    normalized_from_time = _normalize_datetime_filter(from_time)
+    normalized_to_time = _normalize_datetime_filter(to_time)
+
+    result = await get_throughput_stats(
+        db,
+        profile_id=profile_id,
+        from_time=normalized_from_time,
+        to_time=normalized_to_time,
+        model_id=model_id,
+        provider_type=provider_type,
+        endpoint_id=endpoint_id,
+        connection_id=connection_id,
+    )
+
+    return ThroughputStatsResponse(**result)

@@ -41,6 +41,7 @@ from app.routers import (
     loadbalance,
     settings as settings_router,
     pricing_templates,
+    realtime,
 )
 
 logger = logging.getLogger(__name__)
@@ -342,6 +343,8 @@ async def authentication_middleware(request, call_next):
                 "/api/auth/refresh",
                 "/api/auth/password-reset/request",
                 "/api/auth/password-reset/confirm",
+                "/api/auth/webauthn/authenticate/options",
+                "/api/auth/webauthn/authenticate/verify",
             }
             if path in public_paths:
                 return await call_next(request)
@@ -417,6 +420,7 @@ app.include_router(loadbalance.router)
 app.include_router(config.router)
 app.include_router(settings_router.router)
 app.include_router(pricing_templates.router)
+app.include_router(realtime.router)
 app.include_router(proxy.router)
 
 

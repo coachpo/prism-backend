@@ -6,6 +6,7 @@ from app.services.stats import (
     get_request_logs,
     get_spending_report,
     get_stats_summary,
+    get_throughput_stats,
     log_request,
     resolve_time_preset,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "get_request_logs",
     "get_spending_report",
     "get_stats_summary",
+    "get_throughput_stats",
     "log_request",
     "resolve_time_preset",
 ]

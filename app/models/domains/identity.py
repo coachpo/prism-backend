@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -265,4 +266,58 @@ class PasswordResetChallenge(Base):
     requested_ip: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
+    )
+
+
+class WebAuthnCredential(Base):
+    __tablename__ = "webauthn_credentials"
+    __table_args__ = (
+        Index("idx_webauthn_credentials_auth_subject", "auth_subject_id"),
+        Index("idx_webauthn_credentials_last_used", "last_used_at"),
+        UniqueConstraint("credential_id", name="uq_credential_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    auth_subject_id: Mapped[int] = mapped_column(
+        ForeignKey("app_auth_settings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    # WebAuthn core fields
+    credential_id: Mapped[bytes] = mapped_column(
+        "credential_id", nullable=False
+    )
+    public_key: Mapped[bytes] = mapped_column("public_key", nullable=False)
+    sign_count: Mapped[int] = mapped_column(
+        BigInteger, default=0, nullable=False, server_default="0"
+    )
+
+    # Device management
+    device_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    aaguid: Mapped[bytes | None] = mapped_column("aaguid", nullable=True)
+    transports: Mapped[list[str] | None] = mapped_column(
+        ARRAY(Text), nullable=True
+    )
+
+    # Backup and sync identifiers
+    backup_eligible: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, server_default="false"
+    )
+    backup_state: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True, server_default="false"
+    )
+
+    # Audit fields
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, server_default=text("NOW()")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utc_now,
+        onupdate=utc_now,
+        server_default=text("NOW()"),
     )
