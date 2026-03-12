@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,10 +20,11 @@ from webauthn import (
 )
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.structs import (
-    AuthenticationCredential,
+    AttestationConveyancePreference,
     AuthenticatorSelectionCriteria,
+    CredentialDeviceType,
     PublicKeyCredentialDescriptor,
-    RegistrationCredential,
+    ResidentKeyRequirement,
     UserVerificationRequirement,
 )
 
@@ -33,6 +35,7 @@ from app.models.domains.identity import WebAuthnCredential
 
 # Challenge storage (in-memory for now, should use Redis in production)
 _challenge_store: dict[str, tuple[bytes, datetime]] = {}
+_AUTHENTICATION_CHALLENGE_KEY = "authentication"
 
 
 def _get_rp_id() -> str:
@@ -77,6 +80,15 @@ def _clear_challenge(user_id: str) -> None:
     _challenge_store.pop(user_id, None)
 
 
+def _serialize_aaguid(aaguid: str | None) -> bytes | None:
+    if not aaguid:
+        return None
+    try:
+        return UUID(aaguid).bytes
+    except ValueError:
+        return None
+
+
 async def generate_registration_options_for_user(
     db: AsyncSession,
     auth_subject_id: int,
@@ -103,6 +115,9 @@ async def generate_registration_options_for_user(
         PublicKeyCredentialDescriptor(id=cred.credential_id)
         for cred in existing_credentials
     ]
+    resident_key_requirement = ResidentKeyRequirement.REQUIRED
+    user_verification_requirement = UserVerificationRequirement.REQUIRED
+    attestation_preference = AttestationConveyancePreference.NONE
 
     # Generate registration options
     options = generate_registration_options(
@@ -113,10 +128,10 @@ async def generate_registration_options_for_user(
         user_display_name=username,
         exclude_credentials=exclude_credentials,
         authenticator_selection=AuthenticatorSelectionCriteria(
-            user_verification=UserVerificationRequirement.REQUIRED,
-            resident_key="required",  # Discoverable credential
+            user_verification=user_verification_requirement,
+            resident_key=resident_key_requirement,
         ),
-        attestation="none",  # Privacy-friendly, no attestation
+        attestation=attestation_preference,
     )
 
     # Store challenge
@@ -145,10 +160,10 @@ async def generate_registration_options_for_user(
             for cred in (options.exclude_credentials or [])
         ],
         "authenticatorSelection": {
-            "userVerification": options.authenticator_selection.user_verification.value,
-            "residentKey": options.authenticator_selection.resident_key,
+            "userVerification": user_verification_requirement.value,
+            "residentKey": resident_key_requirement.value,
         },
-        "attestation": options.attestation,
+        "attestation": attestation_preference.value,
     }
 
 
@@ -178,27 +193,13 @@ async def verify_and_save_registration(
         raise ValueError("Challenge not found or expired")
 
     try:
-        # Convert dict to RegistrationCredential
-        reg_credential = RegistrationCredential(
-            id=credential["id"],
-            raw_id=base64url_to_bytes(credential["rawId"]),
-            response={
-                "clientDataJSON": base64url_to_bytes(
-                    credential["response"]["clientDataJSON"]
-                ),
-                "attestationObject": base64url_to_bytes(
-                    credential["response"]["attestationObject"]
-                ),
-            },
-            type=credential["type"],
-        )
-
         # Verify registration
         verification = verify_registration_response(
-            credential=reg_credential,
+            credential=credential,
             expected_challenge=expected_challenge,
             expected_origin=_get_origin(),
             expected_rp_id=_get_rp_id(),
+            require_user_verification=True,
         )
 
         # Clear challenge after successful verification
@@ -211,8 +212,10 @@ async def verify_and_save_registration(
             public_key=verification.credential_public_key,
             sign_count=verification.sign_count,
             device_name=device_name or "Unnamed Device",
-            aaguid=verification.aaguid,
-            backup_eligible=verification.credential_backed_up,
+            aaguid=_serialize_aaguid(verification.aaguid),
+            backup_eligible=(
+                verification.credential_device_type == CredentialDeviceType.MULTI_DEVICE
+            ),
             backup_state=verification.credential_backed_up,
         )
 
@@ -241,6 +244,7 @@ async def generate_authentication_options_for_user(
         Authentication options dict compatible with @simplewebauthn/browser
     """
     allow_credentials = []
+    user_verification_requirement = UserVerificationRequirement.REQUIRED
 
     if auth_subject_id:
         # User-specific authentication
@@ -258,12 +262,11 @@ async def generate_authentication_options_for_user(
     options = generate_authentication_options(
         rp_id=_get_rp_id(),
         allow_credentials=allow_credentials if allow_credentials else None,
-        user_verification=UserVerificationRequirement.REQUIRED,
+        user_verification=user_verification_requirement,
     )
 
     # Store challenge
-    challenge_key = str(auth_subject_id) if auth_subject_id else "discoverable"
-    _store_challenge(challenge_key, options.challenge)
+    _store_challenge(_AUTHENTICATION_CHALLENGE_KEY, options.challenge)
 
     # Convert to dict for JSON serialization
     return {
@@ -278,7 +281,7 @@ async def generate_authentication_options_for_user(
             }
             for cred in (options.allow_credentials or [])
         ],
-        "userVerification": options.user_verification.value,
+        "userVerification": user_verification_requirement.value,
     }
 
 
@@ -302,8 +305,7 @@ async def verify_authentication(
         ValueError: If verification fails
     """
     # Retrieve stored challenge
-    challenge_key = str(auth_subject_id) if auth_subject_id else "discoverable"
-    expected_challenge = _get_challenge(challenge_key)
+    expected_challenge = _get_challenge(_AUTHENTICATION_CHALLENGE_KEY)
     if not expected_challenge:
         raise ValueError("Challenge not found or expired")
 
@@ -319,37 +321,19 @@ async def verify_authentication(
         if not db_credential:
             raise ValueError("Credential not found")
 
-        # Convert dict to AuthenticationCredential
-        auth_credential = AuthenticationCredential(
-            id=credential["id"],
-            raw_id=credential_id,
-            response={
-                "clientDataJSON": base64url_to_bytes(
-                    credential["response"]["clientDataJSON"]
-                ),
-                "authenticatorData": base64url_to_bytes(
-                    credential["response"]["authenticatorData"]
-                ),
-                "signature": base64url_to_bytes(credential["response"]["signature"]),
-                "userHandle": base64url_to_bytes(
-                    credential["response"].get("userHandle") or ""
-                ),
-            },
-            type=credential["type"],
-        )
-
         # Verify authentication
         verification = verify_authentication_response(
-            credential=auth_credential,
+            credential=credential,
             expected_challenge=expected_challenge,
             expected_origin=_get_origin(),
             expected_rp_id=_get_rp_id(),
             credential_public_key=db_credential.public_key,
             credential_current_sign_count=db_credential.sign_count,
+            require_user_verification=True,
         )
 
         # Clear challenge after successful verification
-        _clear_challenge(challenge_key)
+        _clear_challenge(_AUTHENTICATION_CHALLENGE_KEY)
 
         # Check for sign count anomaly (potential cloned credential)
         if verification.new_sign_count <= db_credential.sign_count:
@@ -367,7 +351,7 @@ async def verify_authentication(
         return db_credential, db_credential.auth_subject_id
 
     except Exception as e:
-        _clear_challenge(challenge_key)
+        _clear_challenge(_AUTHENTICATION_CHALLENGE_KEY)
         raise ValueError(f"Authentication verification failed: {str(e)}") from e
 
 

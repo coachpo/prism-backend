@@ -10,7 +10,49 @@ branch_labels = None
 depends_on = None
 
 
+def _ensure_primary_key(table_name: str) -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+
+    pk_constraint = inspector.get_pk_constraint(table_name)
+    pk_columns = list(pk_constraint.get("constrained_columns") or [])
+    if pk_columns == ["id"]:
+        return
+    if pk_columns:
+        raise RuntimeError(
+            f"{table_name} table has unexpected primary key columns: {pk_columns}"
+        )
+
+    null_id_count = bind.execute(
+        sa.text(f"SELECT COUNT(*) FROM {table_name} WHERE id IS NULL")
+    ).scalar_one()
+    if null_id_count:
+        raise RuntimeError(
+            f"Cannot create primary key on {table_name}.id because NULL ids exist"
+        )
+
+    duplicate_ids = (
+        bind.execute(
+            sa.text(
+                f"SELECT id FROM {table_name} GROUP BY id HAVING COUNT(*) > 1 ORDER BY id LIMIT 5"
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if duplicate_ids:
+        raise RuntimeError(
+            f"Cannot create primary key on {table_name}.id because duplicate ids exist: {duplicate_ids}"
+        )
+
+    op.alter_column(table_name, "id", existing_type=sa.Integer(), nullable=False)
+    op.create_primary_key(f"pk_{table_name}", table_name, ["id"])
+
+
 def upgrade() -> None:
+    _ensure_primary_key("profiles")
+    _ensure_primary_key("providers")
+
     op.create_table(
         "loadbalance_events",
         sa.Column("id", sa.BigInteger(), nullable=False),
