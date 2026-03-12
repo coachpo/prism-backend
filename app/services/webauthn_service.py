@@ -36,23 +36,21 @@ _challenge_store: dict[str, tuple[bytes, datetime]] = {}
 
 
 def _get_rp_id() -> str:
-    """Get Relying Party ID from settings or default to localhost."""
+    """Get Relying Party ID from settings."""
     settings = get_settings()
-    # In production, this should come from environment variable
-    # For now, default to localhost for development
-    return getattr(settings, "webauthn_rp_id", "localhost")
+    return settings.webauthn_rp_id
 
 
 def _get_rp_name() -> str:
-    """Get Relying Party name."""
-    return "Prism LLM Gateway"
+    """Get Relying Party name from settings."""
+    settings = get_settings()
+    return settings.webauthn_rp_name
 
 
 def _get_origin() -> str:
     """Get expected origin for WebAuthn operations."""
     settings = get_settings()
-    # In production, this should come from environment variable
-    return getattr(settings, "webauthn_origin", "http://localhost:5173")
+    return settings.webauthn_origin
 
 
 def _store_challenge(user_id: str, challenge: bytes) -> None:

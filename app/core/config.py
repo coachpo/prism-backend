@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     smtp_sender_email: str | None = None
     smtp_sender_name: str = "Prism"
     smtp_use_tls: bool = True
+    webauthn_rp_id: str = Field(default="localhost", min_length=1)
+    webauthn_rp_name: str = Field(default="Prism LLM Gateway", min_length=1)
+    webauthn_origin: str = Field(default="http://localhost:5173", min_length=1)
 
     @property
     def cors_allowed_origins_list(self) -> list[str]:
