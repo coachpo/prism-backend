@@ -189,6 +189,7 @@ class PricingTemplateCreate(BaseModel):
 
 
 class PricingTemplateUpdate(BaseModel):
+    expected_updated_at: datetime
     name: str | None = None
     description: str | None = None
     pricing_unit: Literal["PER_1M"] | None = None

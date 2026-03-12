@@ -7,17 +7,16 @@ from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import Connection, ModelConfig, PricingTemplate
+from app.models.models import Connection, PricingTemplate
 from app.schemas.schemas import (
     PricingTemplateConnectionsResponse,
     PricingTemplateConnectionUsageItem,
     PricingTemplateCreate,
-    PricingTemplateListItem,
     PricingTemplateResponse,
     PricingTemplateUpdate,
 )
 
-router = APIRouter(prefix="/api/pricing-templates", tags=["pricing-templates"] )
+router = APIRouter(prefix="/api/pricing-templates", tags=["pricing-templates"])
 
 _PRICING_AFFECTING_FIELDS = {
     "pricing_unit",
@@ -36,13 +35,15 @@ async def _load_template_or_404(
     *,
     profile_id: int,
     template_id: int,
- ) -> PricingTemplate:
-    result = await db.execute(
-        select(PricingTemplate).where(
-            PricingTemplate.id == template_id,
-            PricingTemplate.profile_id == profile_id,
-        )
+    lock_for_update: bool = False,
+) -> PricingTemplate:
+    query = select(PricingTemplate).where(
+        PricingTemplate.id == template_id,
+        PricingTemplate.profile_id == profile_id,
     )
+    if lock_for_update:
+        query = query.with_for_update()
+    result = await db.execute(query)
     template = result.scalar_one_or_none()
     if template is None:
         raise HTTPException(status_code=404, detail="Pricing template not found")
@@ -55,7 +56,7 @@ async def _ensure_unique_template_name(
     profile_id: int,
     name: str,
     exclude_id: int | None = None,
- ) -> None:
+) -> None:
     query = select(PricingTemplate).where(
         PricingTemplate.profile_id == profile_id,
         PricingTemplate.name == name,
@@ -70,11 +71,11 @@ async def _ensure_unique_template_name(
         )
 
 
-@router.get("", response_model=list[PricingTemplateListItem])
+@router.get("", response_model=list[PricingTemplateResponse])
 async def list_pricing_templates(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     result = await db.execute(
         select(PricingTemplate)
         .where(PricingTemplate.profile_id == profile_id)
@@ -88,7 +89,7 @@ async def create_pricing_template(
     body: PricingTemplateCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     await _ensure_unique_template_name(
         db,
         profile_id=profile_id,
@@ -120,7 +121,7 @@ async def get_pricing_template(
     template_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     return await _load_template_or_404(
         db,
         profile_id=profile_id,
@@ -134,14 +135,26 @@ async def update_pricing_template(
     body: PricingTemplateUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     template = await _load_template_or_404(
         db,
         profile_id=profile_id,
         template_id=template_id,
+        lock_for_update=True,
     )
 
     update_data = body.model_dump(exclude_unset=True)
+    expected_updated_at = update_data.pop("expected_updated_at")
+    if template.updated_at != expected_updated_at:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Pricing template has changed. Refresh and retry your edit.",
+                "current_version": template.version,
+                "current_updated_at": template.updated_at.isoformat(),
+            },
+        )
+
     if "name" in update_data:
         await _ensure_unique_template_name(
             db,
@@ -150,18 +163,22 @@ async def update_pricing_template(
             exclude_id=template.id,
         )
 
+    changed_fields = {
+        key: value
+        for key, value in update_data.items()
+        if value != getattr(template, key)
+    }
     pricing_changed = any(
-        field_name in update_data
-        and update_data[field_name] != getattr(template, field_name)
-        for field_name in _PRICING_AFFECTING_FIELDS
+        field_name in changed_fields for field_name in _PRICING_AFFECTING_FIELDS
     )
 
-    for key, value in update_data.items():
+    for key, value in changed_fields.items():
         setattr(template, key, value)
 
+    if changed_fields:
+        template.updated_at = utc_now()
     if pricing_changed:
         template.version = (template.version or 1) + 1
-    template.updated_at = utc_now()
     await db.flush()
     await db.refresh(template)
     return template
@@ -172,7 +189,7 @@ async def delete_pricing_template(
     template_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     template = await _load_template_or_404(
         db,
         profile_id=profile_id,
@@ -229,12 +246,14 @@ async def delete_pricing_template(
     return {"deleted": True}
 
 
-@router.get("/{template_id}/connections", response_model=PricingTemplateConnectionsResponse)
+@router.get(
+    "/{template_id}/connections", response_model=PricingTemplateConnectionsResponse
+)
 async def get_pricing_template_connections(
     template_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
- ):
+):
     template = await _load_template_or_404(
         db,
         profile_id=profile_id,
