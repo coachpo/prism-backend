@@ -79,6 +79,17 @@ def _normalize_endpoint_positions(endpoints: list[Endpoint]) -> None:
         endpoint.updated_at = now
 
 
+def _build_duplicate_endpoint_name(source_name: str, existing_names: set[str]) -> str:
+    base_name = f"{source_name.strip()} copy"
+    if base_name not in existing_names:
+        return base_name
+
+    suffix = 2
+    while f"{base_name} {suffix}" in existing_names:
+        suffix += 1
+    return f"{base_name} {suffix}"
+
+
 @router.get("/api/endpoints", response_model=list[EndpointResponse])
 async def list_endpoints(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -250,6 +261,48 @@ async def update_endpoint(
     await db.flush()
     await db.refresh(endpoint)
     return endpoint
+
+
+@router.post(
+    "/api/endpoints/{endpoint_id}/duplicate",
+    response_model=EndpointResponse,
+    status_code=201,
+)
+async def duplicate_endpoint(
+    endpoint_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    await _lock_profile_row(db, profile_id=profile_id)
+    endpoint_result = await db.execute(
+        select(Endpoint).where(
+            Endpoint.id == endpoint_id,
+            Endpoint.profile_id == profile_id,
+        )
+    )
+    source_endpoint = endpoint_result.scalar_one_or_none()
+    if source_endpoint is None:
+        raise HTTPException(status_code=404, detail="Endpoint not found")
+
+    existing_names_result = await db.execute(
+        select(Endpoint.name).where(Endpoint.profile_id == profile_id)
+    )
+    duplicate_name = _build_duplicate_endpoint_name(
+        source_endpoint.name,
+        set(existing_names_result.scalars().all()),
+    )
+
+    duplicate = Endpoint(
+        profile_id=profile_id,
+        name=duplicate_name,
+        base_url=source_endpoint.base_url,
+        api_key=source_endpoint.api_key,
+        position=await _get_next_endpoint_position(db, profile_id=profile_id),
+    )
+    db.add(duplicate)
+    await db.flush()
+    await db.refresh(duplicate)
+    return duplicate
 
 
 @router.delete("/api/endpoints/{endpoint_id}")

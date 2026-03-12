@@ -13,10 +13,12 @@ def _unique_suffix() -> str:
 @pytest.mark.asyncio
 async def test_endpoint_position_crud_flow():
     from app.core.database import AsyncSessionLocal, get_engine
+    from app.core.crypto import decrypt_secret
     from app.models.models import Profile
     from app.routers.endpoints import (
         create_endpoint,
         delete_endpoint,
+        duplicate_endpoint,
         list_endpoints,
         move_endpoint_position,
     )
@@ -103,6 +105,35 @@ async def test_endpoint_position_crud_flow():
         remaining = await list_endpoints(db=db, profile_id=profile.id)
         assert [endpoint.id for endpoint in remaining] == [created[2].id, created[1].id]
         assert [endpoint.position for endpoint in remaining] == [0, 1]
+
+        duplicate_source = created[2]
+        first_duplicate = await duplicate_endpoint(
+            endpoint_id=duplicate_source.id,
+            db=db,
+            profile_id=profile.id,
+        )
+        second_duplicate = await duplicate_endpoint(
+            endpoint_id=duplicate_source.id,
+            db=db,
+            profile_id=profile.id,
+        )
+
+        assert first_duplicate.id != duplicate_source.id
+        assert first_duplicate.name == f"{duplicate_source.name} copy"
+        assert second_duplicate.name == f"{duplicate_source.name} copy 2"
+        assert first_duplicate.base_url == duplicate_source.base_url
+        assert decrypt_secret(first_duplicate.api_key) == decrypt_secret(
+            duplicate_source.api_key
+        )
+
+        duplicated_listing = await list_endpoints(db=db, profile_id=profile.id)
+        assert [endpoint.name for endpoint in duplicated_listing] == [
+            created[2].name,
+            created[1].name,
+            f"{duplicate_source.name} copy",
+            f"{duplicate_source.name} copy 2",
+        ]
+        assert [endpoint.position for endpoint in duplicated_listing] == [0, 1, 2, 3]
 
 
 @pytest.mark.asyncio
