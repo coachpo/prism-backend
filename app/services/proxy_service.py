@@ -131,6 +131,7 @@ def build_upstream_headers(
     client_headers: dict[str, str] | None = None,
     blocklist_rules: list[HeaderBlocklistRule] | None = None,
     endpoint: Endpoint | None = None,
+    request_compressed: bool = True,
 ) -> dict[str, str]:
     """Build headers for the upstream request.
 
@@ -140,6 +141,10 @@ def build_upstream_headers(
     3. Provider extra headers (e.g., anthropic-version)
     4. Endpoint custom_headers — applied LAST, overwrites same-name
     5. Blocklist sanitization applied twice: on client headers and on final merged result
+
+    Args:
+        request_compressed: If False, force `Accept-Encoding: identity` so upstream
+            returns uncompressed content and the proxy avoids decode work.
     """
     auth_key = getattr(connection, "auth_type", None) or provider_type
     config = PROVIDER_AUTH.get(auth_key)
@@ -205,6 +210,9 @@ def build_upstream_headers(
                 logger.debug("Blocked header (post-merge): %s", key)
         headers = sanitized
 
+    if not request_compressed:
+        headers["Accept-Encoding"] = "identity"
+
     return _normalize_header_values(headers)
 
 
@@ -232,13 +240,42 @@ def sanitize_headers(
     return result
 
 
-def filter_response_headers(response_headers: httpx.Headers) -> dict[str, str]:
+def should_request_compressed_response(
+    audit_enabled: bool, audit_capture_bodies: bool
+) -> bool:
+    """Return True when we should allow upstream compression.
+
+    We only need decoded payload bytes when body capture is enabled for auditing.
+    In all other modes we request `Accept-Encoding: identity` to avoid decode CPU.
+    """
+    return audit_enabled and audit_capture_bodies
+
+
+def filter_response_headers(
+    response_headers: httpx.Headers, was_requested_compressed: bool = True
+) -> dict[str, str]:
+    """Filter upstream response headers for downstream delivery.
+
+    If content decoding likely occurred, we strip stale `content-encoding` and
+    upstream `content-length` so returned headers always match returned bytes.
+    """
+    content_encoding = (response_headers.get("content-encoding") or "").strip().lower()
+    upstream_signaled_compression = bool(
+        content_encoding and content_encoding != "identity"
+    )
+    strip_decompression_sensitive_headers = (
+        was_requested_compressed or upstream_signaled_compression
+    )
+
     filtered: dict[str, str] = {}
     for key, value in response_headers.items():
         key_lower = key.lower()
         if key_lower in HOP_BY_HOP_HEADERS:
             continue
-        if key_lower in AUTO_DECOMPRESSED_RESPONSE_HEADERS:
+        if (
+            strip_decompression_sensitive_headers
+            and key_lower in AUTO_DECOMPRESSED_RESPONSE_HEADERS
+        ):
             continue
         filtered[key] = value
     return filtered

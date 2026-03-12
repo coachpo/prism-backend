@@ -29,6 +29,7 @@ from app.services.proxy_service import (
     extract_model_from_body,
     extract_stream_flag,
     filter_response_headers,
+    should_request_compressed_response,
 )
 from app.services.stats_service import log_request, extract_token_usage
 from app.services.costing_service import (
@@ -106,6 +107,9 @@ async def _handle_proxy(
             request_path, path_model, upstream_model_id
         )
 
+    request_compressed = should_request_compressed_response(
+        audit_enabled, audit_capture_bodies
+    )
     blocklist_rules: list[HeaderBlocklistRule] = list(
         (
             (
@@ -193,6 +197,7 @@ async def _handle_proxy(
             client_headers,
             blocklist_rules,
             endpoint=ep.endpoint_rel,
+            request_compressed=request_compressed,
         )
         ep_desc = ep.name
         endpoint_body = rewritten_body
@@ -208,7 +213,10 @@ async def _handle_proxy(
                 send_req = client.build_request(method, upstream_url, **kwargs)
                 upstream_resp = await client.send(send_req, stream=True)
 
-                resp_headers_filtered = filter_response_headers(upstream_resp.headers)
+                resp_headers_filtered = filter_response_headers(
+                    upstream_resp.headers,
+                    was_requested_compressed=request_compressed,
+                )
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
 
                 if upstream_resp.status_code >= 400:
@@ -483,7 +491,10 @@ async def _handle_proxy(
                     endpoint_body,
                 )
                 elapsed_ms = int((time.monotonic() - start_time) * 1000)
-                resp_headers = filter_response_headers(response.headers)
+                resp_headers = filter_response_headers(
+                    response.headers,
+                    was_requested_compressed=request_compressed,
+                )
 
                 if response.status_code >= 400 and should_failover(
                     response.status_code

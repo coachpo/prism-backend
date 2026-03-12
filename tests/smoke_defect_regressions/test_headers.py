@@ -5,6 +5,7 @@ import pytest
 from app.services.proxy_service import (
     build_upstream_headers,
     filter_response_headers,
+    should_request_compressed_response,
 )
 
 
@@ -267,3 +268,72 @@ class TestHeaderBlocklist:
         assert "transfer-encoding" not in header_names
         assert filtered["content-type"] == "application/json"
         assert filtered["x-trace"] == "trace-1"
+
+    def test_conditional_decompression_helper_audit_enabled_bodies_captured(self):
+        """DEF-067: should_request_compressed_response returns True when both audit flags are True."""
+        result = should_request_compressed_response(
+            audit_enabled=True, audit_capture_bodies=True
+        )
+        assert result is True
+
+    def test_conditional_decompression_helper_audit_disabled(self):
+        """DEF-067: should_request_compressed_response returns False when audit is disabled."""
+        result = should_request_compressed_response(
+            audit_enabled=False, audit_capture_bodies=True
+        )
+        assert result is False
+
+    def test_conditional_decompression_helper_bodies_not_captured(self):
+        """DEF-067: should_request_compressed_response returns False when bodies are not captured."""
+        result = should_request_compressed_response(
+            audit_enabled=True, audit_capture_bodies=False
+        )
+        assert result is False
+
+    def test_filter_response_headers_preserves_content_length_without_compression_header(
+        self,
+    ):
+        """DEF-067: preserve content-length when identity/no encoding was returned."""
+        import httpx
+
+        raw_headers = httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-length": "1234",
+                "x-custom": "value",
+            }
+        )
+
+        filtered = filter_response_headers(
+            raw_headers, was_requested_compressed=False
+        )
+
+        assert "content-type" in filtered
+        assert "x-custom" in filtered
+        assert "content-encoding" not in filtered
+        assert "content-length" in filtered
+        assert filtered["content-length"] == "1234"
+
+    def test_filter_response_headers_strips_stale_headers_if_upstream_encoded_anyway(
+        self,
+    ):
+        """DEF-067: strip stale encoding metadata even if identity was requested."""
+        import httpx
+
+        raw_headers = httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-encoding": "gzip",
+                "content-length": "1234",
+                "x-custom": "value",
+            }
+        )
+
+        filtered = filter_response_headers(
+            raw_headers, was_requested_compressed=False
+        )
+
+        assert "content-type" in filtered
+        assert "x-custom" in filtered
+        assert "content-encoding" not in filtered
+        assert "content-length" not in filtered
