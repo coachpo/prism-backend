@@ -1,3 +1,4 @@
 # ruff: noqa: F403
 from tests.smoke_defect_regressions.test_costing_cases.token_usage_parsing_and_cache_creation_cost_tests import *
 from tests.smoke_defect_regressions.test_costing_cases.missing_special_price_policy_and_special_token_guard_tests import *
+from tests.smoke_defect_regressions.test_costing_cases.pricing_template_update_cas_tests import *

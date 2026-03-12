@@ -26,6 +26,7 @@ from tests.smoke_defect_regressions.test_costing import (
     TestDEF016_MissingSpecialPriceFailsClosed,
     TestDEF017_ExplicitSpecialPricesAreUsed,
     TestDEF018_SpecialTokensNeverCopiedFromOutput,
+    TestDEF074_PricingTemplateUpdateCAS,
 )
 from tests.smoke_defect_regressions.test_failover import (
     TestFailoverRecoveryFieldValidation,
@@ -93,6 +94,7 @@ __all__ = [
     "TestDEF071_ProxyApiKeyHeaderAcceptance",
     "TestDEF072_SecretSanitization",
     "TestDEF073_AuthEmailDeliveryFailures",
+    "TestDEF074_PricingTemplateUpdateCAS",
     "TestEndpointOwnerRoute",
     "TestFailoverRecoveryFieldValidation",
     "TestHeaderBlocklist",
