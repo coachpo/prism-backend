@@ -269,6 +269,25 @@ class PasswordResetChallenge(Base):
     )
 
 
+class WebAuthnChallenge(Base):
+    __tablename__ = "webauthn_challenges"
+    __table_args__ = (
+        Index("idx_webauthn_challenges_expires_at", "expires_at"),
+        Index("idx_webauthn_challenges_challenge_key", "challenge_key"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    challenge_key: Mapped[str] = mapped_column(
+        String(100), nullable=False, unique=True, index=True
+    )
+    challenge: Mapped[bytes] = mapped_column("challenge", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+
 class WebAuthnCredential(Base):
     __tablename__ = "webauthn_credentials"
     __table_args__ = (

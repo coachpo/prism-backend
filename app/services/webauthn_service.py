@@ -6,11 +6,11 @@ Uses py_webauthn library for WebAuthn protocol implementation.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn import (
     generate_authentication_options,
@@ -30,11 +30,9 @@ from webauthn.helpers.structs import (
 
 from app.core.config import get_settings
 from app.core.time import utc_now
-from app.models.domains.identity import WebAuthnCredential
+from app.models.domains.identity import WebAuthnChallenge, WebAuthnCredential
 
 
-# Challenge storage (in-memory for now, should use Redis in production)
-_challenge_store: dict[str, tuple[bytes, datetime]] = {}
 _AUTHENTICATION_CHALLENGE_KEY = "authentication"
 
 
@@ -56,29 +54,53 @@ def _get_origin() -> str:
     return settings.webauthn_origin
 
 
-def _store_challenge(user_id: str, challenge: bytes) -> None:
-    """Store challenge temporarily (2 minutes TTL)."""
+
+
+async def _store_challenge(db: AsyncSession, challenge_key: str, challenge: bytes) -> None:
+    """Store challenge in database with 2 minutes TTL."""
     expires_at = utc_now() + timedelta(minutes=2)
-    _challenge_store[user_id] = (challenge, expires_at)
+
+    # Delete existing challenge with same key
+    await db.execute(
+        delete(WebAuthnChallenge).where(WebAuthnChallenge.challenge_key == challenge_key)
+    )
+
+    # Create new challenge
+    db_challenge = WebAuthnChallenge(
+        challenge_key=challenge_key,
+        challenge=challenge,
+        expires_at=expires_at,
+    )
+    db.add(db_challenge)
+    await db.flush()
 
 
-def _get_challenge(user_id: str) -> bytes | None:
-    """Retrieve and validate stored challenge."""
-    if user_id not in _challenge_store:
+async def _get_challenge(db: AsyncSession, challenge_key: str) -> bytes | None:
+    """Retrieve and validate stored challenge from database."""
+    stmt = select(WebAuthnChallenge).where(
+        WebAuthnChallenge.challenge_key == challenge_key
+    )
+    result = await db.execute(stmt)
+    db_challenge = result.scalar_one_or_none()
+
+    if db_challenge is None:
         return None
 
-    challenge, expires_at = _challenge_store[user_id]
-    if utc_now() > expires_at:
-        del _challenge_store[user_id]
+    # Check expiration
+    if utc_now() > db_challenge.expires_at:
+        await db.delete(db_challenge)
+        await db.flush()
         return None
 
-    return challenge
+    return db_challenge.challenge
 
 
-def _clear_challenge(user_id: str) -> None:
+async def _clear_challenge(db: AsyncSession, challenge_key: str) -> None:
     """Clear stored challenge after use."""
-    _challenge_store.pop(user_id, None)
-
+    await db.execute(
+        delete(WebAuthnChallenge).where(WebAuthnChallenge.challenge_key == challenge_key)
+    )
+    await db.flush()
 
 def _serialize_aaguid(aaguid: str | None) -> bytes | None:
     if not aaguid:
@@ -135,7 +157,7 @@ async def generate_registration_options_for_user(
     )
 
     # Store challenge
-    _store_challenge(str(auth_subject_id), options.challenge)
+    await _store_challenge(db, str(auth_subject_id), options.challenge)
 
     # Convert to dict for JSON serialization
     return {
@@ -188,7 +210,7 @@ async def verify_and_save_registration(
         ValueError: If verification fails
     """
     # Retrieve stored challenge
-    expected_challenge = _get_challenge(str(auth_subject_id))
+    expected_challenge = await _get_challenge(db, str(auth_subject_id))
     if not expected_challenge:
         raise ValueError("Challenge not found or expired")
 
@@ -203,7 +225,7 @@ async def verify_and_save_registration(
         )
 
         # Clear challenge after successful verification
-        _clear_challenge(str(auth_subject_id))
+        await _clear_challenge(db, str(auth_subject_id))
 
         # Save credential to database
         new_credential = WebAuthnCredential(
@@ -226,7 +248,7 @@ async def verify_and_save_registration(
         return new_credential
 
     except Exception as e:
-        _clear_challenge(str(auth_subject_id))
+        await _clear_challenge(db, str(auth_subject_id))
         raise ValueError(f"Registration verification failed: {str(e)}") from e
 
 
@@ -266,7 +288,7 @@ async def generate_authentication_options_for_user(
     )
 
     # Store challenge
-    _store_challenge(_AUTHENTICATION_CHALLENGE_KEY, options.challenge)
+    await _store_challenge(db, _AUTHENTICATION_CHALLENGE_KEY, options.challenge)
 
     # Convert to dict for JSON serialization
     return {
@@ -305,7 +327,7 @@ async def verify_authentication(
         ValueError: If verification fails
     """
     # Retrieve stored challenge
-    expected_challenge = _get_challenge(_AUTHENTICATION_CHALLENGE_KEY)
+    expected_challenge = await _get_challenge(db, _AUTHENTICATION_CHALLENGE_KEY)
     if not expected_challenge:
         raise ValueError("Challenge not found or expired")
 
@@ -333,7 +355,7 @@ async def verify_authentication(
         )
 
         # Clear challenge after successful verification
-        _clear_challenge(_AUTHENTICATION_CHALLENGE_KEY)
+        await _clear_challenge(db, _AUTHENTICATION_CHALLENGE_KEY)
 
         # Check for sign count anomaly (potential cloned credential)
         if verification.new_sign_count <= db_credential.sign_count:
@@ -351,7 +373,7 @@ async def verify_authentication(
         return db_credential, db_credential.auth_subject_id
 
     except Exception as e:
-        _clear_challenge(_AUTHENTICATION_CHALLENGE_KEY)
+        await _clear_challenge(db, _AUTHENTICATION_CHALLENGE_KEY)
         raise ValueError(f"Authentication verification failed: {str(e)}") from e
 
 

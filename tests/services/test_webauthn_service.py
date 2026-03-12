@@ -1,22 +1,17 @@
 """Unit tests for WebAuthn service."""
 
-import pytest
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
+import pytest
 from webauthn.helpers import bytes_to_base64url
 from webauthn.helpers.structs import CredentialDeviceType
 
-from app.services import webauthn_service
+from app.core.time import utc_now
 from app.models.domains.identity import WebAuthnCredential
-
-
-@pytest.fixture(autouse=True)
-def clear_challenge_store():
-    webauthn_service._challenge_store.clear()
-    yield
-    webauthn_service._challenge_store.clear()
+from app.services import webauthn_service
 
 
 @pytest.mark.asyncio
@@ -28,6 +23,8 @@ async def test_generate_registration_options():
             scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
         )
     )
+    db.add = MagicMock()
+    db.flush = AsyncMock()
 
     options = await webauthn_service.generate_registration_options_for_user(
         db, auth_subject_id=1, username="testuser"
@@ -44,6 +41,9 @@ async def test_generate_registration_options():
 async def test_verify_registration_missing_challenge():
     """Test registration verification fails without challenge."""
     db = AsyncMock()
+    db.execute = AsyncMock(
+        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
+    )
 
     with pytest.raises(ValueError, match="Challenge not found or expired"):
         await webauthn_service.verify_and_save_registration(
@@ -61,9 +61,12 @@ async def test_verify_registration_missing_challenge():
 
 @pytest.mark.asyncio
 async def test_verify_registration_passes_raw_credential_dict_to_webauthn():
-    db = MagicMock()
+    db = AsyncMock()
+    db.execute = AsyncMock()
+    db.add = MagicMock()
     db.flush = AsyncMock()
     db.refresh = AsyncMock()
+
     credential = {
         "id": "credential-id",
         "rawId": "credential-id",
@@ -81,9 +84,16 @@ async def test_verify_registration_passes_raw_credential_dict_to_webauthn():
         credential_device_type=CredentialDeviceType.MULTI_DEVICE,
         credential_backed_up=False,
     )
-    webauthn_service._store_challenge("1", b"registration-challenge")
 
     with patch.object(
+        webauthn_service,
+        "_get_challenge",
+        AsyncMock(return_value=b"registration-challenge"),
+    ), patch.object(
+        webauthn_service,
+        "_clear_challenge",
+        AsyncMock(),
+    ) as clear_challenge_mock, patch.object(
         webauthn_service,
         "verify_registration_response",
         return_value=verification,
@@ -103,7 +113,7 @@ async def test_verify_registration_passes_raw_credential_dict_to_webauthn():
     assert result.device_name == "Laptop"
     assert result.aaguid == UUID("00000000-0000-0000-0000-000000000000").bytes
     assert result.backup_eligible is True
-    assert webauthn_service._get_challenge("1") is None
+    clear_challenge_mock.assert_awaited_once_with(db, "1")
 
 
 @pytest.mark.asyncio
@@ -114,7 +124,8 @@ async def test_verify_authentication_uses_shared_challenge_key():
             scalars=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
         )
     )
-    verify_db = AsyncMock()
+    options_db.flush = AsyncMock()
+
     db_credential = SimpleNamespace(
         credential_id=b"credential-id",
         public_key=b"public-key",
@@ -124,9 +135,12 @@ async def test_verify_authentication_uses_shared_challenge_key():
         last_used_ip=None,
         backup_state=False,
     )
+    verify_db = AsyncMock()
     verify_db.execute = AsyncMock(
         return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=db_credential))
     )
+    verify_db.flush = AsyncMock()
+
     verification = SimpleNamespace(new_sign_count=8, credential_backed_up=True)
     raw_id = bytes_to_base64url(b"credential-id")
     credential = {
@@ -141,17 +155,28 @@ async def test_verify_authentication_uses_shared_challenge_key():
         "type": "public-key",
     }
 
-    options = await webauthn_service.generate_authentication_options_for_user(
-        options_db,
-        auth_subject_id=1,
-    )
+    with patch.object(
+        webauthn_service,
+        "_store_challenge",
+        AsyncMock(),
+    ) as store_challenge_mock:
+        options = await webauthn_service.generate_authentication_options_for_user(
+            options_db,
+            auth_subject_id=1,
+        )
 
-    assert webauthn_service._get_challenge(
-        webauthn_service._AUTHENTICATION_CHALLENGE_KEY
-    ) == webauthn_service.base64url_to_bytes(options["challenge"])
-    assert webauthn_service._get_challenge("1") is None
+    store_challenge_mock.assert_awaited_once()
+    stored_challenge = store_challenge_mock.await_args.args[2]
 
     with patch.object(
+        webauthn_service,
+        "_get_challenge",
+        AsyncMock(return_value=stored_challenge),
+    ), patch.object(
+        webauthn_service,
+        "_clear_challenge",
+        AsyncMock(),
+    ) as clear_challenge_mock, patch.object(
         webauthn_service,
         "verify_authentication_response",
         return_value=verification,
@@ -167,17 +192,15 @@ async def test_verify_authentication_uses_shared_challenge_key():
         )
 
     assert verify_mock.call_args.kwargs["credential"] is credential
-    assert verify_mock.call_args.kwargs[
-        "expected_challenge"
-    ] == webauthn_service.base64url_to_bytes(options["challenge"])
+    assert verify_mock.call_args.kwargs["expected_challenge"] == stored_challenge
     assert auth_subject_id == 1
     assert result_credential.sign_count == 8
     assert result_credential.last_used_ip == "127.0.0.1"
     assert result_credential.backup_state is True
-    assert (
-        webauthn_service._get_challenge(webauthn_service._AUTHENTICATION_CHALLENGE_KEY)
-        is None
+    clear_challenge_mock.assert_awaited_once_with(
+        verify_db, webauthn_service._AUTHENTICATION_CHALLENGE_KEY
     )
+    assert stored_challenge == webauthn_service.base64url_to_bytes(options["challenge"])
 
 
 @pytest.mark.asyncio
@@ -202,9 +225,7 @@ async def test_list_credentials():
         )
     )
 
-    credentials = await webauthn_service.list_credentials_for_user(
-        db, auth_subject_id=1
-    )
+    credentials = await webauthn_service.list_credentials_for_user(db, auth_subject_id=1)
 
     assert len(credentials) == 1
     assert credentials[0].device_name == "Device 1"
@@ -218,13 +239,15 @@ async def test_revoke_credential_success():
     db.execute = AsyncMock(
         return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=mock_cred))
     )
+    db.flush = AsyncMock()
+    db.delete = AsyncMock()
 
     success = await webauthn_service.revoke_credential(
         db, credential_id=1, auth_subject_id=1
     )
 
     assert success is True
-    db.delete.assert_called_once_with(mock_cred)
+    db.delete.assert_awaited_once_with(mock_cred)
 
 
 @pytest.mark.asyncio
@@ -244,17 +267,21 @@ async def test_revoke_credential_not_found():
 
 @pytest.mark.asyncio
 async def test_challenge_expiration():
-    """Test challenge expiration logic."""
-    # Store a challenge
-    webauthn_service._store_challenge("user1", b"test_challenge")
+    """Expired challenge should be deleted and treated as missing."""
+    expired_challenge = SimpleNamespace(
+        challenge=b"test_challenge",
+        expires_at=utc_now() - timedelta(seconds=1),
+    )
+    db = AsyncMock()
+    db.execute = AsyncMock(
+        return_value=MagicMock(
+            scalar_one_or_none=MagicMock(return_value=expired_challenge)
+        )
+    )
+    db.delete = AsyncMock()
+    db.flush = AsyncMock()
 
-    # Retrieve immediately - should work
-    challenge = webauthn_service._get_challenge("user1")
-    assert challenge == b"test_challenge"
+    challenge = await webauthn_service._get_challenge(db, "user1")
 
-    # Clear challenge
-    webauthn_service._clear_challenge("user1")
-
-    # Should be gone
-    challenge = webauthn_service._get_challenge("user1")
     assert challenge is None
+    db.delete.assert_awaited_once_with(expired_challenge)
