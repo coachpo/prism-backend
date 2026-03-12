@@ -1,23 +1,23 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, PostgreSQL-backed, migration-on-startup, and now owns operator auth, password reset, proxy API keys, and profile-scoped admin flows in addition to routing/observability.
+FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, PostgreSQL-backed, migration-on-startup, and now owns operator auth, password reset, proxy API keys, pricing templates, and profile-scoped admin flows in addition to routing and observability.
 
 ## STRUCTURE
 ```
 backend/
-├── app/AGENTS.md            # Runtime and management implementation details
-├── tests/AGENTS.md          # Test organization, aggregators, DEF/FR conventions
-├── app/
+├── app/AGENTS.md                   # Runtime and management implementation details
+├── app/services/stats/AGENTS.md    # Telemetry and spending query cluster
+├── tests/AGENTS.md                 # Test organization, aggregators, DEF/FR conventions
 ├── alembic/
 ├── requirements.txt
-└── docker-compose.yml       # Local PostgreSQL helper
+└── docker-compose.yml              # Local PostgreSQL helper
 ```
 
 ## CHILD DOCS
 
-- `app/AGENTS.md`: use for router/service/runtime details once you are inside implementation code.
-- `tests/AGENTS.md`: use for defect IDs, aggregators, and container-backed test setup.
+- `app/AGENTS.md`: use for router, service, schema, and startup behavior once you are inside implementation code.
+- `tests/AGENTS.md`: use for defect IDs, aggregators, startup/auth regressions, and container-backed test setup.
 
 ## RUNTIME SEMANTICS
 
@@ -31,11 +31,11 @@ backend/
 
 - Startup + shared clients: `app/main.py`
 - Scope resolution: `app/dependencies.py`
-- Operator auth and password reset: `app/routers/auth.py`, `app/services/auth_service.py`, `app/core/auth.py`
+- Operator auth, verified email, password reset, proxy API keys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/core/auth.py`
 - Proxy routing flow: `app/routers/proxy.py`, `app/services/loadbalancer.py`, `app/services/proxy_service.py`
 - Config import/export + header blocklist: `app/routers/config.py`, `app/routers/config_domains/`
 - Health checks + owner lookups + runtime blocklist merge: `app/routers/connections.py`, `app/routers/connections_domains/`
-- Stats, costing, auth settings, proxy keys, audit: `app/routers/stats.py`, `app/routers/settings.py`, `app/services/stats_service.py`, `app/services/costing_service.py`, `app/services/audit_service.py`
+- Stats, costing, and audit: `app/routers/stats.py`, `app/routers/pricing_templates.py`, `app/services/stats_service.py`, `app/services/costing_service.py`, `app/services/audit_service.py`
 
 ## COMMANDS
 
@@ -50,8 +50,9 @@ docker compose up -d postgres
 - Keep handlers and services async; use the shared lifespan `httpx.AsyncClient` instead of per-request clients.
 - Use `selectinload` for relationship-heavy fetches and keep schema contracts aligned with frontend types.
 - Normalize and validate endpoint base URLs before persisting them.
-- Keep auth/session logic in `services/auth_service.py` and `core/auth.py`; do not hand-roll cookie or proxy-key handling in routers.
+- Keep SMTP, verified-email, password-reset, refresh-token, and proxy-key logic centralized in `app/services/auth_service.py` and `app/core/auth.py`.
 - Keep settings, costing, and profile invariants as startup-enforced behavior, not optional manual steps.
+- Preserve provider-specific health-check behavior in `app/routers/connections.py`; OpenAI has fallback probes by design.
 
 ## ANTI-PATTERNS
 
@@ -64,5 +65,5 @@ docker compose up -d postgres
 
 - The suite runs against PostgreSQL testcontainers via `tests/conftest.py`; do not assume SQLite semantics.
 - `tests/test_smoke_defect_regressions.py` and `tests/test_multi_profile_isolation.py` are the top-level aggregators.
-- Auth, password-reset, CORS-auth, and proxy-key regressions currently live under `tests/smoke_defect_regressions/test_startup_cases/`.
+- Auth, password-reset, email-delivery, and proxy-key regressions cluster under `tests/smoke_defect_regressions/test_startup_cases/`, especially `tests/smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`.
 - For end-to-end behavior checks beyond pytest, use `../docs/SMOKE_TEST_PLAN.md` from the repo root.
