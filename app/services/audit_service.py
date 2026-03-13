@@ -4,6 +4,7 @@ import logging
 import re
 
 from app.models.models import AuditLog, LoadbalanceEvent
+from app.services.realtime import connection_manager
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,14 @@ async def record_audit_log(
         async with AsyncSessionLocal() as session:
             session.add(entry)
             await session.commit()
+            try:
+                await connection_manager.broadcast_to_profile(
+                    profile_id=profile_id,
+                    channel="request_logs",
+                    message={"type": "request_logs.dirty"},
+                )
+            except Exception:
+                logger.debug("Failed to broadcast audit log event (non-critical)")
     except asyncio.CancelledError:
         logger.debug("Audit logging cancelled")
     except Exception:
@@ -156,6 +165,14 @@ async def record_loadbalance_event(
         async with AsyncSessionLocal() as session:
             session.add(entry)
             await session.commit()
+            try:
+                await connection_manager.broadcast_to_profile(
+                    profile_id=profile_id,
+                    channel="loadbalance_events",
+                    message={"type": "loadbalance_events.dirty"},
+                )
+            except Exception:
+                logger.debug("Failed to broadcast loadbalance event (non-critical)")
     except asyncio.CancelledError:
         logger.debug("Loadbalance event logging cancelled")
     except Exception:

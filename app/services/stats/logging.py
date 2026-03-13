@@ -109,7 +109,20 @@ async def log_request(
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
                     channel="dashboard",
-                    message={"type": "dashboard.dirty", "sections": ["summary", "recentRequests"]}
+                    message={
+                        "type": "dashboard.dirty",
+                        "sections": ["summary", "recentRequests"],
+                    },
+                )
+                await connection_manager.broadcast_to_profile(
+                    profile_id=profile_id,
+                    channel="request_logs",
+                    message={"type": "request_logs.dirty"},
+                )
+                await connection_manager.broadcast_to_profile(
+                    profile_id=profile_id,
+                    channel="statistics",
+                    message={"type": "statistics.dirty"},
                 )
             except Exception:
                 logger.debug("Failed to broadcast realtime event (non-critical)")
