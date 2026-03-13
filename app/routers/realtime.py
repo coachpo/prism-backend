@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import decode_access_token
+from app.core.config import get_settings
 from app.dependencies import get_db
 from app.models.domains.identity import Profile
 from app.services.auth_service import get_or_create_app_auth_settings
@@ -19,9 +20,11 @@ router = APIRouter(prefix="/api/realtime", tags=["realtime"])
 logger = logging.getLogger(__name__)
 
 
-async def authenticate_websocket(websocket: WebSocket) -> dict[str, Any] | None:
+async def authenticate_websocket(
+    websocket: WebSocket, cookie_name: str
+) -> dict[str, Any] | None:
     """Authenticate WebSocket connection using cookie-based session."""
-    access_token = websocket.cookies.get("access_token")
+    access_token = websocket.cookies.get(cookie_name)
     if not access_token:
         return None
 
@@ -64,9 +67,12 @@ async def websocket_endpoint(
         return
 
     try:
+        settings = get_settings()
         settings_row = await get_or_create_app_auth_settings(db)
         auth_enabled = bool(settings_row.auth_enabled)
-        auth_payload = await authenticate_websocket(websocket)
+        auth_payload = await authenticate_websocket(
+            websocket, settings.auth_cookie_name
+        )
 
         if auth_enabled:
             if not auth_payload:

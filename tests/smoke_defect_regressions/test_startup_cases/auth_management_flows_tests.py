@@ -6,9 +6,11 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi import WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, func, select
 
+from app.core.auth import create_access_token
 from app.core.config import get_settings
 from app.core.crypto import hash_password
 from app.core.crypto import hash_opaque_token
@@ -24,6 +26,7 @@ from app.models.models import (
     ProxyApiKey,
     RefreshToken,
 )
+from app.routers.realtime import websocket_endpoint
 from app.services.auth_service import (
     get_or_create_app_auth_settings,
     send_password_reset_email,
@@ -35,6 +38,26 @@ TEST_USERNAME = "admin"
 TEST_PASSWORD = "11111111"
 UPDATED_PASSWORD = "22222222"
 TEST_EMAIL = "admin@example.com"
+
+
+class _FakeWebSocket:
+    def __init__(self, *, cookies: dict[str, str]):
+        self.cookies = cookies
+        self.accepted = False
+        self.close_code: int | None = None
+        self.sent_messages: list[dict[str, object]] = []
+
+    async def accept(self) -> None:
+        self.accepted = True
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.close_code = code
+
+    async def send_json(self, data: dict[str, object]) -> None:
+        self.sent_messages.append(data)
+
+    async def receive_json(self) -> dict[str, object]:
+        raise WebSocketDisconnect()
 
 
 def _get_cookie_max_age(headers: list[str], cookie_name: str) -> int | None:
@@ -383,6 +406,44 @@ class TestDEF069_AuthSessionLifecycle:
                     )
                     assert refresh_token_count == 1
         finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_realtime_websocket_uses_configured_access_cookie_name(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        await _reset_auth_state()
+        custom_cookie_name = f"custom_access_token_{uuid4().hex[:8]}"
+        monkeypatch.setenv("AUTH_COOKIE_NAME", custom_cookie_name)
+        get_settings.cache_clear()
+
+        try:
+            async with AsyncSessionLocal() as session:
+                settings_row = await get_or_create_app_auth_settings(session)
+                access_token = create_access_token(
+                    subject_id=settings_row.id,
+                    username=settings_row.username or "",
+                    token_version=settings_row.token_version,
+                )
+
+            websocket = _FakeWebSocket(cookies={custom_cookie_name: access_token})
+
+            async with AsyncSessionLocal() as session:
+                await websocket_endpoint(websocket, session)
+
+            assert websocket.accepted is True
+            assert websocket.close_code is None
+            assert websocket.sent_messages[:2] == [
+                {
+                    "type": "authenticated",
+                    "username": TEST_USERNAME,
+                },
+                {
+                    "type": "heartbeat",
+                },
+            ]
+        finally:
+            get_settings.cache_clear()
             await _cleanup_auth_state()
 
 
