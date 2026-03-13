@@ -47,18 +47,7 @@ async def websocket_endpoint(
     websocket: WebSocket,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """WebSocket endpoint for realtime dashboard updates.
-
-    Protocol:
-    - Client connects
-    - Server authenticates using cookie session
-    - Client sends: {"type": "subscribe", "profile_id": 1, "channel": "dashboard"}
-    - Server sends: {"type": "subscribed", "profile_id": 1, "channel": "dashboard"}
-    - Server sends: {"type": "heartbeat"}
-    - Server sends: {"type": "dashboard.dirty", "sections": ["summary", "spending"]}
-    - Client sends: {"type": "pong"}
-    - Client sends: {"type": "unsubscribe"}
-    """
+    """WebSocket endpoint for profile-scoped realtime updates."""
     connection_id = await connection_manager.connect(websocket)
     connection = connection_manager.get_connection(connection_id)
 
@@ -164,8 +153,38 @@ async def websocket_endpoint(
                     )
 
             elif message_type == "unsubscribe":
-                # Disconnect will handle cleanup
+                await connection_manager.unsubscribe(connection_id)
                 await connection.send_json({"type": "unsubscribed"})
+
+            elif message_type == "unsubscribe_channel":
+                channel = data.get("channel")
+
+                if not isinstance(channel, str) or channel.strip() == "":
+                    await connection.send_json(
+                        {
+                            "type": "error",
+                            "message": "channel required",
+                        }
+                    )
+                    continue
+
+                success = await connection_manager.unsubscribe_channel(
+                    connection_id, channel
+                )
+                if success:
+                    await connection.send_json(
+                        {
+                            "type": "unsubscribed",
+                            "channel": channel,
+                        }
+                    )
+                else:
+                    await connection.send_json(
+                        {
+                            "type": "error",
+                            "message": "Channel unsubscribe failed",
+                        }
+                    )
 
             elif message_type == "pong":
                 # Client responded to heartbeat

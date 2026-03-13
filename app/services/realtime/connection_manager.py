@@ -23,7 +23,7 @@ class RealtimeConnection:
         self.websocket = websocket
         self.connection_id = connection_id
         self.profile_id: int | None = None
-        self.channel: str | None = None
+        self.channels: set[str] = set()
         self.authenticated = False
 
     async def send_json(self, data: dict[str, Any]) -> None:
@@ -65,13 +65,7 @@ class ConnectionManager:
             if not connection:
                 return
 
-            # Remove from all rooms
-            if connection.profile_id and connection.channel:
-                room_key = (connection.profile_id, connection.channel)
-                if room_key in self.rooms:
-                    self.rooms[room_key].discard(connection_id)
-                    if not self.rooms[room_key]:
-                        del self.rooms[room_key]
+            self._clear_connection_subscriptions_locked(connection)
 
         logger.info("WebSocket connection closed: %s", connection_id)
 
@@ -84,17 +78,14 @@ class ConnectionManager:
             if not connection:
                 return False
 
-            # Unsubscribe from previous room if any
-            if connection.profile_id and connection.channel:
-                old_room_key = (connection.profile_id, connection.channel)
-                if old_room_key in self.rooms:
-                    self.rooms[old_room_key].discard(connection_id)
-                    if not self.rooms[old_room_key]:
-                        del self.rooms[old_room_key]
+            if (
+                connection.profile_id is not None
+                and connection.profile_id != profile_id
+            ):
+                self._clear_connection_subscriptions_locked(connection)
 
-            # Subscribe to new room
             connection.profile_id = profile_id
-            connection.channel = channel
+            connection.channels.add(channel)
             room_key = (profile_id, channel)
 
             if room_key not in self.rooms:
@@ -108,6 +99,27 @@ class ConnectionManager:
             channel,
         )
         return True
+
+    async def unsubscribe_channel(self, connection_id: str, channel: str) -> bool:
+        async with self._lock:
+            connection = self.connections.get(connection_id)
+            if not connection or connection.profile_id is None:
+                return False
+
+            if channel not in connection.channels:
+                return False
+
+            self._remove_channel_subscription_locked(connection, channel)
+            return True
+
+    async def unsubscribe(self, connection_id: str) -> bool:
+        async with self._lock:
+            connection = self.connections.get(connection_id)
+            if not connection:
+                return False
+
+            self._clear_connection_subscriptions_locked(connection)
+            return True
 
     async def broadcast_to_profile(
         self, profile_id: int, channel: str, message: dict[str, Any]
@@ -153,6 +165,31 @@ class ConnectionManager:
     def get_connection(self, connection_id: str) -> RealtimeConnection | None:
         """Get connection by ID."""
         return self.connections.get(connection_id)
+
+    def _remove_channel_subscription_locked(
+        self, connection: RealtimeConnection, channel: str
+    ) -> None:
+        if connection.profile_id is None:
+            return
+
+        connection.channels.discard(channel)
+        room_key = (connection.profile_id, channel)
+        if room_key in self.rooms:
+            self.rooms[room_key].discard(connection.connection_id)
+            if not self.rooms[room_key]:
+                del self.rooms[room_key]
+
+        if not connection.channels:
+            connection.profile_id = None
+
+    def _clear_connection_subscriptions_locked(
+        self, connection: RealtimeConnection
+    ) -> None:
+        for channel in tuple(connection.channels):
+            self._remove_channel_subscription_locked(connection, channel)
+
+        connection.channels.clear()
+        connection.profile_id = None
 
     def get_stats(self) -> dict[str, Any]:
         """Get connection manager statistics."""

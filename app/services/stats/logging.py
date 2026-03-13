@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from app.models.models import RequestLog
+from app.schemas.domains.stats import RequestLogResponse
 from app.services.realtime import connection_manager
 
 logger = logging.getLogger(__name__)
@@ -104,28 +105,58 @@ async def log_request(
             await log_db.commit()
             await log_db.refresh(entry)
 
-            # Emit realtime event for dashboard updates
             try:
+                serialized_entry = RequestLogResponse.model_validate(entry).model_dump(
+                    mode="json"
+                )
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
                     channel="dashboard",
                     message={
-                        "type": "dashboard.dirty",
-                        "sections": ["summary", "recentRequests"],
+                        "type": "dashboard.update",
+                        "request_log": serialized_entry,
                     },
                 )
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
                     channel="request_logs",
-                    message={"type": "request_logs.dirty"},
+                    message={
+                        "type": "request_logs.new",
+                        "request_log": serialized_entry,
+                    },
                 )
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
                     channel="statistics",
-                    message={"type": "statistics.dirty"},
+                    message={
+                        "type": "statistics.new",
+                        "request_log": serialized_entry,
+                    },
                 )
             except Exception:
-                logger.debug("Failed to broadcast realtime event (non-critical)")
+                logger.exception(
+                    "Failed to broadcast request-log payload; falling back to dirty signals"
+                )
+                try:
+                    await connection_manager.broadcast_to_profile(
+                        profile_id=profile_id,
+                        channel="dashboard",
+                        message={"type": "dashboard.dirty"},
+                    )
+                    await connection_manager.broadcast_to_profile(
+                        profile_id=profile_id,
+                        channel="request_logs",
+                        message={"type": "request_logs.dirty"},
+                    )
+                    await connection_manager.broadcast_to_profile(
+                        profile_id=profile_id,
+                        channel="statistics",
+                        message={"type": "statistics.dirty"},
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to broadcast dirty fallback for request log (non-critical)"
+                    )
 
             return entry.id
     except asyncio.CancelledError:
