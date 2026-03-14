@@ -30,6 +30,7 @@ multi_profile_isolation/
 - Keep tests framed in FR and profile-isolation semantics; many files map directly to requirement IDs rather than CRUD surfaces.
 - Runtime tests should prove that profile A and profile B can share overlapping IDs without cross-talk.
 - Observability tests should assert immutable `profile_id` attribution, not just response payload shape.
+- Connection ordering and config import/export belong here when they prove isolation across profiles, even if similar single-profile behavior is also covered in DEF regressions.
 - Config-import cases belong here when they prove isolation boundaries, even if similar validation exists in defect regressions.
 
 ## ANTI-PATTERNS
