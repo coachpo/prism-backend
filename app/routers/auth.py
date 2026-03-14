@@ -8,6 +8,7 @@ from app.routers.auth_domains import (
     clear_auth_cookies,
     confirm_password_reset_response,
     get_auth_status_response,
+    get_public_bootstrap_response,
     get_session_response,
     list_webauthn_credentials_response,
     login_response,
@@ -51,6 +52,21 @@ def _clear_auth_cookies(response: Response) -> None:
 @router.get("/status", response_model=AuthStatusResponse)
 async def get_auth_status(db: Annotated[AsyncSession, Depends(get_db)]):
     return await get_auth_status_response(db)
+
+
+@router.get("/public-bootstrap", response_model=SessionResponse)
+async def get_public_bootstrap(
+    response: Response,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    return await get_public_bootstrap_response(
+        response,
+        request,
+        db,
+        clear_auth_cookies_fn=_clear_auth_cookies,
+        set_auth_cookies_fn=_set_auth_cookies,
+    )
 
 
 @router.post("/login", response_model=SessionResponse)

@@ -5,6 +5,7 @@ from .password_reset_route_handlers import (
 )
 from .session_route_handlers import (
     get_auth_status_response,
+    get_public_bootstrap_response,
     get_session_response,
     login_response,
     logout_response,
@@ -23,6 +24,7 @@ __all__ = [
     "clear_auth_cookies",
     "confirm_password_reset_response",
     "get_auth_status_response",
+    "get_public_bootstrap_response",
     "get_session_response",
     "list_webauthn_credentials_response",
     "login_response",

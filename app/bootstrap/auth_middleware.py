@@ -13,6 +13,7 @@ from app.services.auth_service import (
 
 PUBLIC_MANAGEMENT_PATHS = {
     "/api/auth/status",
+    "/api/auth/public-bootstrap",
     "/api/auth/login",
     "/api/auth/logout",
     "/api/auth/refresh",

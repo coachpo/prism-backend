@@ -3,6 +3,7 @@ from collections.abc import Callable
 from fastapi import HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.auth import decode_access_token
 from app.core.config import get_settings
 from app.schemas.schemas import AuthStatusResponse, LoginRequest, SessionResponse
 from app.services.auth_service import (
@@ -16,6 +17,62 @@ from app.services.auth_service import (
 async def get_auth_status_response(db: AsyncSession) -> AuthStatusResponse:
     settings_row = await get_or_create_app_auth_settings(db)
     return AuthStatusResponse(auth_enabled=settings_row.auth_enabled)
+
+
+def _build_public_bootstrap_session(settings_row) -> SessionResponse:
+    return SessionResponse(
+        authenticated=False,
+        auth_enabled=settings_row.auth_enabled,
+        username=None,
+    )
+
+
+def _get_access_token_session(request: Request, settings_row) -> SessionResponse | None:
+    access_cookie = request.cookies.get(get_settings().auth_cookie_name)
+    if not access_cookie:
+        return None
+
+    try:
+        token_payload = decode_access_token(access_cookie)
+        subject_id = int(str(token_payload.get("sub")))
+        token_version = int(str(token_payload.get("token_version")))
+    except Exception:
+        return None
+
+    if subject_id != settings_row.id or token_version != settings_row.token_version:
+        return None
+
+    return SessionResponse(
+        authenticated=True,
+        auth_enabled=settings_row.auth_enabled,
+        username=str(token_payload.get("username") or settings_row.username or ""),
+    )
+
+
+async def get_public_bootstrap_response(
+    response: Response,
+    request: Request,
+    db: AsyncSession,
+    *,
+    clear_auth_cookies_fn: Callable[[Response], None],
+    set_auth_cookies_fn: Callable[..., None],
+) -> SessionResponse:
+    settings_row = await get_or_create_app_auth_settings(db)
+    if not settings_row.auth_enabled:
+        clear_auth_cookies_fn(response)
+        return _build_public_bootstrap_session(settings_row)
+
+    existing_session = _get_access_token_session(request, settings_row)
+    if existing_session is not None:
+        return existing_session
+
+    return await refresh_session_response(
+        response,
+        request,
+        db,
+        clear_auth_cookies_fn=clear_auth_cookies_fn,
+        set_auth_cookies_fn=set_auth_cookies_fn,
+    )
 
 
 async def login_response(
@@ -133,6 +190,7 @@ async def get_session_response(
 
 __all__ = [
     "get_auth_status_response",
+    "get_public_bootstrap_response",
     "get_session_response",
     "login_response",
     "logout_response",

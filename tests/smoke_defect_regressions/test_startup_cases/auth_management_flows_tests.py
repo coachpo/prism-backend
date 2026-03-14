@@ -189,6 +189,67 @@ class TestDEF069_AuthSessionLifecycle:
             await _cleanup_auth_state()
 
     @pytest.mark.asyncio
+    async def test_public_bootstrap_reports_authenticated_session_and_recovers_from_refresh_cookie(
+        self,
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                bootstrap_response = await client.get("/api/auth/public-bootstrap")
+                assert bootstrap_response.status_code == 200
+                assert bootstrap_response.json() == {
+                    "authenticated": True,
+                    "auth_enabled": True,
+                    "username": TEST_USERNAME,
+                }
+
+                client.cookies.delete(get_settings().auth_cookie_name)
+
+                refresh_recovery = await client.get("/api/auth/public-bootstrap")
+                assert refresh_recovery.status_code == 200
+                assert refresh_recovery.json() == {
+                    "authenticated": True,
+                    "auth_enabled": True,
+                    "username": TEST_USERNAME,
+                }
+                assert (
+                    refresh_recovery.cookies.get(get_settings().auth_cookie_name)
+                    is not None
+                )
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_public_bootstrap_returns_auth_disabled_when_management_auth_is_off(
+        self,
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncSessionLocal() as session:
+                settings_row = await get_or_create_app_auth_settings(session)
+                settings_row.auth_enabled = False
+                await session.commit()
+
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                response = await client.get("/api/auth/public-bootstrap")
+                assert response.status_code == 200
+                assert response.json() == {
+                    "authenticated": False,
+                    "auth_enabled": False,
+                    "username": None,
+                }
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
     async def test_login_session_duration_controls_cookie_persistence_and_refresh_rotation(
         self,
     ):
@@ -309,11 +370,14 @@ class TestDEF069_AuthSessionLifecycle:
         await _reset_auth_state()
         transport = ASGITransport(app=app)
         try:
-            async with AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as family_client, AsyncClient(
-                transport=transport, base_url="http://testserver"
-            ) as other_client:
+            async with (
+                AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as family_client,
+                AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as other_client,
+            ):
                 _, stale_family_refresh_cookie = await _login(family_client)
                 assert stale_family_refresh_cookie
 
@@ -362,7 +426,9 @@ class TestDEF069_AuthSessionLifecycle:
             await _cleanup_auth_state()
 
     @pytest.mark.asyncio
-    async def test_refresh_fails_closed_when_persisted_session_duration_is_invalid(self):
+    async def test_refresh_fails_closed_when_persisted_session_duration_is_invalid(
+        self,
+    ):
         await _reset_auth_state()
         transport = ASGITransport(app=app)
         try:
