@@ -50,7 +50,7 @@ docker compose up -d postgres
 - Keep handlers and services async; use the shared lifespan `httpx.AsyncClient` instead of per-request clients.
 - Use `selectinload` for relationship-heavy fetches and keep schema contracts aligned with frontend types.
 - Normalize and validate endpoint base URLs before persisting them.
-- Keep SMTP, verified-email, password-reset, refresh-token, and proxy-key logic centralized in `app/services/auth_service.py` and `app/core/auth.py`.
+- Keep SMTP, verified-email, password-reset, refresh-token, and proxy-key logic centralized behind `app/services/auth_service.py` (the re-export boundary over `app/services/auth/`) and `app/core/auth.py`.
 - Keep settings, costing, and profile invariants as startup-enforced behavior, not optional manual steps.
 - Preserve provider-specific health-check behavior in `app/routers/connections.py`; OpenAI has fallback probes by design.
 

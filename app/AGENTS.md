@@ -45,7 +45,7 @@ app/
 
 - Lifespan startup sequence is: validate PostgreSQL URL -> run migrations -> seed providers -> enforce profile invariants -> seed user settings -> seed app auth settings -> encrypt endpoint secrets -> seed system header blocklist -> create shared `httpx.AsyncClient`.
 - `main.py` middleware bifurcates auth: `/api/*` uses operator session cookies when enabled, `/v1*` uses proxy API keys when enabled.
-- `services/auth_service.py` owns verified-email gating, refresh-token family rotation and revocation, password-reset OTP flows, SMTP delivery, proxy-key CRUD, and proxy-key serialization.
+- `services/auth_service.py` is the public re-export boundary for verified-email gating, refresh-token family rotation and revocation, password-reset OTP flows, SMTP delivery, proxy-key CRUD, and proxy-key serialization implemented under `services/auth/`.
 - `routers/config.py` is a shell that delegates to `config_domains/import_export.py` and `config_domains/blocklist.py`.
 - `services/stats_service.py` is a re-export boundary over `services/stats/`; the real query and logging code lives in that package.
 

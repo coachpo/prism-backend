@@ -1,0 +1,194 @@
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.time import utc_now
+from app.models.models import ModelConfig
+from app.schemas.schemas import (
+    ModelConfigCreate,
+    ModelConfigUpdate,
+)
+
+from .mutation_helpers import (
+    apply_model_type_update_defaults,
+    build_model_create_values,
+    ensure_provider_exists,
+    ensure_proxy_update_preconditions,
+    ensure_valid_model_type,
+    load_model_config_or_404,
+    sync_renamed_model_references,
+    validate_native_model_update,
+)
+from .query_helpers import (
+    MODEL_CONFIG_DETAIL_OPTIONS,
+    ensure_model_id_available,
+    list_proxy_referrers,
+    load_model_config_detail_or_404,
+    validate_proxy_model,
+)
+
+
+async def create_model_config_record(
+    db: AsyncSession,
+    *,
+    body: ModelConfigCreate,
+    profile_id: int,
+) -> ModelConfig:
+    await ensure_provider_exists(db, body.provider_id)
+    await ensure_model_id_available(
+        db,
+        profile_id=profile_id,
+        model_id=body.model_id,
+    )
+
+    model_type = ensure_valid_model_type(body.model_type or "native")
+    await validate_proxy_model(
+        db,
+        profile_id=profile_id,
+        model_type=model_type,
+        redirect_to=body.redirect_to,
+        provider_id=body.provider_id,
+    )
+
+    config = ModelConfig(
+        **build_model_create_values(
+            profile_id=profile_id,
+            provider_id=body.provider_id,
+            model_id=body.model_id,
+            display_name=body.display_name,
+            model_type=model_type,
+            redirect_to=body.redirect_to,
+            lb_strategy=body.lb_strategy,
+            failover_recovery_enabled=body.failover_recovery_enabled,
+            failover_recovery_cooldown_seconds=body.failover_recovery_cooldown_seconds,
+            is_enabled=body.is_enabled,
+        )
+    )
+    db.add(config)
+    await db.flush()
+
+    result = await db.execute(
+        select(ModelConfig)
+        .options(*MODEL_CONFIG_DETAIL_OPTIONS)
+        .where(ModelConfig.id == config.id)
+    )
+    return result.scalar_one()
+
+
+async def update_model_config_record(
+    db: AsyncSession,
+    *,
+    model_config_id: int,
+    body: ModelConfigUpdate,
+    profile_id: int,
+) -> ModelConfig:
+    config = await load_model_config_detail_or_404(
+        db,
+        model_config_id=model_config_id,
+        profile_id=profile_id,
+    )
+    original_model_id = config.model_id
+    update_data = body.model_dump(exclude_unset=True)
+
+    if "provider_id" in update_data:
+        await ensure_provider_exists(db, update_data["provider_id"])
+
+    if "model_id" in update_data and update_data["model_id"] != config.model_id:
+        await ensure_model_id_available(
+            db,
+            profile_id=profile_id,
+            model_id=update_data["model_id"],
+            exclude_id=config.id,
+        )
+
+    new_model_type = ensure_valid_model_type(
+        update_data.get("model_type", config.model_type)
+    )
+    new_redirect_to = update_data.get("redirect_to", config.redirect_to)
+    new_provider_id = update_data.get("provider_id", config.provider_id)
+    new_model_id = update_data.get("model_id", config.model_id)
+
+    await validate_native_model_update(
+        db,
+        config=config,
+        profile_id=profile_id,
+        new_model_type=new_model_type,
+        new_provider_id=new_provider_id,
+    )
+    ensure_proxy_update_preconditions(
+        config=config,
+        new_model_type=new_model_type,
+        new_redirect_to=new_redirect_to,
+        new_model_id=new_model_id,
+    )
+
+    await validate_proxy_model(
+        db,
+        profile_id=profile_id,
+        model_type=new_model_type,
+        redirect_to=new_redirect_to,
+        provider_id=new_provider_id,
+        exclude_model_id=config.model_id,
+    )
+    apply_model_type_update_defaults(update_data, model_type=new_model_type)
+
+    for key, value in update_data.items():
+        setattr(config, key, value)
+
+    if "model_id" in update_data and update_data["model_id"] != original_model_id:
+        await sync_renamed_model_references(
+            db,
+            profile_id=profile_id,
+            config_id=config.id,
+            original_model_id=original_model_id,
+            new_model_id=update_data["model_id"],
+            new_model_type=new_model_type,
+        )
+
+    config.updated_at = utc_now()
+    await db.flush()
+
+    result = await db.execute(
+        select(ModelConfig)
+        .options(*MODEL_CONFIG_DETAIL_OPTIONS)
+        .where(ModelConfig.id == config.id)
+    )
+    return result.scalar_one()
+
+
+async def delete_model_config_record(
+    db: AsyncSession,
+    *,
+    model_config_id: int,
+    profile_id: int,
+) -> dict[str, bool]:
+    config = await load_model_config_or_404(
+        db,
+        model_config_id=model_config_id,
+        profile_id=profile_id,
+    )
+
+    if config.model_type == "native":
+        referrer_list = await list_proxy_referrers(
+            db,
+            profile_id=profile_id,
+            model_id=config.model_id,
+        )
+        if referrer_list:
+            ids = ", ".join(referrer.model_id for referrer in referrer_list)
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot delete: proxy models [{ids}] point to this model",
+            )
+
+    await db.delete(config)
+    await db.flush()
+    return {"deleted": True}
+
+
+__all__ = [
+    "create_model_config_record",
+    "delete_model_config_record",
+    "update_model_config_record",
+]

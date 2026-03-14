@@ -1,50 +1,37 @@
 # ruff: noqa: F401
-import asyncio
-import json
-import logging
-import re
-import time
-from typing import Annotated, AsyncGenerator
+from typing import Annotated
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_active_profile_id
-from app.models.models import Connection, HeaderBlocklistRule
 from app.services.loadbalancer import (
-    FailureKind,
     build_attempt_plan,
     get_model_config_with_connections,
     mark_connection_failed,
     mark_connection_recovered,
 )
 from app.services.proxy_service import (
-    build_upstream_url,
     build_upstream_headers,
+    build_upstream_url,
+    filter_response_headers,
     proxy_request,
     should_failover,
-    extract_model_from_body,
-    extract_stream_flag,
-    filter_response_headers,
-    should_request_compressed_response,
 )
-from app.services.stats_service import log_request, extract_token_usage
-from app.services.costing_service import (
-    CostFieldPayload,
-    load_costing_settings,
-    compute_cost_fields,
-)
+from app.services.costing_service import compute_cost_fields, load_costing_settings
+from app.services.stats_service import log_request
 from app.services.audit_service import record_audit_log
+from app.routers.proxy_domains.attempt_execution import (
+    ProxyRuntimeDependencies,
+    execute_proxy_attempts,
+)
+from app.routers.proxy_domains.request_setup import prepare_proxy_request
 from app.routers.proxy_domains.proxy_request_helpers import (
     _classify_failover_failure,
     _classify_http_failure,
     _endpoint_is_active_now,
-    _extract_error_text,
     _extract_model_from_path,
-    _get_client_headers,
+    _extract_error_text,
     _is_recovery_success_status,
     _resolve_model_id,
     _rewrite_model_in_body,
@@ -52,8 +39,6 @@ from app.routers.proxy_domains.proxy_request_helpers import (
     _track_detached_task,
     _validate_provider_path_compatibility,
 )
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["proxy"])
 
@@ -65,672 +50,35 @@ async def _handle_proxy(
     request_path: str,
     profile_id: int,
 ):
-    model_id = _resolve_model_id(raw_body, request_path)
-    if not model_id:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Cannot determine model for routing. "
-                "Include 'model' in the request body or use a Gemini-style model path."
-            ),
-        )
-    model_config = await get_model_config_with_connections(db, profile_id, model_id)
-    if not model_config:
-        logger.warning(
-            "Proxy lookup failed: model_id=%r not found or disabled (path=%s)",
-            model_id,
-            request_path,
-        )
-        raise HTTPException(
-            status_code=404, detail=f"Model '{model_id}' not configured or disabled"
-        )
-
-    provider_type = model_config.provider.provider_type
-    _validate_provider_path_compatibility(provider_type, request_path)
-    audit_enabled = model_config.provider.audit_enabled
-    audit_capture_bodies = model_config.provider.audit_capture_bodies
-    provider_id = model_config.provider.id
-    client: httpx.AsyncClient = request.app.state.http_client
-    is_streaming = extract_stream_flag(raw_body) if raw_body else False
-    client_headers = _get_client_headers(request)
-    method = request.method
-    upstream_model_id = model_config.model_id
-    body_model_id = extract_model_from_body(raw_body) if raw_body else None
-    rewritten_body = raw_body
-    if raw_body and body_model_id and upstream_model_id != body_model_id:
-        rewritten_body = _rewrite_model_in_body(raw_body, upstream_model_id)
-
-    path_model = _extract_model_from_path(request_path)
-    effective_request_path = request_path
-    if path_model and upstream_model_id != path_model:
-        effective_request_path = _rewrite_model_in_path(
-            request_path, path_model, upstream_model_id
-        )
-
-    request_compressed = should_request_compressed_response(
-        audit_enabled, audit_capture_bodies
-    )
-    blocklist_rules: list[HeaderBlocklistRule] = list(
-        (
-            (
-                await db.execute(
-                    select(HeaderBlocklistRule).where(
-                        HeaderBlocklistRule.enabled == True,  # noqa: E712
-                        (HeaderBlocklistRule.is_system == True)  # noqa: E712
-                        | (HeaderBlocklistRule.profile_id == profile_id),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-    )
-
-    now_mono = time.monotonic()
-    endpoints_to_try = build_attempt_plan(profile_id, model_config, now_mono)
-    if not endpoints_to_try:
-        raise HTTPException(
-            status_code=503,
-            detail=f"No active connections available for model '{model_id}'. All connections may be in cooldown.",
-        )
-
-    costing_settings = await load_costing_settings(
-        db,
+    setup = await prepare_proxy_request(
+        build_attempt_plan_fn=build_attempt_plan,
+        compute_cost_fields_fn=compute_cost_fields,
+        get_model_config_with_connections_fn=get_model_config_with_connections,
+        load_costing_settings_fn=load_costing_settings,
+        request=request,
+        db=db,
+        raw_body=raw_body,
+        request_path=request_path,
         profile_id=profile_id,
-        model_id=model_id,
-        endpoint_ids=sorted(
-            {
-                endpoint.endpoint_id
-                for endpoint in endpoints_to_try
-                if endpoint.endpoint_id is not None
-            }
+    )
+    return await execute_proxy_attempts(
+        db=db,
+        endpoint_is_active_now_fn=_endpoint_is_active_now,
+        request_path=request_path,
+        request_query=request.url.query or None,
+        profile_id=profile_id,
+        setup=setup,
+        deps=ProxyRuntimeDependencies(
+            build_upstream_headers_fn=build_upstream_headers,
+            build_upstream_url_fn=build_upstream_url,
+            filter_response_headers_fn=filter_response_headers,
+            log_request_fn=log_request,
+            mark_connection_failed_fn=mark_connection_failed,
+            mark_connection_recovered_fn=mark_connection_recovered,
+            proxy_request_fn=proxy_request,
+            record_audit_log_fn=record_audit_log,
+            should_failover_fn=should_failover,
         ),
-    )
-
-    def build_cost_fields(
-        connection,
-        status_code: int,
-        tokens: dict[str, int | None] | None = None,
-    ) -> CostFieldPayload:
-        token_values = tokens or {}
-        return compute_cost_fields(
-            connection=connection,
-            pricing_template=connection.pricing_template_rel,
-            endpoint=connection.endpoint_rel,
-            model_id=model_id,
-            status_code=status_code,
-            input_tokens=token_values.get("input_tokens"),
-            output_tokens=token_values.get("output_tokens"),
-            cache_read_input_tokens=token_values.get("cache_read_input_tokens"),
-            cache_creation_input_tokens=token_values.get("cache_creation_input_tokens"),
-            reasoning_tokens=token_values.get("reasoning_tokens"),
-            settings=costing_settings,
-        )
-
-    recovery_active = (
-        model_config.lb_strategy == "failover"
-        and model_config.failover_recovery_enabled
-    )
-    last_error = None
-    attempted_any_endpoint = False
-    for ep in endpoints_to_try:
-        if ep.endpoint_rel is None:
-            logger.warning("Skipping connection %d because endpoint is missing", ep.id)
-            continue
-        if not await _endpoint_is_active_now(db, ep.id):
-            mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
-            logger.info(
-                "Skipping endpoint %d because it is currently disabled",
-                ep.id,
-            )
-            continue
-
-        attempted_any_endpoint = True
-        upstream_url = build_upstream_url(
-            ep, effective_request_path, endpoint=ep.endpoint_rel
-        )
-        if request.url.query:
-            upstream_url = f"{upstream_url}?{request.url.query}"
-        headers = build_upstream_headers(
-            ep,
-            provider_type,
-            client_headers,
-            blocklist_rules,
-            endpoint=ep.endpoint_rel,
-            request_compressed=request_compressed,
-        )
-        ep_desc = ep.name
-        endpoint_body = rewritten_body
-
-        start_time = time.monotonic()
-
-        try:
-            if is_streaming:
-                kwargs: dict = {"headers": headers}
-                if endpoint_body:
-                    kwargs["content"] = endpoint_body
-
-                send_req = client.build_request(method, upstream_url, **kwargs)
-                upstream_resp = await client.send(send_req, stream=True)
-
-                resp_headers_filtered = filter_response_headers(
-                    upstream_resp.headers,
-                    was_requested_compressed=request_compressed,
-                )
-                elapsed_ms = int((time.monotonic() - start_time) * 1000)
-
-                if upstream_resp.status_code >= 400:
-                    body = await upstream_resp.aread()
-                    await upstream_resp.aclose()
-
-                    if should_failover(upstream_resp.status_code):
-                        last_error = f"Upstream returned {upstream_resp.status_code}"
-                        logger.warning(
-                            f"Endpoint {ep.id} failed with {upstream_resp.status_code}, trying next"
-                        )
-                        rl_id = await log_request(
-                            model_id=model_id,
-                            profile_id=profile_id,
-                            provider_type=provider_type,
-                            endpoint_id=ep.endpoint_id,
-                            connection_id=ep.id,
-                            endpoint_base_url=ep.endpoint_rel.base_url,
-                            endpoint_description=ep_desc,
-                            status_code=upstream_resp.status_code,
-                            response_time_ms=elapsed_ms,
-                            is_stream=True,
-                            request_path=request_path,
-                            error_detail=body.decode("utf-8", errors="replace")[:500],
-                            **build_cost_fields(ep, upstream_resp.status_code),
-                        )
-                        if audit_enabled:
-                            await record_audit_log(
-                                request_log_id=rl_id,
-                                profile_id=profile_id,
-                                provider_id=provider_id,
-                                endpoint_id=ep.endpoint_id,
-                                connection_id=ep.id,
-                                endpoint_base_url=ep.endpoint_rel.base_url,
-                                endpoint_description=ep_desc,
-                                model_id=model_id,
-                                request_method=method,
-                                request_url=upstream_url,
-                                request_headers=headers,
-                                request_body=endpoint_body,
-                                response_status=upstream_resp.status_code,
-                                response_headers=resp_headers_filtered,
-                                response_body=body,
-                                is_stream=True,
-                                duration_ms=elapsed_ms,
-                                capture_bodies=audit_capture_bodies,
-                            )
-                        if recovery_active:
-                            failure_kind = _classify_failover_failure(
-                                status_code=upstream_resp.status_code,
-                                raw_body=body,
-                            )
-                            mark_connection_failed(
-                                profile_id,
-                                ep.id,
-                                model_config.failover_recovery_cooldown_seconds,
-                                time.monotonic(),
-                                failure_kind,
-                                model_id,
-                                ep.endpoint_id,
-                                provider_id,
-                            )
-                        continue
-
-                    tokens = extract_token_usage(body)
-                    rl_id = await log_request(
-                        model_id=model_id,
-                        profile_id=profile_id,
-                        provider_type=provider_type,
-                        endpoint_id=ep.endpoint_id,
-                        connection_id=ep.id,
-                        endpoint_base_url=ep.endpoint_rel.base_url,
-                        endpoint_description=ep_desc,
-                        status_code=upstream_resp.status_code,
-                        response_time_ms=elapsed_ms,
-                        is_stream=True,
-                        request_path=request_path,
-                        error_detail=body.decode("utf-8", errors="replace")[:500],
-                        input_tokens=tokens.get("input_tokens"),
-                        output_tokens=tokens.get("output_tokens"),
-                        total_tokens=tokens.get("total_tokens"),
-                        **build_cost_fields(ep, upstream_resp.status_code, tokens),
-                    )
-                    if audit_enabled:
-                        await record_audit_log(
-                            request_log_id=rl_id,
-                            profile_id=profile_id,
-                            provider_id=provider_id,
-                            endpoint_id=ep.endpoint_id,
-                            connection_id=ep.id,
-                            endpoint_base_url=ep.endpoint_rel.base_url,
-                            endpoint_description=ep_desc,
-                            model_id=model_id,
-                            request_method=method,
-                            request_url=upstream_url,
-                            request_headers=headers,
-                            request_body=endpoint_body,
-                            response_status=upstream_resp.status_code,
-                            response_headers=resp_headers_filtered,
-                            response_body=body,
-                            is_stream=True,
-                            duration_ms=elapsed_ms,
-                            capture_bodies=audit_capture_bodies,
-                        )
-
-                    if recovery_active and _is_recovery_success_status(
-                        upstream_resp.status_code
-                    ):
-                        mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
-                    return Response(
-                        content=body,
-                        status_code=upstream_resp.status_code,
-                        headers=resp_headers_filtered,
-                    )
-
-                # Success case - mark endpoint as recovered
-                if recovery_active and _is_recovery_success_status(
-                    upstream_resp.status_code
-                ):
-                    mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
-                _log_model_id = model_id
-                _log_provider_type = provider_type
-                _log_endpoint_id = ep.id
-                _log_endpoint_base_url = ep.endpoint_rel.base_url
-                _log_endpoint_desc = ep_desc
-                _log_endpoint = ep
-                _log_status_code = upstream_resp.status_code
-                _log_elapsed_ms = elapsed_ms
-                _log_request_path = request_path
-                _audit_enabled = audit_enabled
-                _audit_capture_bodies = audit_capture_bodies
-                _audit_provider_id = provider_id
-                _audit_method = method
-                _audit_upstream_url = upstream_url
-                _audit_headers = headers
-                _audit_raw_body = endpoint_body
-                _audit_resp_headers = resp_headers_filtered
-
-                async def _iter_and_log(
-                    resp: httpx.Response,
-                ) -> AsyncGenerator[bytes, None]:
-                    accumulated = bytearray()
-                    stream_cancelled = False
-                    try:
-                        async for chunk in resp.aiter_bytes():
-                            if chunk:
-                                accumulated.extend(chunk)
-                                yield chunk
-                    except GeneratorExit:
-                        stream_cancelled = True
-                        return
-                    except asyncio.CancelledError:
-                        stream_cancelled = True
-                        logger.debug("Streaming response cancelled by client")
-                        raise
-                    except Exception as exc:
-                        logger.warning("Stream iteration failed: %s", exc)
-                    finally:
-                        try:
-                            await asyncio.shield(resp.aclose())
-                        except BaseException:
-                            pass
-
-                        payload = bytes(accumulated)
-
-                        async def _finalize_stream() -> None:
-                            rl_id = None
-                            try:
-                                tokens = extract_token_usage(payload)
-                                rl_id = await log_request(
-                                    model_id=_log_model_id,
-                                    profile_id=profile_id,
-                                    provider_type=_log_provider_type,
-                                    endpoint_id=_log_endpoint.endpoint_id,
-                                    connection_id=_log_endpoint_id,
-                                    endpoint_base_url=_log_endpoint_base_url,
-                                    endpoint_description=_log_endpoint_desc,
-                                    status_code=_log_status_code,
-                                    response_time_ms=_log_elapsed_ms,
-                                    is_stream=True,
-                                    request_path=_log_request_path,
-                                    input_tokens=tokens.get("input_tokens"),
-                                    output_tokens=tokens.get("output_tokens"),
-                                    total_tokens=tokens.get("total_tokens"),
-                                    **build_cost_fields(
-                                        _log_endpoint, _log_status_code, tokens
-                                    ),
-                                )
-                            except asyncio.CancelledError:
-                                logger.debug(
-                                    "Streaming request logging cancelled before completion"
-                                )
-                                return
-                            except Exception:
-                                logger.exception("Failed to log streaming request")
-
-                            if _audit_enabled:
-                                try:
-                                    await record_audit_log(
-                                        request_log_id=rl_id,
-                                        profile_id=profile_id,
-                                        provider_id=_audit_provider_id,
-                                        endpoint_id=_log_endpoint.endpoint_id,
-                                        connection_id=_log_endpoint_id,
-                                        endpoint_base_url=_log_endpoint_base_url,
-                                        endpoint_description=_log_endpoint_desc,
-                                        model_id=_log_model_id,
-                                        request_method=_audit_method,
-                                        request_url=_audit_upstream_url,
-                                        request_headers=_audit_headers,
-                                        request_body=_audit_raw_body,
-                                        response_status=_log_status_code,
-                                        response_headers=_audit_resp_headers,
-                                        response_body=payload,
-                                        is_stream=True,
-                                        duration_ms=_log_elapsed_ms,
-                                        capture_bodies=_audit_capture_bodies,
-                                    )
-                                except asyncio.CancelledError:
-                                    logger.debug(
-                                        "Streaming audit logging cancelled before completion"
-                                    )
-                                except Exception:
-                                    logger.exception(
-                                        "Failed to record streaming audit log"
-                                    )
-
-                        try:
-                            finalize_task = asyncio.create_task(
-                                _finalize_stream(),
-                                name="proxy-stream-finalize",
-                            )
-                        except RuntimeError:
-                            logger.debug(
-                                "Event loop closed before stream finalization could be scheduled"
-                            )
-                        else:
-                            if stream_cancelled:
-                                _track_detached_task(
-                                    finalize_task,
-                                    name="proxy stream finalization",
-                                )
-                            else:
-                                try:
-                                    await asyncio.shield(finalize_task)
-                                except asyncio.CancelledError:
-                                    _track_detached_task(
-                                        finalize_task,
-                                        name="proxy stream finalization",
-                                    )
-                                    raise
-
-                media_type = upstream_resp.headers.get(
-                    "content-type", "text/event-stream"
-                )
-                return StreamingResponse(
-                    _iter_and_log(upstream_resp),
-                    status_code=upstream_resp.status_code,
-                    media_type=media_type,
-                    headers={
-                        **resp_headers_filtered,
-                        "Cache-Control": "no-cache",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-            else:
-                response = await proxy_request(
-                    client,
-                    method,
-                    upstream_url,
-                    headers,
-                    endpoint_body,
-                )
-                elapsed_ms = int((time.monotonic() - start_time) * 1000)
-                resp_headers = filter_response_headers(
-                    response.headers,
-                    was_requested_compressed=request_compressed,
-                )
-
-                if response.status_code >= 400 and should_failover(
-                    response.status_code
-                ):
-                    last_error = f"Upstream returned {response.status_code}"
-                    logger.warning(
-                        f"Endpoint {ep.id} failed with {response.status_code}, trying next"
-                    )
-                    rl_id = await log_request(
-                        model_id=model_id,
-                        profile_id=profile_id,
-                        provider_type=provider_type,
-                        endpoint_id=ep.endpoint_id,
-                        connection_id=ep.id,
-                        endpoint_base_url=ep.endpoint_rel.base_url,
-                        endpoint_description=ep_desc,
-                        status_code=response.status_code,
-                        response_time_ms=elapsed_ms,
-                        is_stream=False,
-                        request_path=request_path,
-                        error_detail=response.content.decode("utf-8", errors="replace")[
-                            :500
-                        ],
-                        **build_cost_fields(ep, response.status_code),
-                    )
-                    if audit_enabled:
-                        await record_audit_log(
-                            request_log_id=rl_id,
-                            profile_id=profile_id,
-                            provider_id=provider_id,
-                            endpoint_id=ep.endpoint_id,
-                            connection_id=ep.id,
-                            endpoint_base_url=ep.endpoint_rel.base_url,
-                            endpoint_description=ep_desc,
-                            model_id=model_id,
-                            request_method=method,
-                            request_url=upstream_url,
-                            request_headers=headers,
-                            request_body=endpoint_body,
-                            response_status=response.status_code,
-                            response_headers=resp_headers,
-                            response_body=response.content,
-                            is_stream=False,
-                            duration_ms=elapsed_ms,
-                            capture_bodies=audit_capture_bodies,
-                        )
-                    if recovery_active:
-                        failure_kind = _classify_failover_failure(
-                            status_code=response.status_code,
-                            raw_body=response.content,
-                        )
-                        mark_connection_failed(
-                            profile_id,
-                            ep.id,
-                            model_config.failover_recovery_cooldown_seconds,
-                            time.monotonic(),
-                            failure_kind,
-                            model_id,
-                            ep.endpoint_id,
-                            provider_id,
-                        )
-                    continue
-
-                tokens = extract_token_usage(response.content)
-                error_detail = None
-                if response.status_code >= 400:
-                    error_detail = response.content.decode("utf-8", errors="replace")[
-                        :500
-                    ]
-
-                rl_id = await log_request(
-                    model_id=model_id,
-                    profile_id=profile_id,
-                    provider_type=provider_type,
-                    endpoint_id=ep.endpoint_id,
-                    connection_id=ep.id,
-                    endpoint_base_url=ep.endpoint_rel.base_url,
-                    endpoint_description=ep_desc,
-                    status_code=response.status_code,
-                    response_time_ms=elapsed_ms,
-                    is_stream=False,
-                    request_path=request_path,
-                    error_detail=error_detail,
-                    input_tokens=tokens.get("input_tokens"),
-                    output_tokens=tokens.get("output_tokens"),
-                    total_tokens=tokens.get("total_tokens"),
-                    **build_cost_fields(ep, response.status_code, tokens),
-                )
-                if audit_enabled:
-                    await record_audit_log(
-                        request_log_id=rl_id,
-                        profile_id=profile_id,
-                        provider_id=provider_id,
-                        endpoint_id=ep.endpoint_id,
-                        connection_id=ep.id,
-                        endpoint_base_url=ep.endpoint_rel.base_url,
-                        endpoint_description=ep_desc,
-                        model_id=model_id,
-                        request_method=method,
-                        request_url=upstream_url,
-                        request_headers=headers,
-                        request_body=endpoint_body,
-                        response_status=response.status_code,
-                        response_headers=resp_headers,
-                        response_body=response.content,
-                        is_stream=False,
-                        duration_ms=elapsed_ms,
-                        capture_bodies=audit_capture_bodies,
-                    )
-
-                if recovery_active and _is_recovery_success_status(
-                    response.status_code
-                ):
-                    mark_connection_recovered(profile_id, ep.id, model_id, ep.endpoint_id, provider_id)
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=resp_headers,
-                )
-
-        except httpx.ConnectError as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            last_error = f"Connection error: {e}"
-            logger.warning(f"Endpoint {ep.id} connection failed: {e}")
-            rl_id = await log_request(
-                model_id=model_id,
-                profile_id=profile_id,
-                provider_type=provider_type,
-                endpoint_id=ep.endpoint_id,
-                connection_id=ep.id,
-                endpoint_base_url=ep.endpoint_rel.base_url,
-                endpoint_description=ep_desc,
-                status_code=0,
-                response_time_ms=elapsed_ms,
-                is_stream=is_streaming,
-                request_path=request_path,
-                error_detail=str(e)[:500],
-                **build_cost_fields(ep, 0),
-            )
-            if audit_enabled:
-                await record_audit_log(
-                    request_log_id=rl_id,
-                    profile_id=profile_id,
-                    provider_id=provider_id,
-                    endpoint_id=ep.endpoint_id,
-                    connection_id=ep.id,
-                    endpoint_base_url=ep.endpoint_rel.base_url,
-                    endpoint_description=ep_desc,
-                    model_id=model_id,
-                    request_method=method,
-                    request_url=upstream_url,
-                    request_headers=headers,
-                    request_body=endpoint_body,
-                    response_status=0,
-                    response_headers=None,
-                    response_body=None,
-                    is_stream=is_streaming,
-                    duration_ms=elapsed_ms,
-                    capture_bodies=audit_capture_bodies,
-                )
-            if recovery_active:
-                failure_kind = _classify_failover_failure(exception=e)
-                mark_connection_failed(
-                    profile_id,
-                    ep.id,
-                    model_config.failover_recovery_cooldown_seconds,
-                    time.monotonic(),
-                    failure_kind,
-                    model_id,
-                    ep.endpoint_id,
-                    provider_id,
-                )
-            continue
-        except httpx.TimeoutException as e:
-            elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            last_error = f"Timeout: {e}"
-            logger.warning(f"Endpoint {ep.id} timed out: {e}")
-            rl_id = await log_request(
-                model_id=model_id,
-                profile_id=profile_id,
-                provider_type=provider_type,
-                endpoint_id=ep.endpoint_id,
-                connection_id=ep.id,
-                endpoint_base_url=ep.endpoint_rel.base_url,
-                endpoint_description=ep_desc,
-                status_code=0,
-                response_time_ms=elapsed_ms,
-                is_stream=is_streaming,
-                request_path=request_path,
-                error_detail=str(e)[:500],
-                **build_cost_fields(ep, 0),
-            )
-            if audit_enabled:
-                await record_audit_log(
-                    request_log_id=rl_id,
-                    profile_id=profile_id,
-                    provider_id=provider_id,
-                    endpoint_id=ep.endpoint_id,
-                    connection_id=ep.id,
-                    endpoint_base_url=ep.endpoint_rel.base_url,
-                    endpoint_description=ep_desc,
-                    model_id=model_id,
-                    request_method=method,
-                    request_url=upstream_url,
-                    request_headers=headers,
-                    request_body=endpoint_body,
-                    response_status=0,
-                    response_headers=None,
-                    response_body=None,
-                    is_stream=is_streaming,
-                    duration_ms=elapsed_ms,
-                    capture_bodies=audit_capture_bodies,
-                )
-            if recovery_active:
-                failure_kind = _classify_failover_failure(exception=e)
-                mark_connection_failed(
-                    profile_id,
-                    ep.id,
-                    model_config.failover_recovery_cooldown_seconds,
-                    time.monotonic(),
-                    failure_kind,
-                    model_id,
-                    ep.endpoint_id,
-                    provider_id,
-                )
-            continue
-
-    if not attempted_any_endpoint:
-        raise HTTPException(
-            status_code=503,
-            detail=f"No active connections available for model '{model_id}'.",
-        )
-
-    raise HTTPException(
-        status_code=502,
-        detail=f"All connections failed for model '{model_id}'. Last error: {last_error}",
     )
 
 

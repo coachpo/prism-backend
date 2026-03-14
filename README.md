@@ -20,20 +20,31 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 ```
 backend/
 ├── app/
-│   ├── main.py                      # FastAPI app + startup/shutdown + schema migrations
+│   ├── main.py                      # Thin FastAPI assembly + router wiring
+│   ├── bootstrap/                   # Startup sequence and auth middleware helpers
 │   ├── core/database.py             # SQLAlchemy async engine + session factory
 │   ├── models/
-│   │   └── models.py                # ORM models (Provider, ModelConfig, Endpoint, Connection, etc.)
+│   │   ├── domains/                 # Split ORM model domains
+│   │   └── models.py                # Explicit model export boundary
 │   ├── routers/
+│   │   ├── auth_domains/            # Session, password reset, and WebAuthn handlers
+│   │   ├── config_domains/          # Config import/export + blocklist helpers
+│   │   ├── connections_domains/     # Connection CRUD, health, and owner helpers
+│   │   ├── endpoints_domains/       # Endpoint CRUD/reorder/duplicate helpers
+│   │   ├── models_domains/          # Model CRUD/query helpers
+│   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and logging helpers
 │   │   ├── providers.py             # Provider CRUD
-│   │   ├── models.py                # Model CRUD
-│   │   ├── endpoints.py             # Profile-scoped credential CRUD
-│   │   ├── connections.py           # Model-scoped routing + health checks
+│   │   ├── models.py                # Thin model route shell
+│   │   ├── endpoints.py             # Thin endpoint route shell
+│   │   ├── connections.py           # Thin connection route shell
 │   │   ├── stats.py                 # Request logs + aggregated statistics
 │   │   ├── audit.py                 # Audit log queries
-│   │   ├── config.py                # Config export/import
-│   │   └── proxy.py                 # Catch-all /v1/* and /v1beta/* proxy router
+│   │   ├── config.py                # Thin config route shell
+│   │   └── proxy.py                 # Thin /v1/* and /v1beta/* proxy router
 │   └── services/
+│       ├── auth/                    # Split auth, email, session, and proxy-key services
+│       ├── realtime/                # WebSocket connection manager helpers
+│       ├── stats/                   # Telemetry query and logging helpers
 │       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
 │       └── audit_service.py         # Audit log writing with header redaction
@@ -41,7 +52,8 @@ backend/
 ├── alembic.ini                      # Alembic configuration
 ├── docker-compose.yml               # Local PostgreSQL provisioning
 ├── tests/                           # Pytest test suite
-├── requirements.txt                 # Python dependencies
+├── requirements.txt                 # Runtime dependencies
+├── requirements-dev.txt             # Test-only and local dev dependencies
 └── AGENTS.md                        # Backend knowledge base
 ```
 
@@ -60,8 +72,11 @@ backend/
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install dependencies
+# Install runtime dependencies
 pip install -r requirements.txt
+
+# Install test and local dev dependencies
+pip install -r requirements-dev.txt
 ```
 
 ### Running
@@ -94,6 +109,9 @@ pytest tests/ --cov=app --cov-report=html
 pytest tests/test_proxy.py -v
 ```
 
+`requirements.txt` stays runtime-only. Testcontainers and pytest plugins live in
+`requirements-dev.txt` so production installs do not pull test infrastructure.
+
 ---
 
 ## Configuration
@@ -120,9 +138,8 @@ docker compose up -d postgres
 ### Management API
 
 - `GET /api/providers` - List all providers
-- `POST /api/providers` - Create provider
-- `PUT /api/providers/{id}` - Update provider
-- `DELETE /api/providers/{id}` - Delete provider
+- `GET /api/providers/{id}` - Get a single provider
+- `PATCH /api/providers/{id}` - Update provider audit settings
 
 - `GET /api/models` - List all models
 - `POST /api/models` - Create model
@@ -229,10 +246,11 @@ Change the port with `--port` flag or set `BACKEND_PORT` environment variable.
 
 ## Contributing
 
-See the main [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+This repo does not currently include a shared `CONTRIBUTING.md`; follow the backend
+module conventions in `AGENTS.md` and the surrounding code.
 
 ---
 
 ## License
 
-MIT License - see [LICENSE](../LICENSE) for details.
+This repo does not currently include a standalone `LICENSE` file.
