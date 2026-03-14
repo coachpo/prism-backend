@@ -157,6 +157,32 @@ async def _load_model_or_404(
     return model
 
 
+async def _ensure_model_config_ids_exist(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    model_config_ids: list[int],
+) -> None:
+    normalized_model_config_ids = list(dict.fromkeys(model_config_ids))
+    if not normalized_model_config_ids:
+        return
+
+    result = await db.execute(
+        select(ModelConfig.id).where(
+            ModelConfig.profile_id == profile_id,
+            ModelConfig.id.in_(normalized_model_config_ids),
+        )
+    )
+    existing_ids = set(result.scalars().all())
+    missing_ids = [
+        model_config_id
+        for model_config_id in normalized_model_config_ids
+        if model_config_id not in existing_ids
+    ]
+    if missing_ids:
+        raise HTTPException(status_code=404, detail="Model configuration not found")
+
+
 async def _list_ordered_connections(
     db: AsyncSession,
     *,
@@ -178,6 +204,44 @@ async def _list_ordered_connections(
     return list(result.scalars().all())
 
 
+async def _list_ordered_connections_for_models(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    model_config_ids: list[int],
+) -> dict[int, list[Connection]]:
+    normalized_model_config_ids = list(dict.fromkeys(model_config_ids))
+    connections_by_model: dict[int, list[Connection]] = {
+        model_config_id: [] for model_config_id in normalized_model_config_ids
+    }
+    if not normalized_model_config_ids:
+        return connections_by_model
+
+    result = await db.execute(
+        select(Connection)
+        .options(
+            selectinload(Connection.endpoint_rel),
+            selectinload(Connection.pricing_template_rel),
+        )
+        .where(
+            Connection.model_config_id.in_(normalized_model_config_ids),
+            Connection.profile_id == profile_id,
+        )
+        .order_by(
+            Connection.model_config_id.asc(),
+            Connection.priority.asc(),
+            Connection.id.asc(),
+        )
+    )
+
+    for connection in result.scalars().all():
+        connections_by_model.setdefault(connection.model_config_id, []).append(
+            connection
+        )
+
+    return connections_by_model
+
+
 def _normalize_connection_priorities(connections: list[Connection]) -> None:
     now = utc_now()
     for index, connection in enumerate(connections):
@@ -193,7 +257,9 @@ def _serialize_custom_headers(custom_headers: dict[str, str] | None) -> str | No
 
 __all__ = [
     "_create_endpoint_from_inline",
+    "_ensure_model_config_ids_exist",
     "_list_ordered_connections",
+    "_list_ordered_connections_for_models",
     "_load_connection_or_404",
     "_load_model_or_404",
     "_lock_profile_row",

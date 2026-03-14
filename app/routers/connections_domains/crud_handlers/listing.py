@@ -24,4 +24,23 @@ async def list_connections_for_model(
     )
 
 
-__all__ = ["list_connections_for_model"]
+async def list_connections_for_models(
+    *,
+    model_config_ids: list[int],
+    db: AsyncSession,
+    profile_id: int,
+    deps: ConnectionCrudDependencies,
+) -> dict[int, list[Connection]]:
+    await deps.ensure_model_config_ids_exist_fn(
+        db,
+        profile_id=profile_id,
+        model_config_ids=model_config_ids,
+    )
+    return await deps.list_ordered_connections_for_models_fn(
+        db,
+        profile_id=profile_id,
+        model_config_ids=model_config_ids,
+    )
+
+
+__all__ = ["list_connections_for_model", "list_connections_for_models"]

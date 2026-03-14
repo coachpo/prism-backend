@@ -125,6 +125,29 @@ class ConnectionSuccessRateResponse(BaseModel):
     success_rate: float | None
 
 
+class ModelConnectionsBatchRequest(BaseModel):
+    model_config_ids: list[int]
+
+    @field_validator("model_config_ids")
+    @classmethod
+    def validate_model_config_ids(cls, value: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(value))
+        if not normalized:
+            raise ValueError(
+                "model_config_ids must contain at least one model config id"
+            )
+        return normalized
+
+
+class ModelConnectionsBatchItem(BaseModel):
+    model_config_id: int
+    connections: list[ConnectionResponse]
+
+
+class ModelConnectionsBatchResponse(BaseModel):
+    items: list[ModelConnectionsBatchItem]
+
+
 class ModelConfigBase(BaseModel):
     provider_id: int
     model_id: str
@@ -238,6 +261,9 @@ __all__ = [
     "EndpointModelsBatchRequest",
     "EndpointModelsBatchResponse",
     "HealthCheckResponse",
+    "ModelConnectionsBatchItem",
+    "ModelConnectionsBatchRequest",
+    "ModelConnectionsBatchResponse",
     "ModelConfigBase",
     "ModelConfigCreate",
     "ModelConfigListResponse",

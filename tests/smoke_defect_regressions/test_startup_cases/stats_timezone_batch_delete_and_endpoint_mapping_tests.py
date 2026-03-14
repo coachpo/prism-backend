@@ -244,6 +244,33 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["summary_window_hours"] == 24
         assert call_kwargs["spending_preset"] == "last_30_days"
 
+    @pytest.mark.asyncio
+    async def test_model_connections_batch_route_passes_model_ids_to_service(self):
+        from app.routers.connections import list_connections_batch
+        from app.schemas.schemas import ModelConnectionsBatchRequest
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.connections.list_connections_for_models",
+            new_callable=AsyncMock,
+        ) as mock_list_connections_for_models:
+            mock_list_connections_for_models.return_value = {10: []}
+            response = await list_connections_batch(
+                body=ModelConnectionsBatchRequest(model_config_ids=[10]),
+                db=mock_db,
+                profile_id=7,
+            )
+
+        assert len(response.items) == 1
+        assert response.items[0].model_config_id == 10
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_list_connections_for_models.await_args_list[0],
+        )
+        assert call_kwargs["profile_id"] == 7
+        assert call_kwargs["model_config_ids"] == [10]
+
 
 class TestBatchDeleteValidation:
     """Validate flexible batch deletion for stats and audit endpoints."""

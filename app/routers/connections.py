@@ -7,6 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
     ConnectionCreate,
+    ModelConnectionsBatchItem,
+    ModelConnectionsBatchRequest,
+    ModelConnectionsBatchResponse,
     ConnectionOwnerResponse,
     ConnectionPriorityMoveRequest,
     ConnectionPricingTemplateUpdate,
@@ -20,7 +23,9 @@ from app.services.proxy_service import (
 )
 from app.routers.connections_domains.connection_crud_helpers import (
     _create_endpoint_from_inline,
+    _ensure_model_config_ids_exist,
     _list_ordered_connections,
+    _list_ordered_connections_for_models,
     _load_connection_or_404,
     _load_model_or_404,
     _lock_profile_row,
@@ -43,6 +48,7 @@ from app.routers.connections_domains.route_handlers import (
     delete_connection_record,
     get_connection_owner_details,
     list_connections_for_model,
+    list_connections_for_models,
     move_connection_priority_for_model,
     perform_connection_health_check,
     set_connection_pricing_template_record,
@@ -55,7 +61,9 @@ router = APIRouter(tags=["connections"])
 def _crud_deps() -> ConnectionCrudDependencies:
     return ConnectionCrudDependencies(
         create_endpoint_from_inline_fn=_create_endpoint_from_inline,
+        ensure_model_config_ids_exist_fn=_ensure_model_config_ids_exist,
         list_ordered_connections_fn=_list_ordered_connections,
+        list_ordered_connections_for_models_fn=_list_ordered_connections_for_models,
         load_connection_or_404_fn=_load_connection_or_404,
         load_model_or_404_fn=_load_model_or_404,
         lock_profile_row_fn=_lock_profile_row,
@@ -70,6 +78,34 @@ async def _probe_connection_health(**kwargs):
     return await _probe_connection_health_impl(
         **kwargs,
         execute_health_check_request_fn=_execute_health_check_request,
+    )
+
+
+@router.post(
+    "/api/models/connections/batch", response_model=ModelConnectionsBatchResponse
+)
+async def list_connections_batch(
+    body: ModelConnectionsBatchRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    connections_by_model = await list_connections_for_models(
+        model_config_ids=body.model_config_ids,
+        db=db,
+        profile_id=profile_id,
+        deps=_crud_deps(),
+    )
+    return ModelConnectionsBatchResponse(
+        items=[
+            ModelConnectionsBatchItem(
+                model_config_id=model_config_id,
+                connections=[
+                    ConnectionResponse.model_validate(connection)
+                    for connection in connections_by_model.get(model_config_id, [])
+                ],
+            )
+            for model_config_id in body.model_config_ids
+        ]
     )
 
 
