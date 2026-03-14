@@ -11,6 +11,9 @@ from app.models.models import RequestLog
 from app.schemas.schemas import (
     RequestLogListResponse,
     RequestLogResponse,
+    ModelMetricsBatchItem,
+    ModelMetricsBatchRequest,
+    ModelMetricsBatchResponse,
     StatsSummaryResponse,
     ConnectionSuccessRateResponse,
     BatchDeleteResponse,
@@ -21,6 +24,7 @@ from app.services.stats_service import (
     get_request_logs,
     get_stats_summary,
     get_connection_success_rates,
+    get_model_metrics_batch,
     get_spending_report,
     get_throughput_stats,
 )
@@ -104,6 +108,27 @@ async def stats_summary(
         connection_id=connection_id,
     )
     return StatsSummaryResponse(**result)
+
+
+@router.post("/models/metrics", response_model=ModelMetricsBatchResponse)
+async def model_metrics_batch(
+    body: ModelMetricsBatchRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    items = await get_model_metrics_batch(
+        db,
+        profile_id=profile_id,
+        model_ids=body.model_ids,
+        summary_window_hours=body.summary_window_hours,
+        spending_preset=body.spending_preset,
+    )
+    return ModelMetricsBatchResponse(
+        items=[
+            ModelMetricsBatchItem(model_id=model_id, **items.get(model_id, {}))
+            for model_id in body.model_ids
+        ]
+    )
 
 
 @router.get(

@@ -205,6 +205,45 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert from_time.tzinfo is not None
         assert to_time.tzinfo is not None
 
+    @pytest.mark.asyncio
+    async def test_model_metrics_batch_route_passes_batch_filters_to_service(self):
+        from app.routers.stats import model_metrics_batch
+        from app.schemas.schemas import ModelMetricsBatchRequest
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_model_metrics_batch", new_callable=AsyncMock
+        ) as mock_get_model_metrics_batch:
+            mock_get_model_metrics_batch.return_value = {
+                "gpt-5.4": {
+                    "success_rate": 99.5,
+                    "request_count_24h": 12,
+                    "p95_latency_ms": 880,
+                    "spend_30d_micros": 123456,
+                }
+            }
+            response = await model_metrics_batch(
+                body=ModelMetricsBatchRequest(
+                    model_ids=["gpt-5.4"],
+                    summary_window_hours=24,
+                    spending_preset="last_30_days",
+                ),
+                db=mock_db,
+                profile_id=7,
+            )
+
+        assert len(response.items) == 1
+        assert response.items[0].model_id == "gpt-5.4"
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_model_metrics_batch.await_args_list[0],
+        )
+        assert call_kwargs["profile_id"] == 7
+        assert call_kwargs["model_ids"] == ["gpt-5.4"]
+        assert call_kwargs["summary_window_hours"] == 24
+        assert call_kwargs["spending_preset"] == "last_30_days"
+
 
 class TestBatchDeleteValidation:
     """Validate flexible batch deletion for stats and audit endpoints."""
@@ -471,3 +510,34 @@ class TestDEF061_ConnectionResponseEndpointMapping:
         assert response.endpoint is not None
         assert response.endpoint.id == 3
         assert response.endpoint.name == "primary-endpoint"
+
+
+class TestDEF076_BatchPageFetchRoutes:
+    @pytest.mark.asyncio
+    async def test_models_by_endpoints_route_preserves_endpoint_order(self):
+        from app.routers.models import get_models_by_endpoints
+        from app.schemas.schemas import EndpointModelsBatchRequest
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.models.get_models_by_endpoints_for_profile",
+            new_callable=AsyncMock,
+        ) as mock_get_models_by_endpoints:
+            mock_get_models_by_endpoints.return_value = {
+                12: [],
+                10: [],
+            }
+            response = await get_models_by_endpoints(
+                body=EndpointModelsBatchRequest(endpoint_ids=[12, 10]),
+                db=mock_db,
+                profile_id=3,
+            )
+
+        assert [item.endpoint_id for item in response.items] == [12, 10]
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_models_by_endpoints.await_args_list[0],
+        )
+        assert call_kwargs["profile_id"] == 3
+        assert call_kwargs["endpoint_ids"] == [12, 10]

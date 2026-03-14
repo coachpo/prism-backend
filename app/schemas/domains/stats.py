@@ -1,5 +1,6 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -84,6 +85,41 @@ class StatsSummaryResponse(BaseModel):
     total_output_tokens: int
     total_tokens: int
     groups: list[StatGroupResponse]
+
+
+class ModelMetricsBatchRequest(BaseModel):
+    model_ids: list[str]
+    summary_window_hours: int = 24
+    spending_preset: Literal[
+        "today", "last_7_days", "last_30_days", "custom", "all"
+    ] = "last_30_days"
+
+    @field_validator("model_ids")
+    @classmethod
+    def validate_model_ids(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if item.strip()]
+        if not normalized:
+            raise ValueError("model_ids must contain at least one model id")
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("summary_window_hours")
+    @classmethod
+    def validate_summary_window_hours(cls, value: int) -> int:
+        if value < 1 or value > 24 * 30:
+            raise ValueError("summary_window_hours must be between 1 and 720")
+        return value
+
+
+class ModelMetricsBatchItem(BaseModel):
+    model_id: str
+    success_rate: float
+    request_count_24h: int
+    p95_latency_ms: int
+    spend_30d_micros: int
+
+
+class ModelMetricsBatchResponse(BaseModel):
+    items: list[ModelMetricsBatchItem]
 
 
 class EndpointSuccessRateResponse(BaseModel):

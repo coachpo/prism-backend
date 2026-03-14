@@ -5,6 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
+    EndpointModelsBatchItem,
+    EndpointModelsBatchRequest,
+    EndpointModelsBatchResponse,
     ModelConfigCreate,
     ModelConfigListResponse,
     ModelConfigResponse,
@@ -16,6 +19,7 @@ from app.routers.models_domains.handlers import (
     delete_model_config_record,
     get_model_detail,
     get_models_by_endpoint_for_profile,
+    get_models_by_endpoints_for_profile,
     list_models_for_profile,
     update_model_config_record,
 )
@@ -32,6 +36,29 @@ async def list_models(
         db,
         profile_id=profile_id,
         get_model_health_stats_fn=get_model_health_stats,
+    )
+
+
+@router.post("/by-endpoints", response_model=EndpointModelsBatchResponse)
+async def get_models_by_endpoints(
+    body: EndpointModelsBatchRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    models_by_endpoint = await get_models_by_endpoints_for_profile(
+        db,
+        endpoint_ids=body.endpoint_ids,
+        profile_id=profile_id,
+        get_model_health_stats_fn=get_model_health_stats,
+    )
+    return EndpointModelsBatchResponse(
+        items=[
+            EndpointModelsBatchItem(
+                endpoint_id=endpoint_id,
+                models=models_by_endpoint.get(endpoint_id, []),
+            )
+            for endpoint_id in body.endpoint_ids
+        ]
     )
 
 

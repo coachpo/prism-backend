@@ -206,6 +206,27 @@ class ModelConfigListResponse(BaseModel):
     updated_at: datetime
 
 
+class EndpointModelsBatchRequest(BaseModel):
+    endpoint_ids: list[int]
+
+    @field_validator("endpoint_ids")
+    @classmethod
+    def validate_endpoint_ids(cls, value: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(value))
+        if not normalized:
+            raise ValueError("endpoint_ids must contain at least one endpoint id")
+        return normalized
+
+
+class EndpointModelsBatchItem(BaseModel):
+    endpoint_id: int
+    models: list[ModelConfigListResponse]
+
+
+class EndpointModelsBatchResponse(BaseModel):
+    items: list[EndpointModelsBatchItem]
+
+
 __all__ = [
     "ConnectionBase",
     "ConnectionCreate",
@@ -213,6 +234,9 @@ __all__ = [
     "ConnectionResponse",
     "ConnectionSuccessRateResponse",
     "ConnectionUpdate",
+    "EndpointModelsBatchItem",
+    "EndpointModelsBatchRequest",
+    "EndpointModelsBatchResponse",
     "HealthCheckResponse",
     "ModelConfigBase",
     "ModelConfigCreate",
