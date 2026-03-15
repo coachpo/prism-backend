@@ -119,14 +119,6 @@ async def log_request(
                 )
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
-                    channel="request_logs",
-                    message={
-                        "type": "request_logs.new",
-                        "request_log": serialized_entry,
-                    },
-                )
-                await connection_manager.broadcast_to_profile(
-                    profile_id=profile_id,
                     channel="statistics",
                     message={
                         "type": "statistics.new",
@@ -142,11 +134,6 @@ async def log_request(
                         profile_id=profile_id,
                         channel="dashboard",
                         message={"type": "dashboard.dirty"},
-                    )
-                    await connection_manager.broadcast_to_profile(
-                        profile_id=profile_id,
-                        channel="request_logs",
-                        message={"type": "request_logs.dirty"},
                     )
                     await connection_manager.broadcast_to_profile(
                         profile_id=profile_id,

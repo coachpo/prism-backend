@@ -18,6 +18,7 @@ from sqlalchemy import select
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
 logger = logging.getLogger(__name__)
+SUPPORTED_REALTIME_CHANNELS = frozenset({"dashboard", "statistics"})
 
 
 async def authenticate_websocket(
@@ -116,6 +117,15 @@ async def websocket_endpoint(
                         {
                             "type": "error",
                             "message": "profile_id required",
+                        }
+                    )
+                    continue
+
+                if channel not in SUPPORTED_REALTIME_CHANNELS:
+                    await connection.send_json(
+                        {
+                            "type": "error",
+                            "message": f"Unsupported channel: {channel}",
                         }
                     )
                     continue

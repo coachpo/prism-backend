@@ -1,8 +1,11 @@
 from datetime import datetime, timezone
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import WebSocket
 
+from app.routers.realtime import SUPPORTED_REALTIME_CHANNELS
 from app.services.audit_service import record_audit_log, record_loadbalance_event
 from app.services.realtime.connection_manager import ConnectionManager
 from app.services.stats.logging import log_request
@@ -21,36 +24,40 @@ def make_session_context(session: AsyncMock) -> AsyncMock:
     return session_ctx
 
 
+def test_supported_realtime_channels_only_include_dashboard_and_statistics():
+    assert SUPPORTED_REALTIME_CHANNELS == {"dashboard", "statistics"}
+
+
 @pytest.mark.asyncio
 async def test_connection_manager_supports_multi_channel_subscriptions():
     manager = ConnectionManager()
-    websocket = MockWebSocket()
+    websocket = cast(WebSocket, MockWebSocket())
 
     connection_id = await manager.connect(websocket)
 
     assert await manager.subscribe(connection_id, 7, "dashboard") is True
-    assert await manager.subscribe(connection_id, 7, "request_logs") is True
+    assert await manager.subscribe(connection_id, 7, "statistics") is True
 
     connection = manager.get_connection(connection_id)
 
     assert connection is not None
     assert connection.profile_id == 7
-    assert connection.channels == {"dashboard", "request_logs"}
+    assert connection.channels == {"dashboard", "statistics"}
     assert manager.rooms[(7, "dashboard")] == {connection_id}
-    assert manager.rooms[(7, "request_logs")] == {connection_id}
+    assert manager.rooms[(7, "statistics")] == {connection_id}
 
     assert await manager.unsubscribe_channel(connection_id, "dashboard") is True
     assert (7, "dashboard") not in manager.rooms
-    assert manager.rooms[(7, "request_logs")] == {connection_id}
+    assert manager.rooms[(7, "statistics")] == {connection_id}
 
     await manager.disconnect(connection_id)
 
     assert manager.get_connection(connection_id) is None
-    assert (7, "request_logs") not in manager.rooms
+    assert (7, "statistics") not in manager.rooms
 
 
 @pytest.mark.asyncio
-async def test_log_request_broadcasts_request_log_payload():
+async def test_log_request_broadcasts_dashboard_and_statistics_payloads():
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
@@ -87,50 +94,29 @@ async def test_log_request_broadcasts_request_log_payload():
         )
 
     assert request_log_id == 321
-    assert broadcast.await_count == 3
+    assert broadcast.await_count == 2
 
     dashboard_call = broadcast.await_args_list[0].kwargs
-    request_logs_call = broadcast.await_args_list[1].kwargs
-    statistics_call = broadcast.await_args_list[2].kwargs
+    statistics_call = broadcast.await_args_list[1].kwargs
 
     assert dashboard_call["profile_id"] == 11
     assert dashboard_call["channel"] == "dashboard"
     assert dashboard_call["message"]["type"] == "dashboard.update"
     assert dashboard_call["message"]["request_log"]["id"] == 321
 
-    assert request_logs_call["channel"] == "request_logs"
-    assert request_logs_call["message"]["type"] == "request_logs.new"
-    assert (
-        request_logs_call["message"]["request_log"]["request_path"]
-        == "/v1/chat/completions"
-    )
-
     assert statistics_call["channel"] == "statistics"
     assert statistics_call["message"]["type"] == "statistics.new"
 
 
 @pytest.mark.asyncio
-async def test_record_audit_log_broadcasts_audit_ready():
+async def test_record_audit_log_commits_without_broadcasts():
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
 
-    async def fake_refresh(entry):
-        entry.id = 88
-
-    mock_session.refresh = AsyncMock(side_effect=fake_refresh)
-
-    broadcast = AsyncMock()
-
-    with (
-        patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=make_session_context(mock_session),
-        ),
-        patch(
-            "app.services.audit_service.connection_manager.broadcast_to_profile",
-            broadcast,
-        ),
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        return_value=make_session_context(mock_session),
     ):
         await record_audit_log(
             request_log_id=55,
@@ -149,40 +135,18 @@ async def test_record_audit_log_broadcasts_audit_ready():
             capture_bodies=True,
         )
 
-    broadcast.assert_awaited_once()
-    kwargs = broadcast.await_args.kwargs
-    assert kwargs["profile_id"] == 3
-    assert kwargs["channel"] == "request_logs"
-    assert kwargs["message"] == {
-        "type": "request_logs.audit_ready",
-        "request_log_id": 55,
-        "audit_log_id": 88,
-    }
+    mock_session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_record_loadbalance_event_broadcasts_event_payload():
+async def test_record_loadbalance_event_commits_without_broadcasts():
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
 
-    async def fake_refresh(entry):
-        entry.id = 901
-        entry.created_at = datetime.now(timezone.utc)
-
-    mock_session.refresh = AsyncMock(side_effect=fake_refresh)
-
-    broadcast = AsyncMock()
-
-    with (
-        patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=make_session_context(mock_session),
-        ),
-        patch(
-            "app.services.audit_service.connection_manager.broadcast_to_profile",
-            broadcast,
-        ),
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        return_value=make_session_context(mock_session),
     ):
         await record_loadbalance_event(
             profile_id=6,
@@ -200,13 +164,7 @@ async def test_record_loadbalance_event_broadcasts_event_payload():
             max_cooldown_seconds=120,
         )
 
-    broadcast.assert_awaited_once()
-    kwargs = broadcast.await_args.kwargs
-    assert kwargs["profile_id"] == 6
-    assert kwargs["channel"] == "loadbalance_events"
-    assert kwargs["message"]["type"] == "loadbalance_events.new"
-    assert kwargs["message"]["event"]["id"] == 901
-    assert kwargs["message"]["event"]["event_type"] == "opened"
+    mock_session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -252,6 +210,5 @@ async def test_log_request_falls_back_to_dirty_signals_when_serialization_fails(
 
     assert [call.kwargs["message"]["type"] for call in broadcast.await_args_list] == [
         "dashboard.dirty",
-        "request_logs.dirty",
         "statistics.dirty",
     ]

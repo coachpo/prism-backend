@@ -4,8 +4,6 @@ import logging
 import re
 
 from app.models.models import AuditLog, LoadbalanceEvent
-from app.schemas.domains.stats import LoadbalanceEventListItem
-from app.services.realtime import connection_manager
 
 logger = logging.getLogger(__name__)
 
@@ -114,32 +112,6 @@ async def record_audit_log(
         async with AsyncSessionLocal() as session:
             session.add(entry)
             await session.commit()
-            try:
-                await session.refresh(entry)
-                if request_log_id is not None:
-                    await connection_manager.broadcast_to_profile(
-                        profile_id=profile_id,
-                        channel="request_logs",
-                        message={
-                            "type": "request_logs.audit_ready",
-                            "request_log_id": request_log_id,
-                            "audit_log_id": entry.id,
-                        },
-                    )
-            except Exception:
-                logger.exception(
-                    "Failed to broadcast audit-ready payload; falling back to dirty signal"
-                )
-                try:
-                    await connection_manager.broadcast_to_profile(
-                        profile_id=profile_id,
-                        channel="request_logs",
-                        message={"type": "request_logs.dirty"},
-                    )
-                except Exception:
-                    logger.debug(
-                        "Failed to broadcast dirty fallback for audit log (non-critical)"
-                    )
     except asyncio.CancelledError:
         logger.debug("Audit logging cancelled")
     except Exception:
@@ -184,33 +156,6 @@ async def record_loadbalance_event(
         async with AsyncSessionLocal() as session:
             session.add(entry)
             await session.commit()
-            try:
-                await session.refresh(entry)
-                serialized_event = LoadbalanceEventListItem.model_validate(
-                    entry
-                ).model_dump(mode="json")
-                await connection_manager.broadcast_to_profile(
-                    profile_id=profile_id,
-                    channel="loadbalance_events",
-                    message={
-                        "type": "loadbalance_events.new",
-                        "event": serialized_event,
-                    },
-                )
-            except Exception:
-                logger.exception(
-                    "Failed to broadcast loadbalance payload; falling back to dirty signal"
-                )
-                try:
-                    await connection_manager.broadcast_to_profile(
-                        profile_id=profile_id,
-                        channel="loadbalance_events",
-                        message={"type": "loadbalance_events.dirty"},
-                    )
-                except Exception:
-                    logger.debug(
-                        "Failed to broadcast dirty fallback for loadbalance event (non-critical)"
-                    )
     except asyncio.CancelledError:
         logger.debug("Loadbalance event logging cancelled")
     except Exception:
