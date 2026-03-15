@@ -5,8 +5,10 @@ from .auth_settings_route_handlers import (
 )
 from .costing_route_handlers import (
     get_costing_settings,
+    get_timezone_preference,
     router as costing_router,
     update_costing_settings,
+    update_timezone_preference,
 )
 from .email_verification_route_handlers import (
     post_email_verification_confirm,
@@ -27,6 +29,7 @@ __all__ = [
     "email_verification_router",
     "get_auth_settings",
     "get_costing_settings",
+    "get_timezone_preference",
     "get_proxy_api_keys",
     "post_email_verification_confirm",
     "post_email_verification_request",
@@ -36,4 +39,5 @@ __all__ = [
     "put_auth_settings",
     "remove_proxy_api_key",
     "update_costing_settings",
+    "update_timezone_preference",
 ]

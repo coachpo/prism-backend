@@ -245,6 +245,93 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["spending_preset"] == "last_30_days"
 
     @pytest.mark.asyncio
+    async def test_connection_metrics_batch_route_passes_filters_to_service(self):
+        from app.routers.stats import connection_metrics_batch
+        from app.schemas.schemas import ConnectionMetricsBatchRequest
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_connection_metrics_batch", new_callable=AsyncMock
+        ) as mock_get_connection_metrics_batch:
+            mock_get_connection_metrics_batch.return_value = {
+                11: {
+                    "success_rate_24h": 99.5,
+                    "request_count_24h": 12,
+                    "p95_latency_ms": 880,
+                    "five_xx_rate": 0.0,
+                    "heuristic_failover_events": 0,
+                    "last_failover_like_at": None,
+                }
+            }
+            response = await connection_metrics_batch(
+                body=ConnectionMetricsBatchRequest(
+                    model_id="gpt-5.4",
+                    connection_ids=[11],
+                    summary_window_hours=24,
+                ),
+                db=mock_db,
+                profile_id=7,
+            )
+
+        assert len(response.items) == 1
+        assert response.items[0].connection_id == 11
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_connection_metrics_batch.await_args_list[0],
+        )
+        assert call_kwargs["profile_id"] == 7
+        assert call_kwargs["model_id"] == "gpt-5.4"
+        assert call_kwargs["connection_ids"] == [11]
+        assert call_kwargs["summary_window_hours"] == 24
+
+    @pytest.mark.asyncio
+    async def test_get_timezone_preference_route_returns_lightweight_payload(self):
+        from app.routers.settings_domains.costing_route_handlers import (
+            get_timezone_preference,
+        )
+
+        mock_db = AsyncMock()
+        settings_row = MagicMock(timezone_preference="Europe/Helsinki")
+
+        with patch(
+            "app.routers.settings_domains.costing_route_handlers.get_or_create_user_settings",
+            new_callable=AsyncMock,
+        ) as mock_get_or_create_user_settings:
+            mock_get_or_create_user_settings.return_value = settings_row
+            response = await get_timezone_preference(db=mock_db, profile_id=7)
+
+        assert response.profile_id == 7
+        assert response.timezone_preference == "Europe/Helsinki"
+
+    @pytest.mark.asyncio
+    async def test_update_timezone_preference_route_persists_value(self):
+        from app.routers.settings_domains.costing_route_handlers import (
+            update_timezone_preference,
+        )
+        from app.schemas.schemas import TimezonePreferenceUpdate
+
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+        settings_row = MagicMock(timezone_preference=None)
+
+        with patch(
+            "app.routers.settings_domains.costing_route_handlers.get_or_create_user_settings",
+            new_callable=AsyncMock,
+        ) as mock_get_or_create_user_settings:
+            mock_get_or_create_user_settings.return_value = settings_row
+            response = await update_timezone_preference(
+                body=TimezonePreferenceUpdate(timezone_preference="UTC"),
+                db=mock_db,
+                profile_id=7,
+            )
+
+        assert settings_row.timezone_preference == "UTC"
+        assert response.profile_id == 7
+        assert response.timezone_preference == "UTC"
+        mock_db.flush.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_model_connections_batch_route_passes_model_ids_to_service(self):
         from app.routers.connections import list_connections_batch
         from app.schemas.schemas import ModelConnectionsBatchRequest

@@ -1,4 +1,5 @@
 from app.services.stats import (
+    get_connection_metrics_batch,
     extract_token_usage,
     get_connection_success_rates,
     get_endpoint_success_rates,
@@ -14,6 +15,7 @@ from app.services.stats import (
 
 __all__ = [
     "extract_token_usage",
+    "get_connection_metrics_batch",
     "get_connection_success_rates",
     "get_endpoint_success_rates",
     "get_model_health_stats",

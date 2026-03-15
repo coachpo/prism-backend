@@ -90,6 +90,9 @@ from app.schemas.domains.core import (
     ProviderUpdate,
 )
 from app.schemas.domains.stats import (
+    ConnectionMetricsBatchItem,
+    ConnectionMetricsBatchRequest,
+    ConnectionMetricsBatchResponse,
     CostingSettingsResponse,
     CostingSettingsUpdate,
     EndpointFxMapping,
@@ -111,6 +114,8 @@ from app.schemas.domains.stats import (
     SpendingTopModel,
     StatGroupResponse,
     StatsSummaryResponse,
+    TimezonePreferenceResponse,
+    TimezonePreferenceUpdate,
     ThroughputBucket,
     ThroughputStatsResponse,
 )
@@ -135,6 +140,9 @@ __all__ = [
     "ConfigPricingTemplateExport",
     "ConfigUserSettingsExport",
     "ConnectionBase",
+    "ConnectionMetricsBatchItem",
+    "ConnectionMetricsBatchRequest",
+    "ConnectionMetricsBatchResponse",
     "ConnectionCreate",
     "ConnectionDropdownItem",
     "ConnectionDropdownResponse",
@@ -216,6 +224,8 @@ __all__ = [
     "SpendingTopModel",
     "StatGroupResponse",
     "StatsSummaryResponse",
+    "TimezonePreferenceResponse",
+    "TimezonePreferenceUpdate",
     "ThroughputBucket",
     "ThroughputStatsResponse",
     "WebAuthnAuthenticationOptionsResponse",

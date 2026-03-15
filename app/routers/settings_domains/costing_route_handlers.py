@@ -15,6 +15,8 @@ from app.schemas.schemas import (
     CostingSettingsResponse,
     CostingSettingsUpdate,
     EndpointFxMapping,
+    TimezonePreferenceResponse,
+    TimezonePreferenceUpdate,
 )
 
 from .helpers import get_or_create_user_settings
@@ -34,6 +36,15 @@ def _build_costing_settings_response(
         report_currency_symbol=settings_row.report_currency_symbol,
         timezone_preference=settings_row.timezone_preference,
         endpoint_fx_mappings=endpoint_fx_mappings,
+    )
+
+
+def _build_timezone_preference_response(
+    *, settings_row: UserSetting, profile_id: int
+) -> TimezonePreferenceResponse:
+    return TimezonePreferenceResponse(
+        profile_id=profile_id,
+        timezone_preference=settings_row.timezone_preference,
     )
 
 
@@ -113,6 +124,18 @@ async def get_costing_settings(
     )
 
 
+@router.get("/timezone", response_model=TimezonePreferenceResponse)
+async def get_timezone_preference(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    settings_row = await get_or_create_user_settings(db, profile_id=profile_id)
+    return _build_timezone_preference_response(
+        settings_row=settings_row,
+        profile_id=profile_id,
+    )
+
+
 @router.put("/costing", response_model=CostingSettingsResponse)
 async def update_costing_settings(
     body: CostingSettingsUpdate,
@@ -154,4 +177,25 @@ async def update_costing_settings(
     )
 
 
-__all__ = ["get_costing_settings", "router", "update_costing_settings"]
+@router.put("/timezone", response_model=TimezonePreferenceResponse)
+async def update_timezone_preference(
+    body: TimezonePreferenceUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    settings_row = await get_or_create_user_settings(db, profile_id=profile_id)
+    settings_row.timezone_preference = body.timezone_preference
+    await db.flush()
+    return _build_timezone_preference_response(
+        settings_row=settings_row,
+        profile_id=profile_id,
+    )
+
+
+__all__ = [
+    "get_costing_settings",
+    "get_timezone_preference",
+    "router",
+    "update_costing_settings",
+    "update_timezone_preference",
+]

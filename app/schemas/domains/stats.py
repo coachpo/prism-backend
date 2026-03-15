@@ -122,6 +122,47 @@ class ModelMetricsBatchResponse(BaseModel):
     items: list[ModelMetricsBatchItem]
 
 
+class ConnectionMetricsBatchRequest(BaseModel):
+    model_id: str
+    connection_ids: list[int]
+    summary_window_hours: int = 24
+
+    @field_validator("model_id")
+    @classmethod
+    def validate_model_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("model_id must not be empty")
+        return normalized
+
+    @field_validator("connection_ids")
+    @classmethod
+    def validate_connection_ids(cls, value: list[int]) -> list[int]:
+        normalized = [connection_id for connection_id in value if connection_id > 0]
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("summary_window_hours")
+    @classmethod
+    def validate_connection_summary_window_hours(cls, value: int) -> int:
+        if value < 1 or value > 24 * 30:
+            raise ValueError("summary_window_hours must be between 1 and 720")
+        return value
+
+
+class ConnectionMetricsBatchItem(BaseModel):
+    connection_id: int
+    success_rate_24h: float | None = None
+    request_count_24h: int = 0
+    p95_latency_ms: int | None = None
+    five_xx_rate: float | None = None
+    heuristic_failover_events: int = 0
+    last_failover_like_at: datetime | None = None
+
+
+class ConnectionMetricsBatchResponse(BaseModel):
+    items: list[ConnectionMetricsBatchItem]
+
+
 class EndpointSuccessRateResponse(BaseModel):
     endpoint_id: int
     total_requests: int
@@ -153,6 +194,11 @@ class CostingSettingsResponse(BaseModel):
     report_currency_symbol: str
     timezone_preference: str | None = None
     endpoint_fx_mappings: list[EndpointFxMapping]
+
+
+class TimezonePreferenceResponse(BaseModel):
+    profile_id: int | None = None
+    timezone_preference: str | None = None
 
 
 class CostingSettingsUpdate(BaseModel):
@@ -205,6 +251,22 @@ class CostingSettingsUpdate(BaseModel):
                 )
             seen.add(key)
         return self
+
+
+class TimezonePreferenceUpdate(BaseModel):
+    timezone_preference: str | None = None
+
+    @field_validator("timezone_preference")
+    @classmethod
+    def validate_timezone_preference(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        timezone = v.strip()
+        if not timezone:
+            return None
+        if len(timezone) > 100:
+            raise ValueError("timezone_preference must be at most 100 characters")
+        return timezone
 
 
 class SpendingSummaryResponse(BaseModel):

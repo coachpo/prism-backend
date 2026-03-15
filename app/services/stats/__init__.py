@@ -1,5 +1,8 @@
 from app.services.stats.logging import log_request
-from app.services.stats.model_metrics import get_model_metrics_batch
+from app.services.stats.model_metrics import (
+    get_connection_metrics_batch,
+    get_model_metrics_batch,
+)
 from app.services.stats.request_logs import get_request_logs
 from app.services.stats.spending import get_spending_report
 from app.services.stats.summary import (
@@ -14,6 +17,7 @@ from app.services.stats.usage_extractors import extract_token_usage
 
 __all__ = [
     "extract_token_usage",
+    "get_connection_metrics_batch",
     "get_connection_success_rates",
     "get_endpoint_success_rates",
     "get_model_health_stats",

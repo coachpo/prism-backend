@@ -9,6 +9,9 @@ from app.core.time import ensure_utc_datetime, utc_now
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import RequestLog
 from app.schemas.schemas import (
+    ConnectionMetricsBatchItem,
+    ConnectionMetricsBatchRequest,
+    ConnectionMetricsBatchResponse,
     RequestLogListResponse,
     RequestLogResponse,
     ModelMetricsBatchItem,
@@ -21,6 +24,7 @@ from app.schemas.schemas import (
     ThroughputStatsResponse,
 )
 from app.services.stats_service import (
+    get_connection_metrics_batch,
     get_request_logs,
     get_stats_summary,
     get_connection_success_rates,
@@ -127,6 +131,32 @@ async def model_metrics_batch(
         items=[
             ModelMetricsBatchItem(model_id=model_id, **items.get(model_id, {}))
             for model_id in body.model_ids
+        ]
+    )
+
+
+@router.post(
+    "/models/connections/metrics", response_model=ConnectionMetricsBatchResponse
+)
+async def connection_metrics_batch(
+    body: ConnectionMetricsBatchRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    items = await get_connection_metrics_batch(
+        db,
+        profile_id=profile_id,
+        model_id=body.model_id,
+        connection_ids=body.connection_ids,
+        summary_window_hours=body.summary_window_hours,
+    )
+    return ConnectionMetricsBatchResponse(
+        items=[
+            ConnectionMetricsBatchItem(
+                connection_id=connection_id,
+                **items.get(connection_id, {}),
+            )
+            for connection_id in body.connection_ids
         ]
     )
 
