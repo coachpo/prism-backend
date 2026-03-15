@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
 logger = logging.getLogger(__name__)
-SUPPORTED_REALTIME_CHANNELS = frozenset({"dashboard", "statistics"})
+SUPPORTED_REALTIME_CHANNELS = frozenset({"dashboard"})
 
 
 async def authenticate_websocket(
