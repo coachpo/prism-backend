@@ -127,11 +127,19 @@ async def model_metrics_batch(
         summary_window_hours=body.summary_window_hours,
         spending_preset=body.spending_preset,
     )
+
+    def build_model_metrics_item(model_id: str) -> ModelMetricsBatchItem:
+        metric_values = items.get(model_id, {})
+        return ModelMetricsBatchItem(
+            model_id=model_id,
+            success_rate=float(metric_values.get("success_rate", 0.0)),
+            request_count_24h=int(metric_values.get("request_count_24h", 0)),
+            p95_latency_ms=int(metric_values.get("p95_latency_ms", 0)),
+            spend_30d_micros=int(metric_values.get("spend_30d_micros", 0)),
+        )
+
     return ModelMetricsBatchResponse(
-        items=[
-            ModelMetricsBatchItem(model_id=model_id, **items.get(model_id, {}))
-            for model_id in body.model_ids
-        ]
+        items=[build_model_metrics_item(model_id) for model_id in body.model_ids]
     )
 
 
@@ -150,12 +158,37 @@ async def connection_metrics_batch(
         connection_ids=body.connection_ids,
         summary_window_hours=body.summary_window_hours,
     )
+
+    def build_connection_metrics_item(connection_id: int) -> ConnectionMetricsBatchItem:
+        metric_values = items.get(connection_id, {})
+        success_rate_24h = metric_values.get("success_rate_24h")
+        p95_latency_ms = metric_values.get("p95_latency_ms")
+        five_xx_rate = metric_values.get("five_xx_rate")
+        last_failover_like_at = metric_values.get("last_failover_like_at")
+
+        return ConnectionMetricsBatchItem(
+            connection_id=connection_id,
+            success_rate_24h=(
+                float(success_rate_24h) if success_rate_24h is not None else None
+            ),
+            request_count_24h=int(metric_values.get("request_count_24h", 0)),
+            p95_latency_ms=(
+                int(p95_latency_ms) if p95_latency_ms is not None else None
+            ),
+            five_xx_rate=float(five_xx_rate) if five_xx_rate is not None else None,
+            heuristic_failover_events=int(
+                metric_values.get("heuristic_failover_events", 0)
+            ),
+            last_failover_like_at=(
+                last_failover_like_at
+                if isinstance(last_failover_like_at, datetime)
+                else None
+            ),
+        )
+
     return ConnectionMetricsBatchResponse(
         items=[
-            ConnectionMetricsBatchItem(
-                connection_id=connection_id,
-                **items.get(connection_id, {}),
-            )
+            build_connection_metrics_item(connection_id)
             for connection_id in body.connection_ids
         ]
     )
@@ -270,7 +303,6 @@ async def get_throughput(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ):
-    """Get TPS/QPS throughput metrics with time-bucketed aggregation."""
     normalized_from_time = _normalize_datetime_filter(from_time)
     normalized_to_time = _normalize_datetime_filter(to_time)
 

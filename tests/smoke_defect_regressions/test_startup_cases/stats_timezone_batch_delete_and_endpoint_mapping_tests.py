@@ -655,3 +655,53 @@ class TestDEF076_BatchPageFetchRoutes:
         )
         assert call_kwargs["profile_id"] == 3
         assert call_kwargs["endpoint_ids"] == [12, 10]
+
+
+class TestDEF077_ThroughputRPMContract:
+    @pytest.mark.asyncio
+    async def test_throughput_route_normalizes_datetimes_and_returns_rpm_fields(self):
+        from app.routers.stats import get_throughput
+
+        mock_db = AsyncMock()
+        aware_from = TestDEF058_StatsTimezoneFilterNormalization._aware_utc_datetime()
+        aware_to = TestDEF058_StatsTimezoneFilterNormalization._aware_utc_datetime()
+
+        with patch(
+            "app.routers.stats.get_throughput_stats", new_callable=AsyncMock
+        ) as mock_get_throughput_stats:
+            mock_get_throughput_stats.return_value = {
+                "average_rpm": 1.5,
+                "peak_rpm": 3.0,
+                "current_rpm": 2.0,
+                "total_requests": 9,
+                "time_window_seconds": 360.0,
+                "buckets": [
+                    {
+                        "timestamp": aware_from.isoformat(),
+                        "request_count": 3,
+                        "rpm": 3.0,
+                    }
+                ],
+            }
+            response = await get_throughput(
+                db=mock_db,
+                profile_id=7,
+                from_time=aware_from,
+                to_time=aware_to,
+            )
+
+        assert response.average_rpm == 1.5
+        assert response.peak_rpm == 3.0
+        assert response.current_rpm == 2.0
+        assert response.buckets[0].rpm == 3.0
+        assert not hasattr(response, "average_tps")
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_throughput_stats.await_args_list[0],
+        )
+        from_time: datetime = cast(datetime, call_kwargs["from_time"])
+        to_time: datetime = cast(datetime, call_kwargs["to_time"])
+        assert from_time == aware_from
+        assert to_time == aware_to
+        assert from_time.tzinfo is not None
+        assert to_time.tzinfo is not None

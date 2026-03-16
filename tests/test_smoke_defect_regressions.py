@@ -53,6 +53,7 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF073_AuthEmailDeliveryFailures,
     TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys,
     TestDEF076_BatchPageFetchRoutes,
+    TestDEF077_ThroughputRPMContract,
 )
 
 __all__ = [
@@ -99,6 +100,7 @@ __all__ = [
     "TestDEF074_PricingTemplateUpdateCAS",
     "TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys",
     "TestDEF076_BatchPageFetchRoutes",
+    "TestDEF077_ThroughputRPMContract",
     "TestEndpointOwnerRoute",
     "TestFailoverRecoveryFieldValidation",
     "TestHeaderBlocklist",
