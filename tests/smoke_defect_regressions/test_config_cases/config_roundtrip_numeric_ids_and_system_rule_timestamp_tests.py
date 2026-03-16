@@ -70,17 +70,16 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         )
 
         async with AsyncSessionLocal() as db:
-            existing_profile = await db.get(Profile, 1)
-            if existing_profile is None:
-                db.add(
-                    Profile(
-                        id=1,
-                        name="DEF024 Profile",
-                        is_active=False,
-                        version=0,
-                    )
-                )
-                await db.flush()
+            profile = Profile(
+                name=f"DEF024 Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+            profile_id = profile.id
             provider = (
                 await db.execute(
                     select(Provider)
@@ -97,7 +96,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     )
                 )
                 await db.flush()
-            response = await import_config(data=payload, db=db, profile_id=1)
+            response = await import_config(data=payload, db=db, profile_id=profile_id)
             await db.commit()
             assert response.endpoints_imported == 1
             assert response.connections_imported == 1
@@ -106,7 +105,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             endpoint = (
                 await db.execute(
                     select(Endpoint).where(
-                        Endpoint.profile_id == 1,
+                        Endpoint.profile_id == profile_id,
                         Endpoint.name == endpoint_name,
                     )
                 )
@@ -114,7 +113,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             connection = (
                 await db.execute(
                     select(Connection).where(
-                        Connection.profile_id == 1,
+                        Connection.profile_id == profile_id,
                         Connection.name == connection_name,
                     )
                 )
@@ -122,7 +121,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             fx_row = (
                 await db.execute(
                     select(EndpointFxRateSetting).where(
-                        EndpointFxRateSetting.profile_id == 1,
+                        EndpointFxRateSetting.profile_id == profile_id,
                         EndpointFxRateSetting.model_id == model_id,
                         EndpointFxRateSetting.endpoint_id == endpoint.id,
                     )
@@ -134,7 +133,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             assert connection.endpoint_id == endpoint.id
             assert fx_row is not None
 
-            export_response = await export_config(db=db, profile_id=1)
+            export_response = await export_config(db=db, profile_id=profile_id)
             exported = json.loads(export_response.body)
 
         exported_endpoint = next(
@@ -158,6 +157,23 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         )
         assert exported_mapping["endpoint_id"] == endpoint.id
 
+        from app.routers.endpoints import create_endpoint
+        from app.schemas.schemas import EndpointCreate
+
+        async with AsyncSessionLocal() as db:
+            created_endpoint = await create_endpoint(
+                body=EndpointCreate(
+                    name=f"{endpoint_name}-follow-up",
+                    base_url="https://post-import.example.com",
+                    api_key="sk-post-import",
+                ),
+                db=db,
+                profile_id=profile_id,
+            )
+            await db.commit()
+
+        assert created_endpoint.id > endpoint.id
+
 class TestDEF026_ConfigImportSystemRuleTimestamp:
     @pytest.mark.asyncio
     async def test_import_updates_system_rules_without_timezone_errors(self):
@@ -174,17 +190,15 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
 
             system_rule = SYSTEM_BLOCKLIST_DEFAULTS[0]
 
-            existing_profile = await db.get(Profile, 1)
-            if existing_profile is None:
-                db.add(
-                    Profile(
-                        id=1,
-                        name="DEF026 Profile",
-                        is_active=False,
-                        version=0,
-                    )
-                )
-                await db.flush()
+            profile = Profile(
+                name="DEF026 Profile",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
                     "version": 2,
@@ -207,7 +221,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                 }
             )
 
-            response = await import_config(data=payload, db=db, profile_id=1)
+            response = await import_config(data=payload, db=db, profile_id=profile.id)
 
             assert response.endpoints_imported == 0
             assert response.models_imported == 0
@@ -215,4 +229,3 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             assert response.connections_imported == 0
 
             await db.rollback()
-

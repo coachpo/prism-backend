@@ -1,8 +1,9 @@
 import json
+from dataclasses import dataclass
 from typing import Literal, cast
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.crypto import encrypt_secret
@@ -21,10 +22,55 @@ from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
 from app.services.proxy_service import normalize_base_url
 
 
+@dataclass
+class _IdAllocator:
+    next_id: int
+
+    def take(self) -> int:
+        allocated_id = self.next_id
+        self.next_id += 1
+        return allocated_id
+
+
 async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
     await db.execute(
         select(Profile.id).where(Profile.id == profile_id).with_for_update()
     )
+
+
+async def _lock_import_target_tables(db: AsyncSession) -> None:
+    await db.execute(
+        text(
+            "LOCK TABLE "
+            "endpoint_fx_rate_settings, "
+            "connections, "
+            "endpoints, "
+            "model_configs, "
+            "pricing_templates, "
+            "user_settings, "
+            "header_blocklist_rules "
+            "IN SHARE ROW EXCLUSIVE MODE"
+        )
+    )
+
+
+async def _build_id_allocator(db: AsyncSession, model) -> _IdAllocator:
+    max_id = await db.scalar(select(func.max(model.id)))
+    return _IdAllocator(next_id=(max_id or 0) + 1)
+
+
+async def _sync_id_sequence_if_present(db: AsyncSession, model) -> None:
+    sequence_name = await db.scalar(
+        select(func.pg_get_serial_sequence(model.__table__.fullname, "id"))
+    )
+    if sequence_name is None:
+        return
+
+    max_id = await db.scalar(select(func.max(model.id)))
+    if max_id is None:
+        return
+
+    await db.execute(select(func.setval(sequence_name, max_id, True)))
 
 
 def _sorted_import_connections(connections):
@@ -44,6 +90,7 @@ async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
 ) -> ConfigImportResponse:
     await _lock_profile_row(db, profile_id=profile_id)
+    await _lock_import_target_tables(db)
     await db.execute(
         delete(EndpointFxRateSetting).where(
             EndpointFxRateSetting.profile_id == profile_id
@@ -90,6 +137,14 @@ async def execute_import_payload(
                 detail=f"Missing provider types in system: {missing}",
             )
 
+    endpoint_id_allocator = await _build_id_allocator(db, Endpoint)
+    template_id_allocator = await _build_id_allocator(db, PricingTemplate)
+    model_config_id_allocator = await _build_id_allocator(db, ModelConfig)
+    connection_id_allocator = await _build_id_allocator(db, Connection)
+    user_setting_id_allocator = await _build_id_allocator(db, UserSetting)
+    fx_setting_id_allocator = await _build_id_allocator(db, EndpointFxRateSetting)
+    header_rule_id_allocator = await _build_id_allocator(db, HeaderBlocklistRule)
+
     endpoint_id_map: dict[int, int] = {}
     endpoints_count = 0
     sorted_endpoints = sorted(
@@ -102,6 +157,7 @@ async def execute_import_payload(
 
     for normalized_position, (_, endpoint_data) in enumerate(sorted_endpoints):
         endpoint = Endpoint(
+            id=endpoint_id_allocator.take(),
             profile_id=profile_id,
             name=endpoint_data.name.strip(),
             base_url=normalize_base_url(endpoint_data.base_url),
@@ -118,6 +174,7 @@ async def execute_import_payload(
     templates_count = 0
     for template_data in data.pricing_templates:
         template = PricingTemplate(
+            id=template_id_allocator.take(),
             profile_id=profile_id,
             name=template_data.name.strip(),
             description=template_data.description,
@@ -146,6 +203,7 @@ async def execute_import_payload(
     for model in data.models:
         is_proxy = model.model_type == "proxy"
         model_config = ModelConfig(
+            id=model_config_id_allocator.take(),
             provider_id=provider_map[model.provider_type],
             profile_id=profile_id,
             model_id=model.model_id,
@@ -181,6 +239,7 @@ async def execute_import_payload(
                 )
 
             connection = Connection(
+                id=connection_id_allocator.take(),
                 model_config_id=model_config.id,
                 profile_id=profile_id,
                 endpoint_id=mapped_endpoint_id,
@@ -215,6 +274,7 @@ async def execute_import_payload(
     ).scalar_one_or_none()
     if user_settings is None:
         user_settings = UserSetting(
+            id=user_setting_id_allocator.take(),
             profile_id=profile_id,
             report_currency_code="USD",
             report_currency_symbol="$",
@@ -232,6 +292,7 @@ async def execute_import_payload(
                 continue
             db.add(
                 EndpointFxRateSetting(
+                    id=fx_setting_id_allocator.take(),
                     model_id=mapping.model_id,
                     profile_id=profile_id,
                     endpoint_id=mapped_endpoint_id,
@@ -248,6 +309,7 @@ async def execute_import_payload(
     ):
         db.add(
             HeaderBlocklistRule(
+                id=header_rule_id_allocator.take(),
                 name=rule_data.name,
                 profile_id=profile_id,
                 match_type=rule_data.match_type,
@@ -257,6 +319,16 @@ async def execute_import_payload(
             )
         )
     await db.flush()
+    for model in (
+        Endpoint,
+        PricingTemplate,
+        ModelConfig,
+        Connection,
+        UserSetting,
+        EndpointFxRateSetting,
+        HeaderBlocklistRule,
+    ):
+        await _sync_id_sequence_if_present(db, model)
 
     return ConfigImportResponse(
         endpoints_imported=endpoints_count,
