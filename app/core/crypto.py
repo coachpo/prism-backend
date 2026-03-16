@@ -51,7 +51,7 @@ def mask_secret(value: str | None) -> str | None:
         return None
     if len(decrypted) <= 8:
         return "*" * len(decrypted)
-    return f"{decrypted[:4]}{'*' * 6}{decrypted[-4:]}"
+    return f"{'*' * 8}{decrypted[-4:]}"
 
 
 def hash_password(password: str) -> str:
