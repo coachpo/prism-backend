@@ -81,6 +81,54 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["request_id"] == 321
 
     @pytest.mark.asyncio
+    async def test_operations_requests_route_returns_lightweight_payload(self):
+        from app.routers.stats import list_operations_request_logs
+
+        mock_db = AsyncMock()
+        row = MagicMock(
+            id=77,
+            model_id="gpt-5.4",
+            provider_type="openai",
+            status_code=429,
+            response_time_ms=1234,
+            input_tokens=11,
+            output_tokens=22,
+            total_tokens=33,
+            cache_read_input_tokens=4,
+            cache_creation_input_tokens=5,
+            reasoning_tokens=6,
+            total_cost_user_currency_micros=987654,
+            error_detail="rate limit",
+            created_at=self._aware_utc_datetime(),
+        )
+
+        with patch(
+            "app.routers.stats.get_operations_request_logs",
+            new_callable=AsyncMock,
+        ) as mock_get_operations_request_logs:
+            mock_get_operations_request_logs.return_value = ([row], 1)
+            response = await list_operations_request_logs(
+                db=mock_db,
+                profile_id=7,
+                limit=200,
+                offset=0,
+            )
+
+        assert response.total == 1
+        assert response.limit == 200
+        payload = response.items[0].model_dump()
+        assert payload["id"] == 77
+        assert payload["model_id"] == "gpt-5.4"
+        assert payload["status_code"] == 429
+        assert "profile_id" not in payload
+        assert "request_path" not in payload
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_operations_request_logs.await_args_list[0],
+        )
+        assert call_kwargs["limit"] == 200
+
+    @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
         from app.routers.stats import stats_summary
 

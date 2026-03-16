@@ -65,6 +65,32 @@ class RequestLogListResponse(BaseModel):
     offset: int
 
 
+class OperationsRequestLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    model_id: str
+    provider_type: str
+    status_code: int
+    response_time_ms: int
+    input_tokens: int | None
+    output_tokens: int | None
+    total_tokens: int | None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    total_cost_user_currency_micros: int | None = None
+    error_detail: str | None
+    created_at: datetime
+
+
+class OperationsRequestLogListResponse(BaseModel):
+    items: list[OperationsRequestLogResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 class StatGroupResponse(BaseModel):
     key: str
     total_requests: int

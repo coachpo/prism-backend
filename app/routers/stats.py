@@ -13,6 +13,7 @@ from app.schemas.schemas import (
     ConnectionSuccessRateResponse,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
+    OperationsRequestLogListResponse,
     RequestLogListResponse,
     SpendingReportResponse,
     StatsSummaryResponse,
@@ -23,6 +24,7 @@ from app.services.stats_service import (
     get_connection_metrics_batch,
     get_connection_success_rates,
     get_model_metrics_batch,
+    get_operations_request_logs,
     get_request_logs,
     get_spending_report,
     get_stats_summary,
@@ -63,6 +65,40 @@ async def list_request_logs(
         limit=limit,
         offset=offset,
         get_request_logs_fn=get_request_logs,
+    )
+
+
+@router.get("/requests/operations", response_model=OperationsRequestLogListResponse)
+async def list_operations_request_logs(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    request_id: int | None = None,
+    model_id: str | None = None,
+    provider_type: str | None = None,
+    status_code: int | None = None,
+    success: bool | None = None,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+    endpoint_id: int | None = None,
+    connection_id: int | None = None,
+    limit: int = Query(default=200, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    return await _stats_impl.list_operations_request_logs(
+        db,
+        profile_id,
+        request_id=request_id,
+        model_id=model_id,
+        provider_type=provider_type,
+        status_code=status_code,
+        success=success,
+        from_time=from_time,
+        to_time=to_time,
+        endpoint_id=endpoint_id,
+        connection_id=connection_id,
+        limit=limit,
+        offset=offset,
+        get_operations_request_logs_fn=get_operations_request_logs,
     )
 
 
@@ -222,6 +258,7 @@ __all__ = [
     "connection_success_rates",
     "delete_request_logs",
     "get_throughput",
+    "list_operations_request_logs",
     "list_request_logs",
     "model_metrics_batch",
     "router",
