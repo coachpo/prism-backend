@@ -1,11 +1,224 @@
 import asyncio
 import logging
+from datetime import timedelta
 
+from sqlalchemy import case, func, select
+
+from app.core.time import utc_now
+from app.models.domains.routing import Connection, Endpoint, ModelConfig
 from app.models.models import RequestLog
-from app.schemas.domains.stats import RequestLogResponse
+from app.schemas.domains.stats import (
+    DashboardRealtimeUpdateResponse,
+    DashboardRouteSnapshotResponse,
+    RequestLogResponse,
+    SpendingReportResponse,
+    StatsSummaryResponse,
+    ThroughputStatsResponse,
+)
 from app.services.realtime import connection_manager
+from app.services.stats.spending import get_spending_report
+from app.services.stats.summary import get_stats_summary
+from app.services.stats.throughput import get_throughput_stats
 
 logger = logging.getLogger(__name__)
+
+
+async def build_dashboard_route_snapshot(
+    *,
+    db,
+    entry: RequestLog,
+    from_time,
+    to_time,
+) -> DashboardRouteSnapshotResponse | None:
+    if entry.endpoint_id is None:
+        return None
+
+    success_case = case(
+        (RequestLog.status_code.between(200, 299), 1),
+        else_=0,
+    )
+    traffic_case = case(
+        (RequestLog.success_flag.is_(True), 1),
+        else_=0,
+    )
+
+    aggregate_row = (
+        await db.execute(
+            select(
+                func.count().label("total_requests"),
+                func.coalesce(func.sum(success_case), 0).label("success_count"),
+                func.coalesce(func.sum(traffic_case), 0).label("traffic_count"),
+            ).where(
+                RequestLog.profile_id == entry.profile_id,
+                RequestLog.model_id == entry.model_id,
+                RequestLog.endpoint_id == entry.endpoint_id,
+                RequestLog.created_at >= from_time,
+                RequestLog.created_at <= to_time,
+            )
+        )
+    ).one()
+
+    metadata_row = None
+    if entry.connection_id is not None:
+        metadata_row = (
+            await db.execute(
+                select(
+                    Connection.model_config_id.label("model_config_id"),
+                    ModelConfig.display_name.label("model_display_name"),
+                    ModelConfig.model_id.label("model_id"),
+                    Endpoint.name.label("endpoint_name"),
+                    Endpoint.base_url.label("endpoint_base_url"),
+                )
+                .join(ModelConfig, Connection.model_config_id == ModelConfig.id)
+                .join(Endpoint, Connection.endpoint_id == Endpoint.id)
+                .where(
+                    Connection.id == entry.connection_id,
+                    Connection.profile_id == entry.profile_id,
+                )
+            )
+        ).one_or_none()
+
+    if metadata_row is None:
+        metadata_row = (
+            await db.execute(
+                select(
+                    ModelConfig.id.label("model_config_id"),
+                    ModelConfig.display_name.label("model_display_name"),
+                    ModelConfig.model_id.label("model_id"),
+                    Endpoint.name.label("endpoint_name"),
+                    Endpoint.base_url.label("endpoint_base_url"),
+                )
+                .select_from(Connection)
+                .join(ModelConfig, Connection.model_config_id == ModelConfig.id)
+                .join(Endpoint, Connection.endpoint_id == Endpoint.id)
+                .where(
+                    Connection.profile_id == entry.profile_id,
+                    Connection.endpoint_id == entry.endpoint_id,
+                    ModelConfig.model_id == entry.model_id,
+                )
+                .order_by(Connection.is_active.desc(), Connection.priority.asc())
+                .limit(1)
+            )
+        ).one_or_none()
+
+    model_config_id = (
+        int(metadata_row.model_config_id)
+        if metadata_row is not None and metadata_row.model_config_id is not None
+        else None
+    )
+    model_label = entry.model_id
+    endpoint_label = (
+        entry.endpoint_description
+        or entry.endpoint_base_url
+        or f"Endpoint {entry.endpoint_id}"
+    )
+
+    if metadata_row is not None:
+        model_label = metadata_row.model_display_name or metadata_row.model_id
+        endpoint_label = (
+            metadata_row.endpoint_name
+            or metadata_row.endpoint_base_url
+            or endpoint_label
+        )
+
+    active_connection_count = 0
+    if model_config_id is not None:
+        active_connection_count = int(
+            (
+                await db.execute(
+                    select(func.count(Connection.id)).where(
+                        Connection.profile_id == entry.profile_id,
+                        Connection.model_config_id == model_config_id,
+                        Connection.endpoint_id == entry.endpoint_id,
+                        Connection.is_active.is_(True),
+                    )
+                )
+            ).scalar_one()
+            or 0
+        )
+
+    request_count = int(aggregate_row.total_requests or 0)
+    success_count = int(aggregate_row.success_count or 0)
+    error_count = request_count - success_count
+    traffic_count = int(aggregate_row.traffic_count or 0)
+
+    return DashboardRouteSnapshotResponse(
+        model_id=entry.model_id,
+        model_config_id=model_config_id,
+        model_label=model_label,
+        endpoint_id=entry.endpoint_id,
+        endpoint_label=endpoint_label,
+        active_connection_count=active_connection_count,
+        traffic_request_count_24h=traffic_count,
+        request_count_24h=request_count,
+        success_count_24h=success_count,
+        error_count_24h=error_count,
+        success_rate_24h=(
+            round((success_count / request_count) * 100, 2)
+            if request_count > 0
+            else None
+        ),
+    )
+
+
+async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict:
+    window_end = utc_now()
+    window_start_24h = window_end - timedelta(hours=24)
+
+    request_log = RequestLogResponse.model_validate(entry)
+    stats_summary = StatsSummaryResponse.model_validate(
+        await get_stats_summary(
+            db,
+            profile_id=entry.profile_id,
+            from_time=window_start_24h,
+            to_time=window_end,
+        )
+    )
+    provider_summary = StatsSummaryResponse.model_validate(
+        await get_stats_summary(
+            db,
+            profile_id=entry.profile_id,
+            from_time=window_start_24h,
+            to_time=window_end,
+            group_by="provider",
+        )
+    )
+    spending_summary = SpendingReportResponse.model_validate(
+        await get_spending_report(
+            db,
+            profile_id=entry.profile_id,
+            preset="last_30_days",
+            top_n=5,
+        )
+    )
+    throughput = ThroughputStatsResponse.model_validate(
+        await get_throughput_stats(
+            db,
+            profile_id=entry.profile_id,
+            from_time=window_start_24h,
+            to_time=window_end,
+        )
+    )
+    routing_route = await build_dashboard_route_snapshot(
+        db=db,
+        entry=entry,
+        from_time=window_start_24h,
+        to_time=window_end,
+    )
+
+    update = DashboardRealtimeUpdateResponse(
+        request_log=request_log,
+        stats_summary_24h=stats_summary,
+        provider_summary_24h=provider_summary,
+        spending_summary_30d=spending_summary,
+        throughput_24h=throughput,
+        routing_route_24h=routing_route,
+    )
+
+    return {
+        "type": "dashboard.update",
+        **update.model_dump(mode="json"),
+    }
 
 
 async def log_request(
@@ -106,31 +319,17 @@ async def log_request(
             await log_db.refresh(entry)
 
             try:
-                serialized_entry = RequestLogResponse.model_validate(entry).model_dump(
-                    mode="json"
+                dashboard_message = await build_dashboard_update_message(
+                    db=log_db,
+                    entry=entry,
                 )
                 await connection_manager.broadcast_to_profile(
                     profile_id=profile_id,
                     channel="dashboard",
-                    message={
-                        "type": "dashboard.update",
-                        "request_log": serialized_entry,
-                    },
+                    message=dashboard_message,
                 )
             except Exception:
-                logger.exception(
-                    "Failed to broadcast request-log payload; falling back to dirty signals"
-                )
-                try:
-                    await connection_manager.broadcast_to_profile(
-                        profile_id=profile_id,
-                        channel="dashboard",
-                        message={"type": "dashboard.dirty"},
-                    )
-                except Exception:
-                    logger.debug(
-                        "Failed to broadcast dirty fallback for request log (non-critical)"
-                    )
+                logger.exception("Failed to broadcast dashboard.update payload")
 
             return entry.id
     except asyncio.CancelledError:

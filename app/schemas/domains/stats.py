@@ -393,3 +393,26 @@ class ThroughputStatsResponse(BaseModel):
     total_requests: int
     time_window_seconds: float
     buckets: list[ThroughputBucket]
+
+
+class DashboardRouteSnapshotResponse(BaseModel):
+    model_id: str
+    model_config_id: int | None = None
+    model_label: str
+    endpoint_id: int
+    endpoint_label: str
+    active_connection_count: int
+    traffic_request_count_24h: int
+    request_count_24h: int
+    success_count_24h: int
+    error_count_24h: int
+    success_rate_24h: float | None = None
+
+
+class DashboardRealtimeUpdateResponse(BaseModel):
+    request_log: RequestLogResponse
+    stats_summary_24h: StatsSummaryResponse
+    provider_summary_24h: StatsSummaryResponse
+    spending_summary_30d: SpendingReportResponse
+    throughput_24h: ThroughputStatsResponse
+    routing_route_24h: DashboardRouteSnapshotResponse | None = None

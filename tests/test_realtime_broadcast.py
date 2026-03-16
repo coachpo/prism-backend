@@ -66,11 +66,24 @@ async def test_log_request_broadcasts_dashboard_payload():
     mock_session.refresh = AsyncMock(side_effect=fake_refresh)
 
     broadcast = AsyncMock()
+    dashboard_message = {
+        "type": "dashboard.update",
+        "request_log": {"id": 321},
+        "stats_summary_24h": {"total_requests": 1},
+        "provider_summary_24h": {"total_requests": 1},
+        "spending_summary_30d": {"summary": {"total_cost_micros": 0}},
+        "throughput_24h": {"total_requests": 1},
+        "routing_route_24h": None,
+    }
 
     with (
         patch(
             "app.core.database.AsyncSessionLocal",
             return_value=make_session_context(mock_session),
+        ),
+        patch(
+            "app.services.stats.logging.build_dashboard_update_message",
+            AsyncMock(return_value=dashboard_message),
         ),
         patch(
             "app.services.stats.logging.connection_manager.broadcast_to_profile",
@@ -99,6 +112,7 @@ async def test_log_request_broadcasts_dashboard_payload():
     assert dashboard_call["channel"] == "dashboard"
     assert dashboard_call["message"]["type"] == "dashboard.update"
     assert dashboard_call["message"]["request_log"]["id"] == 321
+    assert dashboard_call["message"]["stats_summary_24h"]["total_requests"] == 1
 
 
 @pytest.mark.asyncio
@@ -161,7 +175,7 @@ async def test_record_loadbalance_event_commits_without_broadcasts():
 
 
 @pytest.mark.asyncio
-async def test_log_request_falls_back_to_dashboard_dirty_signal_when_serialization_fails():
+async def test_log_request_skips_broadcast_when_dashboard_update_build_fails():
     mock_session = AsyncMock()
     mock_session.add = MagicMock()
     mock_session.commit = AsyncMock()
@@ -180,7 +194,7 @@ async def test_log_request_falls_back_to_dashboard_dirty_signal_when_serializati
             return_value=make_session_context(mock_session),
         ),
         patch(
-            "app.services.stats.logging.RequestLogResponse.model_validate",
+            "app.services.stats.logging.build_dashboard_update_message",
             side_effect=ValueError("boom"),
         ),
         patch(
@@ -201,6 +215,4 @@ async def test_log_request_falls_back_to_dashboard_dirty_signal_when_serializati
             request_path="/v1/chat/completions",
         )
 
-    assert [call.kwargs["message"]["type"] for call in broadcast.await_args_list] == [
-        "dashboard.dirty",
-    ]
+    assert broadcast.await_count == 0
