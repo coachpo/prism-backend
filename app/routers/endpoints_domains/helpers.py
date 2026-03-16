@@ -1,37 +1,16 @@
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
-from app.models.models import Connection, Endpoint, Profile
-
-
-async def ensure_unique_endpoint_name(
-    db: AsyncSession,
-    *,
-    profile_id: int,
-    endpoint_name: str,
-    exclude_id: int | None = None,
-) -> None:
-    query = select(Endpoint).where(
-        Endpoint.profile_id == profile_id,
-        Endpoint.name == endpoint_name,
-    )
-    if exclude_id is not None:
-        query = query.where(Endpoint.id != exclude_id)
-    existing = (await db.execute(query)).scalar_one_or_none()
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Endpoint name '{endpoint_name}' already exists",
-        )
-
-
-async def lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
-    await db.execute(
-        select(Profile.id).where(Profile.id == profile_id).with_for_update()
-    )
+from app.models.models import Connection, Endpoint
+from app.routers.shared import (
+    ensure_unique_endpoint_name,
+    get_next_endpoint_position,
+    lock_profile_row,
+    normalize_ordered_field,
+)
 
 
 async def load_endpoint_or_404(
@@ -65,23 +44,8 @@ async def list_ordered_endpoints(
     return list(result.scalars().all())
 
 
-async def get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
-    result = await db.execute(
-        select(func.max(Endpoint.position)).where(Endpoint.profile_id == profile_id)
-    )
-    max_position = result.scalar_one_or_none()
-    if max_position is None:
-        return 0
-    return int(max_position) + 1
-
-
 def normalize_endpoint_positions(endpoints: list[Endpoint]) -> None:
-    now = utc_now()
-    for index, endpoint in enumerate(endpoints):
-        if endpoint.position == index:
-            continue
-        endpoint.position = index
-        endpoint.updated_at = now
+    normalize_ordered_field(list(endpoints), field_name="position")
 
 
 def build_duplicate_endpoint_name(

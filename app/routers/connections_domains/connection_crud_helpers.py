@@ -1,57 +1,24 @@
 import json
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.crypto import encrypt_secret
-from app.core.time import utc_now
 from app.models.models import (
     Connection,
     Endpoint,
     ModelConfig,
-    Profile,
     PricingTemplate,
 )
+from app.routers.shared import (
+    ensure_unique_endpoint_name as _ensure_unique_endpoint_name,
+    get_next_endpoint_position as _get_next_endpoint_position,
+    lock_profile_row as _lock_profile_row,
+    normalize_ordered_field,
+)
 from app.services.proxy_service import normalize_base_url, validate_base_url
-
-
-async def _ensure_unique_endpoint_name(
-    db: AsyncSession,
-    *,
-    profile_id: int,
-    endpoint_name: str,
-    exclude_id: int | None = None,
-) -> None:
-    query = select(Endpoint).where(
-        Endpoint.profile_id == profile_id,
-        Endpoint.name == endpoint_name,
-    )
-    if exclude_id is not None:
-        query = query.where(Endpoint.id != exclude_id)
-    existing = (await db.execute(query)).scalar_one_or_none()
-    if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Endpoint name '{endpoint_name}' already exists",
-        )
-
-
-async def _get_next_endpoint_position(db: AsyncSession, *, profile_id: int) -> int:
-    result = await db.execute(
-        select(func.max(Endpoint.position)).where(Endpoint.profile_id == profile_id)
-    )
-    max_position = result.scalar_one_or_none()
-    if max_position is None:
-        return 0
-    return int(max_position) + 1
-
-
-async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
-    await db.execute(
-        select(Profile.id).where(Profile.id == profile_id).with_for_update()
-    )
 
 
 async def _create_endpoint_from_inline(
@@ -243,12 +210,7 @@ async def _list_ordered_connections_for_models(
 
 
 def _normalize_connection_priorities(connections: list[Connection]) -> None:
-    now = utc_now()
-    for index, connection in enumerate(connections):
-        if connection.priority == index:
-            continue
-        connection.priority = index
-        connection.updated_at = now
+    normalize_ordered_field(list(connections), field_name="priority")
 
 
 def _serialize_custom_headers(custom_headers: dict[str, str] | None) -> str | None:

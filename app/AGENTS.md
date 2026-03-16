@@ -10,18 +10,19 @@ app/
 ├── bootstrap/                                # Startup sequencing and auth middleware split
 ├── dependencies.py                           # DB session + active/effective profile dependencies
 ├── core/                                     # Config, auth/crypto helpers, database, migrations, time helpers
-├── models/                                   # ORM models and domain splits
+├── models/AGENTS.md                          # ORM models and domain splits
 ├── schemas/                                  # Pydantic request/response contracts
 ├── routers/AGENTS.md                         # 14 router shells + *_domains/ API layout
 ├── services/auth/AGENTS.md                   # Session/email/password-reset/proxy-key internals
 ├── services/loadbalancer_support/AGENTS.md   # Recovery state, attempts, event helpers
 ├── services/proxy_support/AGENTS.md          # Upstream URL/header/body/transport helpers
-└── services/stats/AGENTS.md                  # Telemetry, request-log, and spending queries
+├── services/stats/AGENTS.md                  # Telemetry, request-log, and spending queries
+└── services/webauthn/AGENTS.md               # Passkey registration, authentication, and credentials
 ```
 
 ## WHERE TO LOOK
 
-- Startup order and seed logic: `main.py`
+- Startup order and seed logic: `main.py`, `bootstrap/startup.py`
 - Scope split (`X-Profile-Id` vs active profile): `dependencies.py`
 - Cookie auth, refresh rotation, verified email, password reset, proxy API keys, passkeys: `routers/auth.py`, `routers/settings.py`, `services/auth_service.py`, `services/webauthn_service.py`, `services/webauthn/`, `core/auth.py`
 - Proxy runtime entrypoint: `routers/proxy.py`, `routers/proxy_domains/`
@@ -31,14 +32,17 @@ app/
 - Pricing templates and connection pricing linkage: `routers/pricing_templates.py`, `services/costing_service.py`
 - Audit and realtime payload emission: `routers/audit.py`, `routers/realtime.py`, `services/audit_service.py`, `services/realtime/connection_manager.py`
 - Stats re-export boundary: `services/stats_service.py`, `services/stats/`, `services/stats/AGENTS.md`
+- Utility services: `services/profile_invariants.py`, `services/user_settings.py`, `services/background_cleanup.py`, `services/loadbalance_cleanup.py`
 
 ## CHILD DOCS
 
+- `models/AGENTS.md`: ORM models split into identity, routing, and observability domains.
 - `routers/AGENTS.md`: top-level API shells, domain folders, and dependency split between management, proxy, and realtime routers.
 - `services/auth/AGENTS.md`: auth/session/email/password-reset/proxy-key internals behind `services/auth_service.py`.
 - `services/loadbalancer_support/AGENTS.md`: recovery-state mutation, attempt planning, and loadbalance-event helpers behind `services/loadbalancer.py`.
 - `services/proxy_support/AGENTS.md`: upstream URL/header/body/compression/transport helpers behind `services/proxy_service.py`.
 - `services/stats/AGENTS.md`: telemetry, request-log, and spending query patterns behind `services/stats_service.py`.
+- `services/webauthn/AGENTS.md`: passkey registration, authentication, and credential management behind `services/webauthn_service.py`.
 
 ## CONVENTIONS
 

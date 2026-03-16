@@ -3,9 +3,10 @@ from datetime import datetime
 from sqlalchemy import String, and_, case, cast, desc, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import RequestLog, UserSetting
+from app.models.models import RequestLog
 
 from app.services.stats.time_presets import resolve_time_preset
+from app.services.user_settings import get_report_currency_preferences
 
 
 async def get_spending_report(
@@ -116,7 +117,9 @@ async def get_spending_report(
     if group_by == "day":
         group_expr = func.to_char(RequestLog.created_at, "YYYY-MM-DD")
     elif group_by == "week":
-        group_expr = func.to_char(func.date_trunc("week", RequestLog.created_at), 'IYYY-"W"IW')
+        group_expr = func.to_char(
+            func.date_trunc("week", RequestLog.created_at), 'IYYY-"W"IW'
+        )
     elif group_by == "month":
         group_expr = func.to_char(RequestLog.created_at, "YYYY-MM")
     elif group_by == "provider":
@@ -248,13 +251,12 @@ async def get_spending_report(
         )
     ).all()
 
-    settings_row = (
-        await db.execute(select(UserSetting).where(UserSetting.profile_id == profile_id).order_by(UserSetting.id.asc()).limit(1))
-    ).scalar_one_or_none()
-
-    report_currency_code = settings_row.report_currency_code if settings_row else "USD"
-    report_currency_symbol = (
-        settings_row.report_currency_symbol if settings_row else "$"
+    (
+        report_currency_code,
+        report_currency_symbol,
+    ) = await get_report_currency_preferences(
+        db,
+        profile_id=profile_id,
     )
 
     unpriced_breakdown: dict[str, int] = {}

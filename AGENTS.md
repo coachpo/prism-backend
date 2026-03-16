@@ -7,11 +7,13 @@ FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane 
 ```
 backend/
 ├── app/AGENTS.md                                # Runtime and management implementation details
+├── app/models/AGENTS.md                         # ORM models and domain splits
 ├── app/routers/AGENTS.md                        # API surface and domain-shell layout
 ├── app/services/auth/AGENTS.md                  # Session, email, password reset, proxy keys
 ├── app/services/loadbalancer_support/AGENTS.md  # Recovery state, attempts, event helpers
 ├── app/services/proxy_support/AGENTS.md         # Upstream request/header/url/transport helpers
 ├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
+├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
 ├── alembic/
 ├── requirements.txt
@@ -21,15 +23,17 @@ backend/
 ## CHILD DOCS
 
 - `app/AGENTS.md`: use for router, service, schema, and startup behavior once you are inside implementation code.
+- `app/models/AGENTS.md`: use for ORM model definitions and domain splits (identity, routing, observability).
 - `app/routers/AGENTS.md`: use when working in the API surface layer or deciding where new handlers belong.
 - `app/services/auth/AGENTS.md`: use for auth/session/OTP/proxy-key internals behind `auth_service.py`.
 - `app/services/loadbalancer_support/AGENTS.md`: use for recovery-state mutation, attempt planning, and loadbalance event helpers.
 - `app/services/proxy_support/AGENTS.md`: use for upstream URL/header/body/compression/transport helpers behind `proxy_service.py`.
+- `app/services/webauthn/AGENTS.md`: use for passkey registration, authentication, and credential management behind `webauthn_service.py`.
 - `tests/AGENTS.md`: use for defect IDs, aggregators, startup/auth regressions, realtime coverage, and container-backed test setup.
 
 ## RUNTIME SEMANTICS
 
-- Management endpoints use effective profile scope; runtime proxy endpoints use active profile scope.
+- Profile-scoped management endpoints use effective profile scope; global management endpoints include profile lifecycle, provider audit settings, `/api/auth/*`, and the auth/email/proxy-key settings routes.
 - When auth is enabled, management uses session cookies while runtime proxy traffic requires a proxy API key header.
 - Providers are global seed rows: `openai`, `anthropic`, `gemini`.
 - Failover recovery memory is in-process and keyed by `(profile_id, connection_id)`.
@@ -71,7 +75,7 @@ docker compose up -d postgres
 ## ANTI-PATTERNS
 
 - Do not reintroduce `round_robin`, unsupported providers, proxy chaining, or float-based money values.
-- Do not leak secrets in audit output or allow blocked headers to sneak back in after custom-header merge.
+- Do not leak secrets in audit output or allow blocked headers to sneak back in after custom header merge.
 - Do not let management auth assumptions leak into proxy runtime auth; they are separate enforcement paths.
 - Do not assume management profile overrides apply to runtime proxy traffic.
 - Do not bypass `app/services/auth_service.py`, `app/services/loadbalancer.py`, or `app/services/proxy_service.py` public boundaries when the split package already owns the behavior.

@@ -7,7 +7,13 @@ from typing import TypedDict
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import Connection, Endpoint, EndpointFxRateSetting, PricingTemplate, UserSetting
+from app.models.models import (
+    Connection,
+    Endpoint,
+    EndpointFxRateSetting,
+    PricingTemplate,
+)
+from app.services.user_settings import load_profile_user_settings
 
 SIX_DP = Decimal("0.000001")
 MICRO_FACTOR = Decimal("1000000")
@@ -89,9 +95,7 @@ async def load_costing_settings(
     model_id: str,
     endpoint_ids: list[int],
 ) -> CostingSettingsSnapshot:
-    settings_row = (
-        await db.execute(select(UserSetting).where(UserSetting.profile_id == profile_id).order_by(UserSetting.id.asc()).limit(1))
-    ).scalar_one_or_none()
+    settings_row = await load_profile_user_settings(db, profile_id=profile_id)
 
     if settings_row is None:
         report_currency_code = "USD"
@@ -139,7 +143,7 @@ def compute_cost_fields(
     cache_creation_input_tokens: int | None,
     reasoning_tokens: int | None,
     settings: CostingSettingsSnapshot,
- ) -> CostFieldPayload:
+) -> CostFieldPayload:
     success_flag = 200 <= status_code < 300
     billable_flag = success_flag
 

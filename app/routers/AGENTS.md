@@ -11,13 +11,14 @@ routers/
 ├── connections.py + connections_domains/ # CRUD, pricing, health checks, owner lookups, reordering
 ├── endpoints.py + endpoints_domains/     # Endpoint CRUD, duplication, dropdown data
 ├── models.py + models_domains/           # Model query and mutation split
+├── pricing_templates.py + pricing_templates_domains/ # Pricing template CRUD and usage lookups
+├── profiles.py + profiles_domains/       # Profile CRUD, activation CAS, soft delete
 ├── proxy.py + proxy_domains/             # /v1* and /v1beta* runtime proxy execution
-├── settings.py + settings_domains/       # Auth settings, costing, email verification, proxy keys
-├── stats.py                              # Request logs, summary, spending, throughput
+├── shared/                               # Reused router-layer helpers for profile rows and ordering
+├── settings.py + settings_domains/       # Auth settings, costing, timezone, email verification, proxy keys
+├── stats.py + stats_domains/             # Request logs, metrics batch, summary, spending, throughput
 ├── audit.py                              # Audit log queries and retention deletes
 ├── loadbalance.py                        # Persistent loadbalance event queries and stats
-├── pricing_templates.py                  # Pricing template CRUD and usage lookups
-├── profiles.py                           # Profile CRUD, activation CAS, soft delete
 ├── providers.py                          # Provider audit settings
 └── realtime.py                           # WebSocket subscribe/auth/stats endpoint
 ```
@@ -29,14 +30,19 @@ routers/
 - Connection CRUD, pricing-template assignment, owner lookup, health checks: `connections.py`, `connections_domains/`
 - Endpoint CRUD, duplication, and ordering: `endpoints.py`, `endpoints_domains/`
 - Model queries, proxy-model invariants, redirect validation: `models.py`, `models_domains/`
+- Pricing template CRUD and usage lookups: `pricing_templates.py`, `pricing_templates_domains/`
+- Profile lifecycle and active-profile CAS: `profiles.py`, `profiles_domains/`
 - Runtime proxy attempt setup, streaming, logging, and failover handlers: `proxy.py`, `proxy_domains/`
-- Settings subrouters for auth, costing, email verification, and proxy keys: `settings.py`, `settings_domains/`
-- Observability APIs: `stats.py`, `audit.py`, `loadbalance.py`, `realtime.py`
+- Shared router-layer helpers: `shared/`
+- Settings subrouters for auth, costing, timezone, email verification, and proxy keys: `settings.py`, `settings_domains/`
+- Observability APIs: `stats.py`, `stats_domains/request_logs_route_handlers.py`, `audit.py`, `loadbalance.py`, `realtime.py`
+- Metrics batching: `stats_domains/metrics_route_handlers.py` for model and connection metrics.
 
 ## CONVENTIONS
 
 - Keep top-level router files thin; if a matching `*_domains/` folder exists, put request logic there instead of in the shell file.
-- Management routes use `get_effective_profile*` dependencies; runtime proxy routes use `get_active_profile*` dependencies.
+- Reuse `shared/` helpers for profile-row locking, endpoint-record invariants, and ordered-field normalization instead of re-implementing them per domain.
+- Profile-scoped management routes use `get_effective_profile*` dependencies; global management routes use plain DB/session auth dependencies; runtime proxy routes use `get_active_profile*` dependencies.
 - `settings.py` and `config.py` are composition routers; extend the domain folders instead of bloating the parent shell.
 - `proxy_domains/` owns attempt setup, streaming/buffered response handling, logging, and helper types; `proxy.py` should stay close to wiring.
 - `realtime.py` owns websocket auth and subscribe/unsubscribe flow, while room state lives in `services/realtime/connection_manager.py`.

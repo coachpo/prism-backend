@@ -1,54 +1,35 @@
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.time import ensure_utc_datetime
+import app.routers.stats_domains as _stats_impl
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
-    ConnectionMetricsBatchItem,
+    BatchDeleteResponse,
     ConnectionMetricsBatchRequest,
     ConnectionMetricsBatchResponse,
-    RequestLogListResponse,
-    RequestLogResponse,
-    ModelMetricsBatchItem,
+    ConnectionSuccessRateResponse,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
-    StatsSummaryResponse,
-    ConnectionSuccessRateResponse,
-    BatchDeleteResponse,
+    RequestLogListResponse,
     SpendingReportResponse,
+    StatsSummaryResponse,
     ThroughputStatsResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
 from app.services.stats_service import (
     get_connection_metrics_batch,
-    get_request_logs,
-    get_stats_summary,
     get_connection_success_rates,
     get_model_metrics_batch,
+    get_request_logs,
     get_spending_report,
+    get_stats_summary,
     get_throughput_stats,
 )
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
-
-
-def _normalize_datetime_filter(value: datetime | None) -> datetime | None:
-    return ensure_utc_datetime(value)
-
-
-def _coerce_float(value: object) -> float | None:
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _coerce_int(value: object) -> int | None:
-    if isinstance(value, (int, float)):
-        return int(value)
-    return None
 
 
 @router.get("/requests", response_model=RequestLogListResponse)
@@ -67,32 +48,21 @@ async def list_request_logs(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    normalized_from_time = _normalize_datetime_filter(from_time)
-    normalized_to_time = _normalize_datetime_filter(to_time)
-
-    items, total = await get_request_logs(
+    return await _stats_impl.list_request_logs(
         db,
+        profile_id,
         request_id=request_id,
         model_id=model_id,
-        profile_id=profile_id,
         provider_type=provider_type,
         status_code=status_code,
         success=success,
-        from_time=normalized_from_time,
-        to_time=normalized_to_time,
+        from_time=from_time,
+        to_time=to_time,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
         limit=limit,
         offset=offset,
-    )
-    serialized_items: list[RequestLogResponse] = [
-        RequestLogResponse.model_validate(item) for item in items
-    ]
-    return RequestLogListResponse(
-        items=serialized_items,
-        total=total,
-        limit=limit,
-        offset=offset,
+        get_request_logs_fn=get_request_logs,
     )
 
 
@@ -108,21 +78,18 @@ async def stats_summary(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ):
-    normalized_from_time = _normalize_datetime_filter(from_time)
-    normalized_to_time = _normalize_datetime_filter(to_time)
-
-    result = await get_stats_summary(
+    return await _stats_impl.stats_summary(
         db,
-        from_time=normalized_from_time,
-        profile_id=profile_id,
-        to_time=normalized_to_time,
+        profile_id,
+        from_time=from_time,
+        to_time=to_time,
         group_by=group_by,
         model_id=model_id,
         provider_type=provider_type,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
+        get_stats_summary_fn=get_stats_summary,
     )
-    return StatsSummaryResponse(**result)
 
 
 @router.post("/models/metrics", response_model=ModelMetricsBatchResponse)
@@ -131,26 +98,11 @@ async def model_metrics_batch(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    items = await get_model_metrics_batch(
+    return await _stats_impl.model_metrics_batch(
+        body,
         db,
-        profile_id=profile_id,
-        model_ids=body.model_ids,
-        summary_window_hours=body.summary_window_hours,
-        spending_preset=body.spending_preset,
-    )
-
-    def build_model_metrics_item(model_id: str) -> ModelMetricsBatchItem:
-        metric_values = items.get(model_id, {})
-        return ModelMetricsBatchItem(
-            model_id=model_id,
-            success_rate=_coerce_float(metric_values.get("success_rate")) or 0.0,
-            request_count_24h=_coerce_int(metric_values.get("request_count_24h")) or 0,
-            p95_latency_ms=_coerce_int(metric_values.get("p95_latency_ms")) or 0,
-            spend_30d_micros=_coerce_int(metric_values.get("spend_30d_micros")) or 0,
-        )
-
-    return ModelMetricsBatchResponse(
-        items=[build_model_metrics_item(model_id) for model_id in body.model_ids]
+        profile_id,
+        get_model_metrics_batch_fn=get_model_metrics_batch,
     )
 
 
@@ -162,42 +114,11 @@ async def connection_metrics_batch(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
-    items = await get_connection_metrics_batch(
+    return await _stats_impl.connection_metrics_batch(
+        body,
         db,
-        profile_id=profile_id,
-        model_id=body.model_id,
-        connection_ids=body.connection_ids,
-        summary_window_hours=body.summary_window_hours,
-    )
-
-    def build_connection_metrics_item(connection_id: int) -> ConnectionMetricsBatchItem:
-        metric_values = items.get(connection_id, {})
-        success_rate_24h = metric_values.get("success_rate_24h")
-        request_count_24h = metric_values.get("request_count_24h")
-        p95_latency_ms = metric_values.get("p95_latency_ms")
-        five_xx_rate = metric_values.get("five_xx_rate")
-        heuristic_failover_events = metric_values.get("heuristic_failover_events")
-        last_failover_like_at = metric_values.get("last_failover_like_at")
-
-        return ConnectionMetricsBatchItem(
-            connection_id=connection_id,
-            success_rate_24h=_coerce_float(success_rate_24h),
-            request_count_24h=_coerce_int(request_count_24h) or 0,
-            p95_latency_ms=_coerce_int(p95_latency_ms),
-            five_xx_rate=_coerce_float(five_xx_rate),
-            heuristic_failover_events=(_coerce_int(heuristic_failover_events) or 0),
-            last_failover_like_at=(
-                last_failover_like_at
-                if isinstance(last_failover_like_at, datetime)
-                else None
-            ),
-        )
-
-    return ConnectionMetricsBatchResponse(
-        items=[
-            build_connection_metrics_item(connection_id)
-            for connection_id in body.connection_ids
-        ]
+        profile_id,
+        get_connection_metrics_batch_fn=get_connection_metrics_batch,
     )
 
 
@@ -210,14 +131,12 @@ async def connection_success_rates(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ):
-    normalized_from_time = _normalize_datetime_filter(from_time)
-    normalized_to_time = _normalize_datetime_filter(to_time)
-
-    return await get_connection_success_rates(
+    return await _stats_impl.connection_success_rates(
         db,
-        profile_id=profile_id,
-        from_time=normalized_from_time,
-        to_time=normalized_to_time,
+        profile_id,
+        from_time=from_time,
+        to_time=to_time,
+        get_connection_success_rates_fn=get_connection_success_rates,
     )
 
 
@@ -240,15 +159,12 @@ async def spending_report(
     offset: int = Query(default=0, ge=0),
     top_n: int = Query(default=5, ge=1, le=50),
 ):
-    normalized_from_time = _normalize_datetime_filter(from_time)
-    normalized_to_time = _normalize_datetime_filter(to_time)
-
-    return await get_spending_report(
+    return await _stats_impl.spending_report(
         db,
+        profile_id,
         preset=preset,
-        from_time=normalized_from_time,
-        profile_id=profile_id,
-        to_time=normalized_to_time,
+        from_time=from_time,
+        to_time=to_time,
         provider_type=provider_type,
         model_id=model_id,
         endpoint_id=endpoint_id,
@@ -257,6 +173,7 @@ async def spending_report(
         limit=limit,
         offset=offset,
         top_n=top_n,
+        get_spending_report_fn=get_spending_report,
     )
 
 
@@ -267,24 +184,13 @@ async def delete_request_logs(
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
 ):
-    if delete_all and older_than_days is not None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either 'older_than_days' or 'delete_all', not both",
-        )
-    if not delete_all and older_than_days is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either 'older_than_days' (integer >= 1) or 'delete_all=true'",
-        )
-
-    background_tasks.add_task(
-        delete_request_logs_in_background,
-        profile_id=profile_id,
+    return await _stats_impl.delete_request_logs(
+        background_tasks,
+        profile_id,
         older_than_days=older_than_days,
         delete_all=delete_all,
+        delete_request_logs_in_background_fn=delete_request_logs_in_background,
     )
-    return BatchDeleteResponse(accepted=True)
 
 
 @router.get("/throughput", response_model=ThroughputStatsResponse)
@@ -298,18 +204,27 @@ async def get_throughput(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ):
-    normalized_from_time = _normalize_datetime_filter(from_time)
-    normalized_to_time = _normalize_datetime_filter(to_time)
-
-    result = await get_throughput_stats(
+    return await _stats_impl.get_throughput(
         db,
-        profile_id=profile_id,
-        from_time=normalized_from_time,
-        to_time=normalized_to_time,
+        profile_id,
+        from_time=from_time,
+        to_time=to_time,
         model_id=model_id,
         provider_type=provider_type,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
+        get_throughput_stats_fn=get_throughput_stats,
     )
 
-    return ThroughputStatsResponse(**result)
+
+__all__ = [
+    "connection_metrics_batch",
+    "connection_success_rates",
+    "delete_request_logs",
+    "get_throughput",
+    "list_request_logs",
+    "model_metrics_batch",
+    "router",
+    "spending_report",
+    "stats_summary",
+]

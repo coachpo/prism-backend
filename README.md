@@ -32,19 +32,26 @@ backend/
 │   │   ├── connections_domains/     # Connection CRUD, health, and owner helpers
 │   │   ├── endpoints_domains/       # Endpoint CRUD/reorder/duplicate helpers
 │   │   ├── models_domains/          # Model CRUD/query helpers
+│   │   ├── pricing_templates_domains/ # Pricing template CRUD + usage helpers
+│   │   ├── profiles_domains/        # Profile lifecycle and activation helpers
 │   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and logging helpers
+│   │   ├── shared/                  # Router-layer shared helpers for profile rows and ordering
+│   │   ├── stats_domains/           # Request log, metrics, spending, and throughput handlers
 │   │   ├── providers.py             # Provider CRUD
 │   │   ├── models.py                # Thin model route shell
 │   │   ├── endpoints.py             # Thin endpoint route shell
 │   │   ├── connections.py           # Thin connection route shell
-│   │   ├── stats.py                 # Request logs + aggregated statistics
+│   │   ├── stats.py                 # Thin stats route shell
 │   │   ├── audit.py                 # Audit log queries
 │   │   ├── config.py                # Thin config route shell
+│   │   ├── pricing_templates.py     # Thin pricing template route shell
+│   │   ├── profiles.py              # Thin profile route shell
 │   │   └── proxy.py                 # Thin /v1/* and /v1beta/* proxy router
 │   └── services/
 │       ├── auth/                    # Split auth, email, session, and proxy-key services
 │       ├── realtime/                # WebSocket connection manager helpers
 │       ├── stats/                   # Telemetry query and logging helpers
+│       ├── user_settings.py         # Shared profile user-settings access helpers
 │       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
 │       └── audit_service.py         # Audit log writing with header redaction

@@ -1,5 +1,4 @@
-# ruff: noqa: F401
-from app.routers.pricing_templates_domains import (
+from .route_handlers import (
     create_pricing_template,
     delete_pricing_template,
     get_pricing_template,

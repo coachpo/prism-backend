@@ -58,6 +58,7 @@ from app.services.stats_service import (
 )
 from app.services.audit_service import record_audit_log
 
+
 class TestProfileCRUDAndLifecycle:
     """FR-001: Profile Entity and Lifecycle"""
 
@@ -88,12 +89,50 @@ class TestProfileCRUDAndLifecycle:
             await create_profile(body=body, db=mock_db)
 
         assert mock_db.add.called
-        added_profile = mock_db.add.call_args[0][0]
+        added_profile = next(
+            obj
+            for obj in (call.args[0] for call in mock_db.add.call_args_list)
+            if isinstance(obj, Profile)
+        )
         assert added_profile.name == "Test Profile"
         assert added_profile.is_active is False
         assert added_profile.version == 0
         assert added_profile.is_default is False
         assert added_profile.is_editable is True
+
+    @pytest.mark.asyncio
+    async def test_create_profile_seeds_default_user_settings(self):
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 1
+
+        existing_result = MagicMock()
+        existing_result.scalar_one_or_none.return_value = None
+
+        mock_db.execute.side_effect = [count_result, existing_result]
+        mock_db.flush = AsyncMock()
+        mock_db.refresh = AsyncMock()
+
+        body = ProfileCreate(name="Seeded Profile", description="Settings seed check")
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = MagicMock()
+            await create_profile(body=body, db=mock_db)
+
+        added_objects = [call.args[0] for call in mock_db.add.call_args_list]
+        added_profile = next(obj for obj in added_objects if isinstance(obj, Profile))
+        added_settings = next(
+            obj for obj in added_objects if isinstance(obj, UserSetting)
+        )
+
+        assert added_settings.profile is added_profile
+        assert added_settings.report_currency_code == "USD"
+        assert added_settings.report_currency_symbol == "$"
+        assert added_settings.timezone_preference is None
 
     @pytest.mark.asyncio
     async def test_create_profile_at_capacity_fails(self):
@@ -179,6 +218,7 @@ class TestProfileCRUDAndLifecycle:
         assert target_profile.is_active is True
         assert target_profile.version == 4
         assert mock_db.flush.await_count == 2
+
     @pytest.mark.asyncio
     async def test_activate_profile_with_stale_active_id_fails(self):
         """Profile activation fails when expected active profile ID is stale."""
@@ -230,7 +270,11 @@ class TestProfileCRUDAndLifecycle:
         mock_db.execute.side_effect = [active_result, target_result]
         mock_db.flush = AsyncMock()
         from sqlalchemy.exc import IntegrityError
-        mock_db.flush.side_effect = [None, IntegrityError("stmt", "params", Exception("dup"))]
+
+        mock_db.flush.side_effect = [
+            None,
+            IntegrityError("stmt", "params", Exception("dup")),
+        ]
 
         body = ProfileActivateRequest(expected_active_profile_id=1)
         with patch(
@@ -243,6 +287,7 @@ class TestProfileCRUDAndLifecycle:
 
         assert exc_info.value.status_code == 409
         assert "conflict" in exc_info.value.detail.lower()
+
     @pytest.mark.asyncio
     async def test_delete_active_profile_fails(self):
         """Active profile cannot be deleted."""
@@ -307,6 +352,7 @@ class TestProfileCRUDAndLifecycle:
 
         assert exc_info.value.status_code == 400
         assert "immutable" in exc_info.value.detail
+
     @pytest.mark.asyncio
     async def test_delete_inactive_profile_soft_deletes(self):
         """Inactive profile is soft-deleted."""
@@ -328,4 +374,3 @@ class TestProfileCRUDAndLifecycle:
 
         assert profile.deleted_at is not None
         assert mock_db.flush.called
-

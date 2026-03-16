@@ -14,10 +14,10 @@ from app.models.models import (
     HeaderBlocklistRule,
     ModelConfig,
     PricingTemplate,
-    Profile,
     Provider,
     UserSetting,
 )
+from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
 from app.services.proxy_service import normalize_base_url
 
@@ -30,12 +30,6 @@ class _IdAllocator:
         allocated_id = self.next_id
         self.next_id += 1
         return allocated_id
-
-
-async def _lock_profile_row(db: AsyncSession, *, profile_id: int) -> None:
-    await db.execute(
-        select(Profile.id).where(Profile.id == profile_id).with_for_update()
-    )
 
 
 async def _lock_import_target_tables(db: AsyncSession) -> None:
@@ -89,7 +83,7 @@ def _sorted_import_connections(connections):
 async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
 ) -> ConfigImportResponse:
-    await _lock_profile_row(db, profile_id=profile_id)
+    await lock_profile_row(db, profile_id=profile_id)
     await _lock_import_target_tables(db)
     await db.execute(
         delete(EndpointFxRateSetting).where(
