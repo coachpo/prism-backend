@@ -7,9 +7,6 @@ from app.models.models import AuditLog, LoadbalanceEvent
 
 logger = logging.getLogger(__name__)
 
-BODY_MAX_BYTES = 64 * 1024
-TRUNCATION_MARKER = "[TRUNCATED]"
-
 _SENSITIVE_HEADER_PATTERN = re.compile(r"(key|secret|token|auth)", re.IGNORECASE)
 
 _EXACT_REDACT_HEADERS = frozenset(
@@ -34,17 +31,6 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
         else:
             redacted[name] = value
     return redacted
-
-
-def _truncate_body(body: str | None) -> str | None:
-    if body is None:
-        return None
-    if len(body.encode("utf-8", errors="replace")) > BODY_MAX_BYTES:
-        truncated = body.encode("utf-8", errors="replace")[:BODY_MAX_BYTES].decode(
-            "utf-8", errors="replace"
-        )
-        return truncated + TRUNCATION_MARKER
-    return body
 
 
 async def record_audit_log(
@@ -80,13 +66,9 @@ async def record_audit_log(
         resp_body_str = None
         if capture_bodies:
             if request_body:
-                req_body_str = _truncate_body(
-                    request_body.decode("utf-8", errors="replace")
-                )
+                req_body_str = request_body.decode("utf-8", errors="replace")
             if response_body:
-                resp_body_str = _truncate_body(
-                    response_body.decode("utf-8", errors="replace")
-                )
+                resp_body_str = response_body.decode("utf-8", errors="replace")
 
         entry = AuditLog(
             request_log_id=request_log_id,
