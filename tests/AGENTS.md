@@ -9,7 +9,7 @@ tests/
 ├── conftest.py                        # PostgreSQL testcontainer + Alembic bootstrap
 ├── test_smoke_defect_regressions.py   # Top-level DEF aggregator
 ├── test_multi_profile_isolation.py    # Top-level isolation aggregator
-├── test_realtime_broadcast.py         # WebSocket channels, payloads, dirty fallbacks
+├── test_realtime_broadcast.py         # WebSocket channels and `dashboard.update` payload coverage
 ├── services/                          # Focused service coverage such as WebAuthn
 ├── smoke_defect_regressions/          # Proxy, config, costing, startup, standalone DEF domains
 └── multi_profile_isolation/           # Lifecycle, scoping, runtime, observability, import/export domains

@@ -1,7 +1,7 @@
 # BACKEND SMOKE DEFECT REGRESSIONS KNOWLEDGE BASE
 
 ## OVERVIEW
-`smoke_defect_regressions/` is the regression corpus for named defects and behavior guards. It groups cases by runtime concern, then re-exports them through `tests/test_smoke_defect_regressions.py`; the current DEF range now extends through startup/auth/loadbalance work in the DEF067-075 band.
+`smoke_defect_regressions/` is the regression corpus for named defects and behavior guards. It groups cases by runtime concern, then re-exports them through `tests/test_smoke_defect_regressions.py`; the current DEF range reaches DEF078, including the observability-unlogged migration checks.
 
 ## STRUCTURE
 ```
@@ -31,6 +31,7 @@ smoke_defect_regressions/
 - Logging, endpoint-owner mapping, and connection-default coverage: `test_startup_cases/logging_endpoint_owner_and_connection_defaults_tests.py`
 - Profile scope and model-health eager loading: `test_startup_cases/profile_scope_and_model_health_eagerload_tests.py`
 - Loadbalance migration owner-key repair: `test_startup_cases/loadbalance_migration_profile_pk_repair_tests.py`
+- Observability unlogged/logged migration behavior: `test_startup_cases/observability_unlogged_migration_tests.py`
 - Recovery, streaming, runtime failover: `test_proxy_cases/recovery_runtime_and_streaming_tests.py`
 - Health-check classification, provider-path validation, and 4xx recovery rules: `test_proxy_cases/healthcheck_and_failover_classification_tests.py`
 - Config v2 roundtrip and validation: `test_config_cases/`

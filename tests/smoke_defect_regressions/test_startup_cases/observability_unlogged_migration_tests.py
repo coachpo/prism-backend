@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -25,6 +26,11 @@ def _build_alembic_config(database_url: str) -> Config:
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
+
+
+def _get_current_head_revision(database_url: str) -> str:
+    script = ScriptDirectory.from_config(_build_alembic_config(database_url))
+    return str(script.get_current_head())
 
 
 def _upgrade_database(database_url: str, revision: str) -> None:
@@ -101,6 +107,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             "audit_logs",
             "loadbalance_events",
         )
+        current_head_revision = _get_current_head_revision(migration_database_url)
 
         await _create_database(migration_database_url)
         try:
@@ -137,7 +144,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             await asyncio.to_thread(_upgrade_database, migration_database_url, "head")
 
             assert await _fetch_current_revision(migration_database_url) == [
-                "0011_observability_unlogged"
+                current_head_revision
             ]
             for table_name in observability_tables:
                 assert (
