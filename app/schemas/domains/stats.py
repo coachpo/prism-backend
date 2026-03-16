@@ -351,25 +351,19 @@ class LoadbalanceEventDeleteResponse(BaseModel):
     deleted_count: int
 
 
-class LoadbalanceStatsResponse(BaseModel):
-    total_events: int
-    events_by_type: dict[str, int]
-    most_failed_connections: list[dict]
-
-
 # --- Throughput Schemas ---
 
 
 class ThroughputBucket(BaseModel):
     timestamp: datetime
     request_count: int
-    tps: float
+    rpm: float
 
 
 class ThroughputStatsResponse(BaseModel):
-    average_tps: float
-    peak_tps: float
-    current_tps: float
+    average_rpm: float
+    peak_rpm: float
+    current_rpm: float
     total_requests: int
     time_window_seconds: float
     buckets: list[ThroughputBucket]

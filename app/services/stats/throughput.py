@@ -17,18 +17,6 @@ async def get_throughput_stats(
     endpoint_id: int | None = None,
     connection_id: int | None = None,
 ) -> dict:
-    """
-    Compute TPS/QPS metrics with time-bucketed aggregation.
-
-    Returns:
-        dict with keys:
-            - average_tps: float
-            - peak_tps: float
-            - current_tps: float
-            - total_requests: int
-            - time_window_seconds: float
-            - buckets: list[dict] with timestamp, request_count, tps
-    """
     # Build filters
     filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
@@ -61,57 +49,51 @@ async def get_throughput_stats(
     result = await db.execute(bucket_query)
     rows = result.all()
 
-    # Compute metrics
+    if from_time is not None and to_time is not None:
+        time_window_seconds = max((to_time - from_time).total_seconds(), 0.0)
+    elif rows:
+        first_bucket = rows[0].bucket_time
+        last_bucket = rows[-1].bucket_time
+        time_window_seconds = (last_bucket - first_bucket).total_seconds() + 60
+    else:
+        time_window_seconds = 0.0
+
     if not rows:
         return {
-            "average_tps": 0.0,
-            "peak_tps": 0.0,
-            "current_tps": 0.0,
+            "average_rpm": 0.0,
+            "peak_rpm": 0.0,
+            "current_rpm": 0.0,
             "total_requests": 0,
-            "time_window_seconds": 0.0,
+            "time_window_seconds": round(time_window_seconds, 1),
             "buckets": [],
         }
 
     total_requests = sum(row.request_count for row in rows)
 
-    # Calculate time window in seconds
-    if from_time and to_time:
-        time_window_seconds = (to_time - from_time).total_seconds()
-    elif rows:
-        # Use actual data range
-        first_bucket = rows[0].bucket_time
-        last_bucket = rows[-1].bucket_time
-        time_window_seconds = (
-            last_bucket - first_bucket
-        ).total_seconds() + 60  # +60 for last bucket
-    else:
-        time_window_seconds = 0.0
-
-    # Compute TPS per bucket (requests per 60 seconds)
     buckets = []
-    tps_values = []
+    rpm_values = []
     for row in rows:
-        tps = row.request_count / 60.0  # 1-minute bucket = 60 seconds
-        tps_values.append(tps)
+        rpm = float(row.request_count)
+        rpm_values.append(rpm)
         buckets.append(
             {
                 "timestamp": row.bucket_time.isoformat(),
                 "request_count": row.request_count,
-                "tps": round(tps, 3),
+                "rpm": round(rpm, 3),
             }
         )
 
-    # Aggregate metrics
-    average_tps = (
-        total_requests / time_window_seconds if time_window_seconds > 0 else 0.0
+    time_window_minutes = time_window_seconds / 60.0 if time_window_seconds > 0 else 0.0
+    average_rpm = (
+        total_requests / time_window_minutes if time_window_minutes > 0 else 0.0
     )
-    peak_tps = max(tps_values) if tps_values else 0.0
-    current_tps = tps_values[-1] if tps_values else 0.0
+    peak_rpm = max(rpm_values) if rpm_values else 0.0
+    current_rpm = rpm_values[-1] if rpm_values else 0.0
 
     return {
-        "average_tps": round(average_tps, 3),
-        "peak_tps": round(peak_tps, 3),
-        "current_tps": round(current_tps, 3),
+        "average_rpm": round(average_rpm, 3),
+        "peak_rpm": round(peak_rpm, 3),
+        "current_rpm": round(current_rpm, 3),
         "total_requests": total_requests,
         "time_window_seconds": round(time_window_seconds, 1),
         "buckets": buckets,
