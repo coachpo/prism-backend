@@ -1,13 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import delete
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.time import ensure_utc_datetime, utc_now
+from app.core.time import ensure_utc_datetime
 from app.dependencies import get_db, get_effective_profile_id
-from app.models.models import RequestLog
 from app.schemas.schemas import (
     ConnectionMetricsBatchItem,
     ConnectionMetricsBatchRequest,
@@ -23,6 +21,7 @@ from app.schemas.schemas import (
     SpendingReportResponse,
     ThroughputStatsResponse,
 )
+from app.services.background_cleanup import delete_request_logs_in_background
 from app.services.stats_service import (
     get_connection_metrics_batch,
     get_request_logs,
@@ -38,6 +37,18 @@ router = APIRouter(prefix="/api/stats", tags=["statistics"])
 
 def _normalize_datetime_filter(value: datetime | None) -> datetime | None:
     return ensure_utc_datetime(value)
+
+
+def _coerce_float(value: object) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _coerce_int(value: object) -> int | None:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return None
 
 
 @router.get("/requests", response_model=RequestLogListResponse)
@@ -132,10 +143,10 @@ async def model_metrics_batch(
         metric_values = items.get(model_id, {})
         return ModelMetricsBatchItem(
             model_id=model_id,
-            success_rate=float(metric_values.get("success_rate", 0.0)),
-            request_count_24h=int(metric_values.get("request_count_24h", 0)),
-            p95_latency_ms=int(metric_values.get("p95_latency_ms", 0)),
-            spend_30d_micros=int(metric_values.get("spend_30d_micros", 0)),
+            success_rate=_coerce_float(metric_values.get("success_rate")) or 0.0,
+            request_count_24h=_coerce_int(metric_values.get("request_count_24h")) or 0,
+            p95_latency_ms=_coerce_int(metric_values.get("p95_latency_ms")) or 0,
+            spend_30d_micros=_coerce_int(metric_values.get("spend_30d_micros")) or 0,
         )
 
     return ModelMetricsBatchResponse(
@@ -162,23 +173,19 @@ async def connection_metrics_batch(
     def build_connection_metrics_item(connection_id: int) -> ConnectionMetricsBatchItem:
         metric_values = items.get(connection_id, {})
         success_rate_24h = metric_values.get("success_rate_24h")
+        request_count_24h = metric_values.get("request_count_24h")
         p95_latency_ms = metric_values.get("p95_latency_ms")
         five_xx_rate = metric_values.get("five_xx_rate")
+        heuristic_failover_events = metric_values.get("heuristic_failover_events")
         last_failover_like_at = metric_values.get("last_failover_like_at")
 
         return ConnectionMetricsBatchItem(
             connection_id=connection_id,
-            success_rate_24h=(
-                float(success_rate_24h) if success_rate_24h is not None else None
-            ),
-            request_count_24h=int(metric_values.get("request_count_24h", 0)),
-            p95_latency_ms=(
-                int(p95_latency_ms) if p95_latency_ms is not None else None
-            ),
-            five_xx_rate=float(five_xx_rate) if five_xx_rate is not None else None,
-            heuristic_failover_events=int(
-                metric_values.get("heuristic_failover_events", 0)
-            ),
+            success_rate_24h=_coerce_float(success_rate_24h),
+            request_count_24h=_coerce_int(request_count_24h) or 0,
+            p95_latency_ms=_coerce_int(p95_latency_ms),
+            five_xx_rate=_coerce_float(five_xx_rate),
+            heuristic_failover_events=(_coerce_int(heuristic_failover_events) or 0),
             last_failover_like_at=(
                 last_failover_like_at
                 if isinstance(last_failover_like_at, datetime)
@@ -255,7 +262,7 @@ async def spending_report(
 
 @router.delete("/requests", response_model=BatchDeleteResponse)
 async def delete_request_logs(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    background_tasks: BackgroundTasks,
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
     older_than_days: int | None = Query(default=None, ge=1),
     delete_all: bool = Query(default=False),
@@ -271,25 +278,13 @@ async def delete_request_logs(
             detail="Provide either 'older_than_days' (integer >= 1) or 'delete_all=true'",
         )
 
-    if delete_all:
-        stmt = delete(RequestLog).where(RequestLog.profile_id == profile_id)
-    else:
-        if older_than_days is None:
-            raise HTTPException(
-                status_code=400,
-                detail="older_than_days is required when delete_all is false",
-            )
-        days = int(older_than_days)
-        cutoff = utc_now() - timedelta(days=days)
-        stmt = delete(RequestLog).where(
-            RequestLog.profile_id == profile_id,
-            RequestLog.created_at < cutoff,
-        )
-
-    result = await db.execute(stmt)
-    await db.flush()
-    rowcount = getattr(result, "rowcount", 0)
-    return BatchDeleteResponse(deleted_count=int(rowcount or 0))
+    background_tasks.add_task(
+        delete_request_logs_in_background,
+        profile_id=profile_id,
+        older_than_days=older_than_days,
+        delete_all=delete_all,
+    )
+    return BatchDeleteResponse(accepted=True)
 
 
 @router.get("/throughput", response_model=ThroughputStatsResponse)

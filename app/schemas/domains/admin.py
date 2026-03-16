@@ -157,14 +157,14 @@ class AuditLogListResponse(BaseModel):
 
 
 class AuditLogDeleteResponse(BaseModel):
-    deleted_count: int
+    accepted: bool
 
 
 # --- Batch Delete Schemas ---
 
 
 class BatchDeleteResponse(BaseModel):
-    deleted_count: int
+    accepted: bool
 
 
 # --- Header Blocklist Rule Schemas ---

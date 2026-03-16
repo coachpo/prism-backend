@@ -3,7 +3,7 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 
 class TestDEF004_FrontendDeleteErrorHandling:
@@ -367,45 +367,65 @@ class TestBatchDeleteValidation:
         """Stats delete accepts any integer >= 1 for older_than_days."""
         from app.routers.stats import delete_request_logs
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 5
+        background_tasks = BackgroundTasks()
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.flush = AsyncMock()
+        with patch(
+            "app.routers.stats.delete_request_logs_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_request_logs:
+            response = await delete_request_logs(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=45,
+                delete_all=False,
+            )
+            await background_tasks()
 
-        response = await delete_request_logs(
-            db=mock_db, profile_id=1, older_than_days=45, delete_all=False
+        assert response.accepted is True
+        mock_delete_request_logs.assert_awaited_once_with(
+            profile_id=1,
+            older_than_days=45,
+            delete_all=False,
         )
-        assert response.deleted_count == 5
-        mock_db.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stats_delete_all(self):
         """Stats delete_all=true deletes all request logs."""
         from app.routers.stats import delete_request_logs
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 100
+        background_tasks = BackgroundTasks()
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.flush = AsyncMock()
+        with patch(
+            "app.routers.stats.delete_request_logs_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_request_logs:
+            response = await delete_request_logs(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=None,
+                delete_all=True,
+            )
+            await background_tasks()
 
-        response = await delete_request_logs(
-            db=mock_db, profile_id=1, older_than_days=None, delete_all=True
+        assert response.accepted is True
+        mock_delete_request_logs.assert_awaited_once_with(
+            profile_id=1,
+            older_than_days=None,
+            delete_all=True,
         )
-        assert response.deleted_count == 100
 
     @pytest.mark.asyncio
     async def test_stats_delete_rejects_both_modes(self):
         """Stats delete rejects older_than_days + delete_all=true."""
         from app.routers.stats import delete_request_logs
 
-        mock_db = AsyncMock()
+        background_tasks = BackgroundTasks()
         with pytest.raises(HTTPException) as exc_info:
             await delete_request_logs(
-                db=mock_db, profile_id=1, older_than_days=7, delete_all=True
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=7,
+                delete_all=True,
             )
         assert exc_info.value.status_code == 400
 
@@ -414,10 +434,13 @@ class TestBatchDeleteValidation:
         """Stats delete rejects when neither mode is provided."""
         from app.routers.stats import delete_request_logs
 
-        mock_db = AsyncMock()
+        background_tasks = BackgroundTasks()
         with pytest.raises(HTTPException) as exc_info:
             await delete_request_logs(
-                db=mock_db, profile_id=1, older_than_days=None, delete_all=False
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=None,
+                delete_all=False,
             )
         assert exc_info.value.status_code == 400
 
@@ -426,34 +449,56 @@ class TestBatchDeleteValidation:
         """Audit delete accepts any integer >= 1 for older_than_days."""
         from app.routers.audit import delete_audit_logs
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 10
+        background_tasks = BackgroundTasks()
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.flush = AsyncMock()
+        with patch(
+            "app.routers.audit.delete_audit_logs_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_audit_logs:
+            response = await delete_audit_logs(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=None,
+                older_than_days=45,
+                delete_all=False,
+            )
+            await background_tasks()
 
-        response = await delete_audit_logs(
-            db=mock_db, profile_id=1, before=None, older_than_days=45, delete_all=False
+        assert response.accepted is True
+        mock_delete_audit_logs.assert_awaited_once_with(
+            profile_id=1,
+            before=None,
+            older_than_days=45,
+            delete_all=False,
         )
-        assert response.deleted_count == 10
 
     @pytest.mark.asyncio
     async def test_audit_delete_all(self):
         """Audit delete_all=true deletes all audit logs."""
         from app.routers.audit import delete_audit_logs
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 50
+        background_tasks = BackgroundTasks()
 
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.flush = AsyncMock()
+        with patch(
+            "app.routers.audit.delete_audit_logs_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_audit_logs:
+            response = await delete_audit_logs(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=None,
+                older_than_days=None,
+                delete_all=True,
+            )
+            await background_tasks()
 
-        response = await delete_audit_logs(
-            db=mock_db, profile_id=1, before=None, older_than_days=None, delete_all=True
+        assert response.accepted is True
+        mock_delete_audit_logs.assert_awaited_once_with(
+            profile_id=1,
+            before=None,
+            older_than_days=None,
+            delete_all=True,
         )
-        assert response.deleted_count == 50
 
     @pytest.mark.asyncio
     async def test_audit_delete_before_still_works(self):
@@ -461,22 +506,29 @@ class TestBatchDeleteValidation:
         from datetime import datetime
         from app.routers.audit import delete_audit_logs
 
-        mock_result = MagicMock()
-        mock_result.rowcount = 3
-
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=mock_result)
-        mock_db.flush = AsyncMock()
-
         cutoff = datetime(2025, 1, 1)
-        response = await delete_audit_logs(
-            db=mock_db,
-            profile_id=1,
-            before=cutoff,
-            older_than_days=None,
-            delete_all=False,
+        background_tasks = BackgroundTasks()
+
+        with patch(
+            "app.routers.audit.delete_audit_logs_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_audit_logs:
+            response = await delete_audit_logs(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=cutoff,
+                older_than_days=None,
+                delete_all=False,
+            )
+            await background_tasks()
+
+        assert response.accepted is True
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_delete_audit_logs.await_args_list[0],
         )
-        assert response.deleted_count == 3
+        normalized_before = cast(datetime, call_kwargs["before"])
+        assert normalized_before.tzinfo is not None
 
     @pytest.mark.asyncio
     async def test_audit_delete_rejects_multiple_modes(self):
@@ -484,12 +536,12 @@ class TestBatchDeleteValidation:
         from datetime import datetime
         from app.routers.audit import delete_audit_logs
 
-        mock_db = AsyncMock()
+        background_tasks = BackgroundTasks()
 
         # before + older_than_days
         with pytest.raises(HTTPException) as exc_info:
             await delete_audit_logs(
-                db=mock_db,
+                background_tasks=background_tasks,
                 profile_id=1,
                 before=datetime(2025, 1, 1),
                 older_than_days=7,
@@ -500,7 +552,7 @@ class TestBatchDeleteValidation:
         # older_than_days + delete_all
         with pytest.raises(HTTPException) as exc_info:
             await delete_audit_logs(
-                db=mock_db,
+                background_tasks=background_tasks,
                 profile_id=1,
                 before=None,
                 older_than_days=7,
@@ -511,7 +563,7 @@ class TestBatchDeleteValidation:
         # all three
         with pytest.raises(HTTPException) as exc_info:
             await delete_audit_logs(
-                db=mock_db,
+                background_tasks=background_tasks,
                 profile_id=1,
                 before=datetime(2025, 1, 1),
                 older_than_days=7,
@@ -524,10 +576,101 @@ class TestBatchDeleteValidation:
         """Audit delete rejects when no mode is provided."""
         from app.routers.audit import delete_audit_logs
 
-        mock_db = AsyncMock()
+        background_tasks = BackgroundTasks()
         with pytest.raises(HTTPException) as exc_info:
             await delete_audit_logs(
-                db=mock_db,
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=None,
+                older_than_days=None,
+                delete_all=False,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_loadbalance_delete_custom_days(self):
+        from app.routers.loadbalance import delete_loadbalance_events
+
+        background_tasks = BackgroundTasks()
+
+        with patch(
+            "app.routers.loadbalance.delete_loadbalance_events_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_loadbalance_events:
+            response = await delete_loadbalance_events(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=None,
+                older_than_days=45,
+                delete_all=False,
+            )
+            await background_tasks()
+
+        assert response.accepted is True
+        mock_delete_loadbalance_events.assert_awaited_once_with(
+            profile_id=1,
+            before=None,
+            older_than_days=45,
+            delete_all=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_loadbalance_delete_before_still_works(self):
+        from datetime import datetime
+
+        from app.routers.loadbalance import delete_loadbalance_events
+
+        cutoff = datetime(2025, 1, 1)
+        background_tasks = BackgroundTasks()
+
+        with patch(
+            "app.routers.loadbalance.delete_loadbalance_events_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_loadbalance_events:
+            response = await delete_loadbalance_events(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=cutoff,
+                older_than_days=None,
+                delete_all=False,
+            )
+            await background_tasks()
+
+        assert response.accepted is True
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_delete_loadbalance_events.await_args_list[0],
+        )
+        normalized_before = cast(datetime, call_kwargs["before"])
+        assert normalized_before.tzinfo is not None
+
+    @pytest.mark.asyncio
+    async def test_loadbalance_delete_rejects_multiple_modes(self):
+        from datetime import datetime
+
+        from app.routers.loadbalance import delete_loadbalance_events
+
+        background_tasks = BackgroundTasks()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_loadbalance_events(
+                background_tasks=background_tasks,
+                profile_id=1,
+                before=datetime(2025, 1, 1),
+                older_than_days=7,
+                delete_all=False,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_loadbalance_delete_rejects_no_mode(self):
+        from app.routers.loadbalance import delete_loadbalance_events
+
+        background_tasks = BackgroundTasks()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_loadbalance_events(
+                background_tasks=background_tasks,
                 profile_id=1,
                 before=None,
                 older_than_days=None,

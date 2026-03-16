@@ -348,7 +348,7 @@ class LoadbalanceEventListResponse(BaseModel):
 
 
 class LoadbalanceEventDeleteResponse(BaseModel):
-    deleted_count: int
+    accepted: bool
 
 
 # --- Throughput Schemas ---

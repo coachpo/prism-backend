@@ -1,11 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select, func, delete, and_, literal
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import select, func, and_, literal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.time import ensure_utc_datetime, utc_now
+from app.core.time import ensure_utc_datetime
 from app.dependencies import get_db, get_effective_profile_id
 from app.models.models import AuditLog
 from app.schemas.schemas import (
@@ -14,6 +14,7 @@ from app.schemas.schemas import (
     AuditLogListResponse,
     AuditLogDeleteResponse,
 )
+from app.services.background_cleanup import delete_audit_logs_in_background
 
 router = APIRouter(prefix="/api/audit", tags=["audit"])
 
@@ -115,7 +116,7 @@ async def get_audit_log(
 
 @router.delete("/logs", response_model=AuditLogDeleteResponse)
 async def delete_audit_logs(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    background_tasks: BackgroundTasks,
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
     before: datetime | None = None,
     older_than_days: int | None = Query(default=None, ge=1),
@@ -130,23 +131,14 @@ async def delete_audit_logs(
             detail="Provide exactly one of 'before', 'older_than_days', or 'delete_all'",
         )
 
-    if delete_all:
-        stmt = delete(AuditLog).where(AuditLog.profile_id == profile_id)
-    elif older_than_days is not None:
-        cutoff = utc_now() - timedelta(days=older_than_days)
-        stmt = delete(AuditLog).where(
-            AuditLog.profile_id == profile_id,
-            AuditLog.created_at < cutoff,
-        )
-    else:
-        if normalized_before is None:
-            raise HTTPException(status_code=400, detail="'before' is required")
-        stmt = delete(AuditLog).where(
-            AuditLog.profile_id == profile_id,
-            AuditLog.created_at < normalized_before,
-        )
+    if before is not None and normalized_before is None:
+        raise HTTPException(status_code=400, detail="'before' is required")
 
-    result = await db.execute(stmt)
-    await db.flush()
-    rowcount = getattr(result, "rowcount", 0)
-    return AuditLogDeleteResponse(deleted_count=int(rowcount or 0))
+    background_tasks.add_task(
+        delete_audit_logs_in_background,
+        profile_id=profile_id,
+        before=normalized_before,
+        older_than_days=older_than_days,
+        delete_all=delete_all,
+    )
+    return AuditLogDeleteResponse(accepted=True)
