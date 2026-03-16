@@ -14,7 +14,7 @@ from app.schemas.schemas import (
     LoadbalanceEventListItem,
     LoadbalanceEventListResponse,
 )
-from app.services.background_cleanup import delete_loadbalance_events_in_background
+from app.services.loadbalance_cleanup import delete_loadbalance_events_in_background
 
 router = APIRouter(prefix="/api/loadbalance", tags=["loadbalance"])
 
