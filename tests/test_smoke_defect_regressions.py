@@ -54,6 +54,7 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys,
     TestDEF076_BatchPageFetchRoutes,
     TestDEF077_ThroughputRPMContract,
+    TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence,
 )
 
 __all__ = [
@@ -101,6 +102,7 @@ __all__ = [
     "TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys",
     "TestDEF076_BatchPageFetchRoutes",
     "TestDEF077_ThroughputRPMContract",
+    "TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence",
     "TestEndpointOwnerRoute",
     "TestFailoverRecoveryFieldValidation",
     "TestHeaderBlocklist",
