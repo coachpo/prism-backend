@@ -6,12 +6,16 @@ FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane 
 ## STRUCTURE
 ```
 backend/
+├── app/bootstrap/AGENTS.md                       # Startup sequence and auth bifurcation
+├── app/core/AGENTS.md                            # Config, DB, crypto, auth, time helpers
 ├── app/AGENTS.md                                # Runtime and management implementation details
 ├── app/models/AGENTS.md                         # ORM models and domain splits
 ├── app/routers/AGENTS.md                        # API surface and domain-shell layout
+├── app/schemas/AGENTS.md                        # Pydantic contract domains and re-export boundary
 ├── app/services/auth/AGENTS.md                  # Session, email, password reset, proxy keys
 ├── app/services/loadbalancer_support/AGENTS.md  # Recovery state, attempts, event helpers
 ├── app/services/proxy_support/AGENTS.md         # Upstream request/header/url/transport helpers
+├── app/services/realtime/AGENTS.md              # WebSocket room manager and broadcasts
 ├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
 ├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
@@ -23,17 +27,21 @@ backend/
 ## CHILD DOCS
 
 - `app/AGENTS.md`: use for router, service, schema, and startup behavior once you are inside implementation code.
+- `app/bootstrap/AGENTS.md`: use for startup sequencing, seed defaults, auth middleware, and public-management auth exceptions.
+- `app/core/AGENTS.md`: use for shared config, SQLAlchemy engine/session setup, crypto, auth helpers, and migrations.
 - `app/models/AGENTS.md`: use for ORM model definitions and domain splits (identity, routing, observability).
 - `app/routers/AGENTS.md`: use when working in the API surface layer or deciding where new handlers belong.
+- `app/schemas/AGENTS.md`: use for Pydantic contract ownership, domain splits, and schema export conventions.
 - `app/services/auth/AGENTS.md`: use for auth/session/OTP/proxy-key internals behind `auth_service.py`.
 - `app/services/loadbalancer_support/AGENTS.md`: use for recovery-state mutation, attempt planning, and loadbalance event helpers.
 - `app/services/proxy_support/AGENTS.md`: use for upstream URL/header/body/compression/transport helpers behind `proxy_service.py`.
+- `app/services/realtime/AGENTS.md`: use for WebSocket room state, profile/channel subscriptions, and broadcast helpers.
 - `app/services/webauthn/AGENTS.md`: use for passkey registration, authentication, and credential management behind `webauthn_service.py`.
 - `tests/AGENTS.md`: use for defect IDs, aggregators, startup/auth regressions, realtime coverage, and container-backed test setup.
 
 ## RUNTIME SEMANTICS
 
-- Profile-scoped management endpoints use effective profile scope; global management endpoints include profile lifecycle, provider audit settings, `/api/auth/*`, and the auth/email/proxy-key settings routes.
+- Profile-scoped management endpoints use effective profile scope; global management endpoints include profile lifecycle, provider audit settings, `/api/auth/*`, `/api/realtime/*`, and the auth/email/proxy-key settings routes.
 - When auth is enabled, management uses session cookies while runtime proxy traffic requires a proxy API key header.
 - Providers are global seed rows: `openai`, `anthropic`, `gemini`.
 - Failover recovery memory is in-process and keyed by `(profile_id, connection_id)`.

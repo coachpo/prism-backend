@@ -35,7 +35,7 @@ stats/
 - Treat null-vs-zero token and cost fields deliberately; missing usage should not silently become priced usage.
 - Keep provider token parsing isolated to `usage_extractors.py`.
 - Keep throughput aggregation in `throughput.py` rather than layering it into `summary.py` or route handlers.
-- `logging.py` owns request-log side effects, including dashboard payload broadcasts and dirty-signal fallbacks; callers should not duplicate those websocket emissions.
+- `logging.py` owns request-log side effects, including `dashboard.update` broadcasts with request-log, summary, provider, spending, throughput, and routing snapshot payloads; callers should not duplicate those websocket emissions.
 
 ## ANTI-PATTERNS
 
