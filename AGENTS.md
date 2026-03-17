@@ -1,7 +1,7 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, PostgreSQL-backed, migration-on-startup, and owns operator auth, password reset, proxy API keys, passkeys, realtime broadcasts, loadbalance events, pricing templates, and profile-scoped admin flows in addition to routing and observability.
+FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, PostgreSQL-backed, migration-on-startup, and owns operator auth, password reset, proxy API keys, passkeys, realtime broadcasts, loadbalance events, pricing templates, profile-scoped admin flows, and a lifespan-managed background task worker in addition to routing and observability.
 
 ## STRUCTURE
 ```
@@ -12,6 +12,7 @@ backend/
 ├── app/models/AGENTS.md                         # ORM models and domain splits
 ├── app/routers/AGENTS.md                        # API surface and domain-shell layout
 ├── app/schemas/AGENTS.md                        # Pydantic contract domains and re-export boundary
+├── app/services/AGENTS.md                       # Service-root entrypoints and shared workers
 ├── app/services/auth/AGENTS.md                  # Session, email, password reset, proxy keys
 ├── app/services/loadbalancer_support/AGENTS.md  # Recovery state, attempts, event helpers
 ├── app/services/proxy_support/AGENTS.md         # Upstream request/header/url/transport helpers
@@ -27,6 +28,7 @@ backend/
 ## CHILD DOCS
 
 - `app/AGENTS.md`: use for router, service, schema, and startup behavior once you are inside implementation code.
+- `app/services/AGENTS.md`: use for service-root entrypoints such as `auth_service.py`, `proxy_service.py`, `stats_service.py`, and `background_tasks.py`.
 - `app/bootstrap/AGENTS.md`: use for startup sequencing, seed defaults, auth middleware, and public-management auth exceptions.
 - `app/core/AGENTS.md`: use for shared config, SQLAlchemy engine/session setup, crypto, auth helpers, and migrations.
 - `app/models/AGENTS.md`: use for ORM model definitions and domain splits (identity, routing, observability).
@@ -46,11 +48,12 @@ backend/
 - Providers are global seed rows: `openai`, `anthropic`, `gemini`.
 - Failover recovery memory is in-process and keyed by `(profile_id, connection_id)`.
 - Loadbalance events are also persisted and queryable through `/api/loadbalance/*`.
+- A shared `background_task_manager` is started in FastAPI lifespan and attached to `app.state`.
 - Profile deletion is soft-delete for inactive profiles only; activation is CAS-guarded.
 
 ## WHERE TO LOOK
 
-- Startup + shared clients: `app/main.py`
+- Startup + shared clients/workers: `app/main.py`, `app/services/background_tasks.py`
 - Startup sequence + auth bifurcation: `app/bootstrap/startup.py`, `app/bootstrap/auth_middleware.py`
 - Scope resolution: `app/dependencies.py`
 - Operator auth, verified email, password reset, proxy API keys, passkeys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/services/webauthn_service.py`, `app/services/webauthn/`, `app/core/auth.py`
@@ -59,6 +62,7 @@ backend/
 - Health checks + owner lookups + runtime blocklist merge: `app/routers/connections.py`, `app/routers/connections_domains/`
 - Stats, costing, audit, and loadbalance events: `app/routers/stats.py`, `app/routers/audit.py`, `app/routers/loadbalance.py`, `app/routers/pricing_templates.py`, `app/services/stats_service.py`, `app/services/costing_service.py`, `app/services/audit_service.py`
 - Realtime websocket transport: `app/routers/realtime.py`, `app/services/realtime/connection_manager.py`
+- Service-root public boundaries and cleanup helpers: `app/services/AGENTS.md`, `app/services/background_cleanup.py`, `app/services/loadbalance_cleanup.py`
 
 ## COMMANDS
 
@@ -77,6 +81,7 @@ docker compose up -d postgres
 - Keep SMTP, verified-email, password-reset, refresh-token, and proxy-key logic centralized behind `app/services/auth_service.py` (the re-export boundary over `app/services/auth/`) and `app/core/auth.py`.
 - Keep passkey registration/authentication/credential lifecycle behind `app/services/webauthn_service.py` and `app/services/webauthn/` rather than folding it into the auth package.
 - Keep realtime payload emission inside stats/audit/loadbalance services and the websocket connection manager rather than in route handlers.
+- Keep shared worker lifecycle in `app/main.py` plus `app/services/background_tasks.py`; feature code should consume app-owned infrastructure rather than spawning orphan workers.
 - Keep settings, costing, and profile invariants as startup-enforced behavior, not optional manual steps.
 - Preserve provider-specific health-check behavior in `app/routers/connections.py`; OpenAI has fallback probes by design.
 
@@ -93,5 +98,5 @@ docker compose up -d postgres
 - The suite runs against PostgreSQL testcontainers via `tests/conftest.py`; do not assume SQLite semantics.
 - `tests/test_smoke_defect_regressions.py` and `tests/test_multi_profile_isolation.py` are the top-level aggregators.
 - Auth, password-reset, email-delivery, and proxy-key regressions cluster under `tests/smoke_defect_regressions/test_startup_cases/`, especially `tests/smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`.
-- Realtime broadcasting is covered by `tests/test_realtime_broadcast.py`; WebAuthn service coverage lives in `tests/services/test_webauthn_service.py`.
+- Realtime broadcasting is covered by `tests/test_realtime_broadcast.py`; service-level coverage includes `tests/services/test_webauthn_service.py` and `tests/services/test_background_tasks.py`.
 - For end-to-end behavior checks beyond pytest, use `../docs/SMOKE_TEST_PLAN.md` from the repo root.

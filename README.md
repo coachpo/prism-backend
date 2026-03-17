@@ -20,7 +20,7 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 ```
 backend/
 ├── app/
-│   ├── main.py                      # Thin FastAPI assembly + router wiring
+│   ├── main.py                      # Lifespan startup, auth middleware, shared httpx client, background task worker
 │   ├── bootstrap/                   # Startup sequence and auth middleware helpers
 │   ├── core/database.py             # SQLAlchemy async engine + session factory
 │   ├── models/
@@ -49,12 +49,23 @@ backend/
 │   │   └── proxy.py                 # Thin /v1/* and /v1beta/* proxy router
 │   └── services/
 │       ├── auth/                    # Split auth, email, session, and proxy-key services
+│       ├── loadbalancer_support/    # Recovery state, attempts, event helpers
+│       ├── proxy_support/           # URL/header/body/transport helpers
 │       ├── realtime/                # WebSocket connection manager helpers
 │       ├── stats/                   # Telemetry query and logging helpers
-│       ├── user_settings.py         # Shared profile user-settings access helpers
+│       ├── webauthn/                # Passkey registration/authentication internals
+│       ├── auth_service.py          # Auth public re-export boundary
+│       ├── background_tasks.py      # Lifespan-managed async worker queue
 │       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
-│       └── audit_service.py         # Audit log writing with header redaction
+│       ├── stats_service.py         # Stats public re-export boundary
+│       ├── audit_service.py         # Audit log writing with header redaction
+│       ├── costing_service.py       # Token costing and FX helpers
+│       ├── webauthn_service.py      # Passkey public re-export boundary
+│       ├── user_settings.py         # Shared profile user-settings access helpers
+│       ├── background_cleanup.py    # Request/audit retention cleanup helpers
+│       ├── loadbalance_cleanup.py   # Loadbalance-event retention cleanup helpers
+│       └── profile_invariants.py    # Active/default profile enforcement
 ├── alembic/                         # Alembic migration env + revisions
 ├── alembic.ini                      # Alembic configuration
 ├── docker-compose.yml               # Local PostgreSQL provisioning

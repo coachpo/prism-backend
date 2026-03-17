@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import bootstrap
 from app.core.config import get_settings
 from app.core.database import get_engine
+from app.services.background_tasks import background_task_manager
 from app.routers import (
     audit,
     auth,
@@ -41,7 +42,10 @@ settings = get_settings()
 async def lifespan(app: FastAPI):
     await bootstrap.run_startup_sequence()
     app.state.http_client = bootstrap.build_http_client()
+    app.state.background_task_manager = background_task_manager
+    await background_task_manager.start()
     yield
+    await background_task_manager.shutdown()
     await app.state.http_client.aclose()
     await get_engine().dispose()
 

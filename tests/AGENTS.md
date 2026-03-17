@@ -1,7 +1,7 @@
 # BACKEND TEST SUITE KNOWLEDGE BASE
 
 ## OVERVIEW
-`tests/` is a PostgreSQL-backed regression suite. It is organized around defect regressions and profile-isolation guarantees, then supplemented by focused coverage for realtime broadcasting and WebAuthn service behavior.
+`tests/` is a PostgreSQL-backed regression suite. It is organized around defect regressions and profile-isolation guarantees, then supplemented by focused coverage for realtime broadcasting and service-level behavior such as WebAuthn and the shared background task manager.
 
 ## STRUCTURE
 ```
@@ -10,7 +10,7 @@ tests/
 ├── test_smoke_defect_regressions.py   # Top-level DEF aggregator
 ├── test_multi_profile_isolation.py    # Top-level isolation aggregator
 ├── test_realtime_broadcast.py         # WebSocket channels and `dashboard.update` payload coverage
-├── services/                          # Focused service coverage such as WebAuthn
+├── services/                          # Focused service coverage such as WebAuthn and background task manager
 ├── smoke_defect_regressions/          # Proxy, config, costing, startup, standalone DEF domains
 └── multi_profile_isolation/           # Lifecycle, scoping, runtime, observability, import/export domains
 ```
@@ -22,6 +22,7 @@ tests/
 - Profile-isolation exports: `test_multi_profile_isolation.py`
 - Realtime broadcasting and channel fanout: `test_realtime_broadcast.py`
 - WebAuthn service coverage: `services/test_webauthn_service.py`
+- Background worker lifecycle and retry semantics: `services/test_background_tasks.py`
 - Proxy and failover regressions: `smoke_defect_regressions/`, `smoke_defect_regressions/test_proxy_cases/`
 - Config and costing regressions: `smoke_defect_regressions/test_config_cases/`, `smoke_defect_regressions/test_costing_cases/`
 - Auth, password reset, email delivery, and proxy-key regressions: `smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`
@@ -50,6 +51,7 @@ tests/
 - Multi-profile tests group by concern (`lifecycle`, `scoping`, `runtime`, `observability`, `config import/export`) and re-export through `test_multi_profile_isolation.py`.
 - Startup smoke cases now use explicit concern file names for auth, CORS, stats/batch delete, model health, loadbalance migration, and proxy-key generation.
 - Realtime and service-focused coverage stays in top-level files or `services/` when it does not fit the DEF or isolation hierarchies.
+- `services/` currently covers WebAuthn, throughput helpers, crypto helpers, and the shared `BackgroundTaskManager` lifecycle.
 - Aggregator files are part of the suite shape; when you add a new case, update every relevant aggregator layer.
 
 ## ANTI-PATTERNS

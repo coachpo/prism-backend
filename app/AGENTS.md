@@ -1,18 +1,19 @@
 # BACKEND APP KNOWLEDGE BASE
 
 ## OVERVIEW
-`app/` contains the live backend: FastAPI startup, auth/session enforcement, profile-scope dependencies, routers, service layer, ORM models, schema contracts, realtime transport, pricing logic, and loadbalance/audit plumbing.
+`app/` contains the live backend: FastAPI startup, auth/session enforcement, profile-scope dependencies, routers, service-layer entrypoints, a lifespan-managed background task worker, ORM models, schema contracts, realtime transport, pricing logic, and loadbalance/audit plumbing.
 
 ## STRUCTURE
 ```
 app/
-├── main.py                                   # Lifespan startup, auth middleware, shared httpx client
+├── main.py                                   # Lifespan startup, auth middleware, shared httpx client, background task worker
 ├── bootstrap/AGENTS.md                       # Startup sequencing and auth middleware split
 ├── dependencies.py                           # DB session + active/effective profile dependencies
 ├── core/AGENTS.md                            # Config, auth/crypto helpers, database, migrations, time helpers
 ├── models/AGENTS.md                          # ORM models and domain splits
 ├── schemas/AGENTS.md                         # Pydantic request/response contracts
 ├── routers/AGENTS.md                         # 14 router shells + *_domains/ API layout
+├── services/AGENTS.md                        # Service-root boundaries, facades, cleanup helpers, worker
 ├── services/auth/AGENTS.md                   # Session/email/password-reset/proxy-key internals
 ├── services/loadbalancer_support/AGENTS.md   # Recovery state, attempts, event helpers
 ├── services/proxy_support/AGENTS.md          # Upstream URL/header/body/transport helpers
@@ -33,7 +34,7 @@ app/
 - Pricing templates and connection pricing linkage: `routers/pricing_templates.py`, `services/costing_service.py`
 - Audit and realtime payload emission: `routers/audit.py`, `routers/realtime.py`, `services/audit_service.py`, `services/realtime/connection_manager.py`
 - Stats re-export boundary: `services/stats_service.py`, `services/stats/`, `services/stats/AGENTS.md`
-- Utility services: `services/profile_invariants.py`, `services/user_settings.py`, `services/background_cleanup.py`, `services/loadbalance_cleanup.py`
+- Service-root utilities and worker: `services/AGENTS.md`, `services/background_tasks.py`, `services/profile_invariants.py`, `services/user_settings.py`, `services/background_cleanup.py`, `services/loadbalance_cleanup.py`
 
 ## CHILD DOCS
 
@@ -42,6 +43,7 @@ app/
 - `models/AGENTS.md`: ORM models split into identity, routing, and observability domains.
 - `routers/AGENTS.md`: top-level API shells, domain folders, and dependency split between management, proxy, and realtime routers.
 - `schemas/AGENTS.md`: contract-layer ownership for domain Pydantic models and the `schemas.py` re-export boundary.
+- `services/AGENTS.md`: service-root public facades, cleanup helpers, and lifespan-managed background task infrastructure.
 - `services/auth/AGENTS.md`: auth/session/email/password-reset/proxy-key internals behind `services/auth_service.py`.
 - `services/loadbalancer_support/AGENTS.md`: recovery-state mutation, attempt planning, and loadbalance-event helpers behind `services/loadbalancer.py`.
 - `services/proxy_support/AGENTS.md`: upstream URL/header/body/compression/transport helpers behind `services/proxy_service.py`.
@@ -56,6 +58,7 @@ app/
 - Treat domain schemas as the public contract; frontend types should follow them.
 - Use `selectinload` when routers or services need connected models, endpoints, or pricing templates.
 - Keep subdomain routers thin when a deeper folder exists (`auth_domains`, `config_domains`, `connections_domains`, `models_domains`, `proxy_domains`, `settings_domains`).
+- Keep lifespan-owned infrastructure (`httpx.AsyncClient`, `background_task_manager`) initialized in `main.py`; leaf services should treat them as app-owned dependencies.
 - Keep auth and proxy-key serialization/building centralized in `services/auth_service.py` and `core/auth.py`.
 - Keep passkey registration/authentication/credential management in `services/webauthn_service.py` and `services/webauthn/` instead of treating it as part of `services/auth/`.
 - Keep proxy URL/header/body/compression logic in `services/proxy_support/`; keep recovery-state mutation and attempt planning in `services/loadbalancer_support/`.
@@ -64,9 +67,10 @@ app/
 
 ## APP FACTS
 
-- Lifespan startup sequence is: validate PostgreSQL URL -> run migrations -> seed providers -> enforce profile invariants -> seed user settings -> seed app auth settings -> encrypt endpoint secrets -> seed system header blocklist -> create shared `httpx.AsyncClient`.
+- Lifespan startup flow is: run startup sequence (validate PostgreSQL URL -> run migrations -> seed providers -> enforce profile invariants -> seed user settings -> seed app auth settings -> encrypt endpoint secrets -> seed system header blocklist) -> create shared `httpx.AsyncClient` -> attach/start shared `background_task_manager`.
 - `main.py` includes 14 routers; `proxy.py` owns the `/v1*` and `/v1beta*` entrypoint with no `/api` prefix.
 - `main.py` middleware bifurcates auth: `/api/*` uses operator session cookies when enabled, `/v1*` uses proxy API keys when enabled.
+- `services/background_tasks.py` defines the shared `BackgroundTaskManager`; `main.py` starts it during lifespan and stops it before closing the HTTP client and engine.
 - `services/auth_service.py` is the public re-export boundary for verified-email gating, refresh-token family rotation and revocation, password-reset OTP flows, SMTP delivery, proxy-key CRUD, and proxy-key serialization implemented under `services/auth/`.
 - `services/webauthn_service.py` is a separate re-export boundary over `services/webauthn/` for passkey registration, authentication, and credential management.
 - `routers/config.py` is a shell that delegates to `config_domains/import_export.py` and `config_domains/blocklist.py`.
