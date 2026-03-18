@@ -38,10 +38,10 @@ tests/
 ## COMMANDS
 
 ```bash
-./venv/bin/python -m pytest tests/ -v
-./venv/bin/python -m pytest tests/test_smoke_defect_regressions.py -v
-./venv/bin/python -m pytest tests/test_multi_profile_isolation.py -v
-./venv/bin/python -m pytest tests/ -k "DEF008" -v
+uv run pytest tests/ -v
+uv run pytest tests/test_smoke_defect_regressions.py -v
+uv run pytest tests/test_multi_profile_isolation.py -v
+uv run pytest tests/ -k "DEF008" -v
 ```
 
 ## CONVENTIONS

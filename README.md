@@ -70,7 +70,7 @@ backend/
 │       └── profile_invariants.py    # Active/default profile enforcement
 ├── alembic.ini                      # Root Alembic CLI config pointing at `app/alembic`
 ├── docker-compose.yml               # Local PostgreSQL provisioning
-├── pyproject.toml                   # Runtime deps, dev extras, and console script
+├── pyproject.toml                   # Runtime deps, dev dependency group, and console script
 ├── tests/                           # Pytest test suite
 └── AGENTS.md                        # Backend knowledge base
 ```
@@ -81,27 +81,26 @@ backend/
 
 ### Prerequisites
 - Python 3.13+
-- pip
+- uv
 
 ### Installation
 
 ```bash
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install runtime + dev dependencies
-pip install -e ".[dev]"
+# Create or update the uv-managed environment
+uv sync --locked
 ```
+
+If your Python 3.13 interpreter is exposed under a different command name, set
+`BACKEND_PYTHON_BIN=<your-python-3.13-command>` before using `../start.sh`.
 
 ### Running
 
 ```bash
 # Development server with auto-reload
-prism-backend --reload
+uv run prism-backend --reload
 
 # Production defaults (4 workers, proxy headers enabled)
-prism-backend
+uv run prism-backend
 ```
 
 The API will be available at:
@@ -115,18 +114,18 @@ The API will be available at:
 
 ```bash
 # Run all tests
-pytest tests/
+uv run pytest tests/
 
 # Run with coverage
-pytest tests/ --cov=app --cov-report=html
+uv run pytest tests/ --cov=app --cov-report=html
 
 # Run specific test file
-pytest tests/test_proxy.py -v
+uv run pytest tests/test_proxy.py -v
 ```
 
-`pyproject.toml` is the single dependency source. Runtime installs use `pip install .`,
-and local dev/test installs use `pip install -e ".[dev]"` so pytest tooling stays out
-of production images.
+`pyproject.toml` is the dependency declaration source and `uv.lock` pins the resolved
+environment. Local development uses `uv sync --locked`, while production images install
+runtime dependencies with `uv sync --locked --no-dev`.
 
 ---
 
@@ -241,7 +240,7 @@ Provider-specific auth headers are built in `proxy_service.py`:
 
 ### Schema Migrations
 
-Alembic migrations are the source of truth. Create revisions with `alembic revision --autogenerate -m "message"` and apply with `alembic upgrade head`.
+Alembic migrations are the source of truth. Create revisions with `uv run alembic revision --autogenerate -m "message"` and apply with `uv run alembic upgrade head`.
 
 ---
 
@@ -253,7 +252,7 @@ If startup fails to connect to PostgreSQL, verify your `DATABASE_URL` and ensure
 
 ### Import Errors
 
-Make sure you're running from the `backend/` directory and the virtual environment is activated.
+Make sure you're running from the `backend/` directory and the uv environment is synced (`uv sync --locked`).
 
 ### Port Already in Use
 

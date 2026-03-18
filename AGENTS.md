@@ -22,7 +22,7 @@ backend/
 ├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
 ├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
-├── pyproject.toml                               # Runtime deps, dev extras, package data, and `prism-backend`
+├── pyproject.toml                               # Runtime deps, dev dependency group, package data, and `prism-backend`
 └── docker-compose.yml              # Local PostgreSQL helper
 ```
 
@@ -68,8 +68,8 @@ backend/
 ## COMMANDS
 
 ```bash
-./venv/bin/python -m pytest tests/ -v
-./venv/bin/prism-backend --reload
+uv run pytest tests/ -v
+uv run prism-backend --reload
 docker compose up -d postgres
 ```
 
