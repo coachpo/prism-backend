@@ -20,6 +20,9 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 ```
 backend/
 ├── app/
+│   ├── __main__.py                  # CLI entrypoint for `prism-backend` and `python -m app`
+│   ├── alembic/                     # Packaged Alembic env + revisions used at runtime
+│   ├── alembic.ini                  # Package-local Alembic config for startup migrations
 │   ├── main.py                      # Lifespan startup, auth middleware, shared httpx client, background task worker
 │   ├── bootstrap/                   # Startup sequence and auth middleware helpers
 │   ├── core/database.py             # SQLAlchemy async engine + session factory
@@ -66,12 +69,10 @@ backend/
 │       ├── background_cleanup.py    # Request/audit retention cleanup helpers
 │       ├── loadbalance_cleanup.py   # Loadbalance-event retention cleanup helpers
 │       └── profile_invariants.py    # Active/default profile enforcement
-├── alembic/                         # Alembic migration env + revisions
-├── alembic.ini                      # Alembic configuration
+├── alembic.ini                      # Root Alembic CLI config pointing at `app/alembic`
 ├── docker-compose.yml               # Local PostgreSQL provisioning
+├── pyproject.toml                   # Runtime deps, dev extras, and console script
 ├── tests/                           # Pytest test suite
-├── requirements.txt                 # Runtime dependencies
-├── requirements-dev.txt             # Test-only and local dev dependencies
 └── AGENTS.md                        # Backend knowledge base
 ```
 
@@ -90,21 +91,21 @@ backend/
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install runtime dependencies
-pip install -r requirements.txt
-
-# Install test and local dev dependencies
-pip install -r requirements-dev.txt
+# Install runtime + dev dependencies
+pip install -e ".[dev]"
 ```
 
 ### Running
 
 ```bash
 # Development server with auto-reload
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+prism-backend --reload
 
-# Production (no reload)
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+# Production defaults (4 workers, proxy headers enabled)
+prism-backend
+
+# Module form if you prefer Python's package runner
+python -m app --reload
 ```
 
 The API will be available at:
@@ -127,8 +128,9 @@ pytest tests/ --cov=app --cov-report=html
 pytest tests/test_proxy.py -v
 ```
 
-`requirements.txt` stays runtime-only. Testcontainers and pytest plugins live in
-`requirements-dev.txt` so production installs do not pull test infrastructure.
+`pyproject.toml` is the single dependency source. Runtime installs use `pip install .`,
+and local dev/test installs use `pip install -e ".[dev]"` so pytest tooling stays out
+of production images.
 
 ---
 
@@ -136,7 +138,8 @@ pytest tests/test_proxy.py -v
 
 ### Environment Variables
 
-- `BACKEND_PORT` - Server port (default: 8000)
+- `PORT` - Server port for `prism-backend` (default: `8000`)
+- `PRISM_BACKEND_WORKERS` - Worker count when `--reload` is off (default: `4`)
 - `DATABASE_URL` - PostgreSQL DSN (default: `postgresql+asyncpg://prism:prism@localhost:5432/prism`)
 
 ### Database
@@ -258,7 +261,7 @@ Make sure you're running from the `backend/` directory and the virtual environme
 
 ### Port Already in Use
 
-Change the port with `--port` flag or set `BACKEND_PORT` environment variable.
+Change the port with `--port` or set the `PORT` environment variable.
 
 ---
 

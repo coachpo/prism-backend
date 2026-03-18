@@ -375,6 +375,7 @@ async def test_connection_priority_migration_normalizes_existing_rows(
     suffix = _unique_suffix()
     migration_path = (
         Path(__file__).resolve().parents[2]
+        / "app"
         / "alembic"
         / "versions"
         / "0005_connection_priority_normalization.py"

@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prism-backend"
+version = "0.1.0"
+description = "Prism FastAPI backend"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.0",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "PyJWT>=2.10.0",
+    "argon2-cffi>=23.1.0",
+    "cryptography>=44.0.0",
+    "webauthn==2.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=5.0.0",
+    "testcontainers[postgres]>=4.13.0",
+]
+
+[project.scripts]
+prism-backend = "app.__main__:main"
+
+[tool.setuptools.package-data]
+app = [
+    "alembic.ini",
+    "alembic/env.py",
+    "alembic/script.py.mako",
+    "alembic/versions/*.py",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

@@ -7,8 +7,9 @@ from alembic.config import Config
 
 
 def _build_alembic_config(database_url: str) -> Config:
-    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
-    migrations_dir = Path(__file__).resolve().parents[2] / "alembic"
+    package_root = Path(__file__).resolve().parents[1]
+    config = Config(str(package_root / "alembic.ini"))
+    migrations_dir = package_root / "alembic"
     config.set_main_option("script_location", str(migrations_dir))
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config

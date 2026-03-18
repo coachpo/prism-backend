@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 
 import httpx
 from sqlalchemy import select
@@ -19,6 +20,8 @@ from app.models.models import (
 from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
+
+SKIP_STARTUP_SEQUENCE_ENV = "PRISM_SKIP_STARTUP_SEQUENCE"
 
 DEFAULT_PROVIDERS = [
     {
@@ -217,6 +220,10 @@ async def run_startup_migrations() -> None:
 
 
 async def run_startup_sequence() -> None:
+    if os.getenv(SKIP_STARTUP_SEQUENCE_ENV) == "1":
+        logger.info("Skipping startup bootstrap; launcher already applied it")
+        return
+
     await run_startup_migrations()
     await seed_providers()
     await seed_profile_invariants()
@@ -242,6 +249,7 @@ def build_http_client() -> httpx.AsyncClient:
 
 __all__ = [
     "DEFAULT_PROVIDERS",
+    "SKIP_STARTUP_SEQUENCE_ENV",
     "SYSTEM_BLOCKLIST_DEFAULTS",
     "build_http_client",
     "encrypt_endpoint_secrets",

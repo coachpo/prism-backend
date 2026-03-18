@@ -32,7 +32,7 @@ def _run_alembic_upgrade(database_url: str) -> None:
     config = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
     config.set_main_option(
         "script_location",
-        str(Path(__file__).resolve().parent.parent / "alembic"),
+        str(Path(__file__).resolve().parent.parent / "app" / "alembic"),
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     command.upgrade(config, "head")

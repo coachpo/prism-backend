@@ -22,7 +22,7 @@ def _build_alembic_config(database_url: str) -> Config:
     config = Config(str(Path(__file__).resolve().parents[3] / "alembic.ini"))
     config.set_main_option(
         "script_location",
-        str(Path(__file__).resolve().parents[3] / "alembic"),
+        str(Path(__file__).resolve().parents[3] / "app" / "alembic"),
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config

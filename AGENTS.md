@@ -6,6 +6,7 @@ FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane 
 ## STRUCTURE
 ```
 backend/
+├── app/alembic/                                 # Packaged Alembic env + revisions used at runtime
 ├── app/bootstrap/AGENTS.md                       # Startup sequence and auth bifurcation
 ├── app/core/AGENTS.md                            # Config, DB, crypto, auth, time helpers
 ├── app/AGENTS.md                                # Runtime and management implementation details
@@ -20,8 +21,8 @@ backend/
 ├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
 ├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
-├── alembic/
-├── requirements.txt
+├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
+├── pyproject.toml                               # Runtime deps, dev extras, package data, and `prism-backend`
 └── docker-compose.yml              # Local PostgreSQL helper
 ```
 
@@ -68,7 +69,7 @@ backend/
 
 ```bash
 ./venv/bin/python -m pytest tests/ -v
-./venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+./venv/bin/prism-backend --reload
 docker compose up -d postgres
 ```
 
