@@ -1,4 +1,3 @@
-import os
 from functools import lru_cache
 from typing import Literal
 
@@ -7,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    database_url: str = Field(default="", min_length=1)
+    database_url: str = ""
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: str = "info"
@@ -67,4 +66,4 @@ def ensure_postgresql_database_url(database_url: str) -> None:
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings(database_url=os.getenv("DATABASE_URL", ""))
+    return Settings()

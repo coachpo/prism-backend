@@ -8,7 +8,7 @@ from app.services.loadbalancer_support.state import (
     FailureKind,
     RecoveryStateEntry,
     _recovery_state,
-    settings,
+    get_loadbalancer_settings,
 )
 
 
@@ -18,6 +18,8 @@ def _compute_base_cooldown(
     consecutive_failures: int,
     failure_kind: FailureKind,
 ) -> float:
+    settings = get_loadbalancer_settings()
+
     if failure_kind == "auth_like":
         return float(settings.failover_auth_error_cooldown_seconds)
 
@@ -32,6 +34,8 @@ def _compute_base_cooldown(
 
 
 def _apply_jitter(cooldown_seconds: float) -> float:
+    settings = get_loadbalancer_settings()
+
     if cooldown_seconds <= 0.0 or settings.failover_jitter_ratio <= 0.0:
         return cooldown_seconds
 

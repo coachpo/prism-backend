@@ -9,13 +9,15 @@ from sqlalchemy.pool import NullPool
 
 from app.core.config import ensure_postgresql_database_url, get_settings
 
+_engine: AsyncEngine | None = None
+_session_factory: async_sessionmaker[AsyncSession] | None = None
+
 
 def _create_engine() -> AsyncEngine:
     settings = get_settings()
     ensure_postgresql_database_url(settings.database_url)
-    engine_kwargs = {
-        "echo": False,
-    }
+    engine_kwargs: dict[str, object] = {}
+    engine_kwargs["echo"] = False
     if settings.app_env == "test":
         engine_kwargs["poolclass"] = NullPool
     else:
@@ -24,20 +26,30 @@ def _create_engine() -> AsyncEngine:
     return create_async_engine(settings.database_url, **engine_kwargs)
 
 
-engine = _create_engine()
-AsyncSessionLocal = async_sessionmaker(
-    engine,
-    expire_on_commit=False,
-    class_=AsyncSession,
-)
-
-
 def get_engine() -> AsyncEngine:
-    return engine
+    global _engine
+
+    if _engine is None:
+        _engine = _create_engine()
+
+    return _engine
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
-    return AsyncSessionLocal
+    global _session_factory
+
+    if _session_factory is None:
+        _session_factory = async_sessionmaker(
+            get_engine(),
+            expire_on_commit=False,
+            class_=AsyncSession,
+        )
+
+    return _session_factory
+
+
+def AsyncSessionLocal() -> AsyncSession:
+    return get_session_factory()()
 
 
 class Base(DeclarativeBase):

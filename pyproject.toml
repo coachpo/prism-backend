@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "prism-backend"
 version = "0.1.0"
 description = "Prism FastAPI backend"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-prism-backend = "app.__main__:main"
+prism-backend = "app.main:main"
 
 [tool.setuptools.package-data]
 app = [

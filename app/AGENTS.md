@@ -6,7 +6,7 @@
 ## STRUCTURE
 ```
 app/
-├── main.py                                   # Lifespan startup, auth middleware, shared httpx client, background task worker
+├── main.py                                   # CLI entrypoint, lifespan startup, auth middleware, shared httpx client, background task worker
 ├── bootstrap/AGENTS.md                       # Startup sequencing and auth middleware split
 ├── dependencies.py                           # DB session + active/effective profile dependencies
 ├── core/AGENTS.md                            # Config, auth/crypto helpers, database, migrations, time helpers

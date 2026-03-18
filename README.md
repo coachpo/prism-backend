@@ -20,10 +20,9 @@ This is the backend component of Prism, handling all LLM API routing, load balan
 ```
 backend/
 ├── app/
-│   ├── __main__.py                  # CLI entrypoint for `prism-backend` and `python -m app`
 │   ├── alembic/                     # Packaged Alembic env + revisions used at runtime
 │   ├── alembic.ini                  # Package-local Alembic config for startup migrations
-│   ├── main.py                      # Lifespan startup, auth middleware, shared httpx client, background task worker
+│   ├── main.py                      # CLI entrypoint, FastAPI app wiring, lifespan, and shared worker setup
 │   ├── bootstrap/                   # Startup sequence and auth middleware helpers
 │   ├── core/database.py             # SQLAlchemy async engine + session factory
 │   ├── models/
@@ -81,7 +80,7 @@ backend/
 ## Setup
 
 ### Prerequisites
-- Python 3.11+
+- Python 3.13+
 - pip
 
 ### Installation
@@ -103,9 +102,6 @@ prism-backend --reload
 
 # Production defaults (4 workers, proxy headers enabled)
 prism-backend
-
-# Module form if you prefer Python's package runner
-python -m app --reload
 ```
 
 The API will be available at:

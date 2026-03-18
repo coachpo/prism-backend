@@ -17,8 +17,11 @@ class RecoveryStateEntry(TypedDict):
     probe_eligible_logged: bool
 
 
-settings = get_settings()
 _recovery_state: dict[tuple[int, int], RecoveryStateEntry] = {}
+
+
+def get_loadbalancer_settings():
+    return get_settings()
 
 
 __all__ = [
@@ -26,6 +29,6 @@ __all__ = [
     "LOGGER_NAME",
     "RecoveryStateEntry",
     "_recovery_state",
+    "get_loadbalancer_settings",
     "logger",
-    "settings",
 ]

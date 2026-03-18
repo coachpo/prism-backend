@@ -4,8 +4,8 @@ from app.services.background_tasks import background_task_manager
 from app.services.loadbalancer_support.state import (
     FailureKind,
     RecoveryStateEntry,
+    get_loadbalancer_settings,
     logger,
-    settings,
 )
 
 
@@ -80,6 +80,8 @@ def _build_event_payload(
     endpoint_id: int | None,
     provider_id: int | None,
 ) -> LoadbalanceEventPayload:
+    settings = get_loadbalancer_settings()
+
     return {
         "profile_id": profile_id,
         "connection_id": connection_id,
