@@ -1,5 +1,6 @@
-import asyncio
+from typing import TypedDict
 
+from app.services.background_tasks import background_task_manager
 from app.services.loadbalancer_support.state import (
     FailureKind,
     RecoveryStateEntry,
@@ -8,18 +9,62 @@ from app.services.loadbalancer_support.state import (
 )
 
 
-def _record_loadbalance_event(**event_payload: object) -> None:
+class LoadbalanceEventPayload(TypedDict):
+    profile_id: int
+    connection_id: int
+    event_type: str
+    failure_kind: FailureKind | None
+    consecutive_failures: int
+    cooldown_seconds: float
+    blocked_until_mono: float | None
+    model_id: str | None
+    endpoint_id: int | None
+    provider_id: int | None
+    failure_threshold: int
+    backoff_multiplier: float
+    max_cooldown_seconds: int
+
+
+def _record_loadbalance_event(event_payload: LoadbalanceEventPayload) -> None:
     from app.services.audit_service import record_loadbalance_event
 
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        logger.debug(
-            "Skipping loadbalance event persistence because no running event loop"
-        )
-        return
+    event_payload_snapshot: LoadbalanceEventPayload = event_payload.copy()
 
-    loop.create_task(record_loadbalance_event(**event_payload))
+    async def run_event_persist() -> None:
+        await record_loadbalance_event(
+            profile_id=event_payload_snapshot["profile_id"],
+            connection_id=event_payload_snapshot["connection_id"],
+            event_type=event_payload_snapshot["event_type"],
+            failure_kind=event_payload_snapshot["failure_kind"],
+            consecutive_failures=event_payload_snapshot["consecutive_failures"],
+            cooldown_seconds=event_payload_snapshot["cooldown_seconds"],
+            blocked_until_mono=event_payload_snapshot["blocked_until_mono"],
+            model_id=event_payload_snapshot["model_id"],
+            endpoint_id=event_payload_snapshot["endpoint_id"],
+            provider_id=event_payload_snapshot["provider_id"],
+            failure_threshold=event_payload_snapshot["failure_threshold"],
+            backoff_multiplier=event_payload_snapshot["backoff_multiplier"],
+            max_cooldown_seconds=event_payload_snapshot["max_cooldown_seconds"],
+        )
+
+    try:
+        background_task_manager.enqueue(
+            name=(
+                "loadbalance-event:"
+                f"{event_payload_snapshot['profile_id']}:"
+                f"{event_payload_snapshot['connection_id']}:"
+                f"{event_payload_snapshot['event_type']}"
+            ),
+            run=run_event_persist,
+            max_retries=0,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to enqueue loadbalance event: profile_id=%d connection_id=%d event_type=%s",
+            event_payload_snapshot["profile_id"],
+            event_payload_snapshot["connection_id"],
+            event_payload_snapshot["event_type"],
+        )
 
 
 def _build_event_payload(
@@ -34,7 +79,7 @@ def _build_event_payload(
     model_id: str | None,
     endpoint_id: int | None,
     provider_id: int | None,
-) -> dict[str, object]:
+) -> LoadbalanceEventPayload:
     return {
         "profile_id": profile_id,
         "connection_id": connection_id,
@@ -70,7 +115,7 @@ def record_probe_eligible_transition(
         state["consecutive_failures"],
     )
     _record_loadbalance_event(
-        **_build_event_payload(
+        _build_event_payload(
             profile_id=profile_id,
             connection_id=connection_id,
             event_type="probe_eligible",
@@ -119,7 +164,7 @@ def record_failed_transition(
         )
 
     _record_loadbalance_event(
-        **_build_event_payload(
+        _build_event_payload(
             profile_id=profile_id,
             connection_id=connection_id,
             event_type=event_type,
@@ -152,7 +197,7 @@ def record_recovered_transition(
         state["consecutive_failures"],
     )
     _record_loadbalance_event(
-        **_build_event_payload(
+        _build_event_payload(
             profile_id=profile_id,
             connection_id=connection_id,
             event_type="recovered",

@@ -3,9 +3,13 @@ import json
 import logging
 import re
 
+from app.services.background_tasks import background_task_manager
 from app.models.models import AuditLog, LoadbalanceEvent
 
 logger = logging.getLogger(__name__)
+
+AUDIT_LOG_MAX_RETRIES = 2
+AUDIT_LOG_RETRY_DELAY_SECONDS = 0.25
 
 _SENSITIVE_HEADER_PATTERN = re.compile(r"(key|secret|token|auth)", re.IGNORECASE)
 
@@ -33,7 +37,7 @@ def redact_headers(headers: dict[str, str]) -> dict[str, str]:
     return redacted
 
 
-async def record_audit_log(
+async def _persist_audit_log(
     *,
     request_log_id: int | None,
     profile_id: int,
@@ -56,48 +60,109 @@ async def record_audit_log(
 ) -> None:
     from app.core.database import AsyncSessionLocal
 
-    try:
-        redacted_req_headers = redact_headers(request_headers)
-        redacted_resp_headers = (
-            redact_headers(response_headers) if response_headers else None
-        )
+    redacted_req_headers = redact_headers(request_headers)
+    redacted_resp_headers = (
+        redact_headers(response_headers) if response_headers else None
+    )
 
-        req_body_str = None
-        resp_body_str = None
-        if capture_bodies:
-            if request_body:
-                req_body_str = request_body.decode("utf-8", errors="replace")
-            if response_body:
-                resp_body_str = response_body.decode("utf-8", errors="replace")
+    req_body_str = None
+    resp_body_str = None
+    if capture_bodies:
+        if request_body:
+            req_body_str = request_body.decode("utf-8", errors="replace")
+        if response_body:
+            resp_body_str = response_body.decode("utf-8", errors="replace")
 
-        entry = AuditLog(
+    entry = AuditLog(
+        request_log_id=request_log_id,
+        profile_id=profile_id,
+        provider_id=provider_id,
+        model_id=model_id,
+        endpoint_id=endpoint_id,
+        connection_id=connection_id,
+        endpoint_base_url=endpoint_base_url,
+        endpoint_description=endpoint_description,
+        request_method=request_method,
+        request_url=request_url,
+        request_headers=json.dumps(redacted_req_headers),
+        request_body=req_body_str,
+        response_status=response_status,
+        response_headers=json.dumps(redacted_resp_headers)
+        if redacted_resp_headers
+        else None,
+        response_body=resp_body_str,
+        is_stream=is_stream,
+        duration_ms=duration_ms,
+    )
+    async with AsyncSessionLocal() as session:
+        session.add(entry)
+        await session.commit()
+
+
+async def record_audit_log(
+    *,
+    request_log_id: int | None,
+    profile_id: int,
+    provider_id: int,
+    model_id: str,
+    request_method: str,
+    request_url: str,
+    request_headers: dict[str, str],
+    request_body: bytes | None,
+    response_status: int,
+    response_headers: dict[str, str] | None,
+    response_body: bytes | None,
+    is_stream: bool,
+    duration_ms: int,
+    capture_bodies: bool,
+    endpoint_id: int | None = None,
+    connection_id: int | None = None,
+    endpoint_base_url: str | None = None,
+    endpoint_description: str | None = None,
+) -> None:
+    request_headers_copy = dict(request_headers)
+    response_headers_copy = dict(response_headers) if response_headers else None
+    request_body_copy = (
+        bytes(request_body) if capture_bodies and request_body is not None else None
+    )
+    response_body_copy = (
+        bytes(response_body) if capture_bodies and response_body is not None else None
+    )
+
+    async def run_audit_write() -> None:
+        await _persist_audit_log(
             request_log_id=request_log_id,
             profile_id=profile_id,
             provider_id=provider_id,
             model_id=model_id,
+            request_method=request_method,
+            request_url=request_url,
+            request_headers=request_headers_copy,
+            request_body=request_body_copy,
+            response_status=response_status,
+            response_headers=response_headers_copy,
+            response_body=response_body_copy,
+            is_stream=is_stream,
+            duration_ms=duration_ms,
+            capture_bodies=capture_bodies,
             endpoint_id=endpoint_id,
             connection_id=connection_id,
             endpoint_base_url=endpoint_base_url,
             endpoint_description=endpoint_description,
-            request_method=request_method,
-            request_url=request_url,
-            request_headers=json.dumps(redacted_req_headers),
-            request_body=req_body_str,
-            response_status=response_status,
-            response_headers=json.dumps(redacted_resp_headers)
-            if redacted_resp_headers
-            else None,
-            response_body=resp_body_str,
-            is_stream=is_stream,
-            duration_ms=duration_ms,
         )
-        async with AsyncSessionLocal() as session:
-            session.add(entry)
-            await session.commit()
-    except asyncio.CancelledError:
-        logger.debug("Audit logging cancelled")
+
+    try:
+        background_task_manager.enqueue(
+            name=f"audit-log:{profile_id}:{request_log_id or 'none'}",
+            run=run_audit_write,
+            max_retries=AUDIT_LOG_MAX_RETRIES,
+            retry_delay_seconds=AUDIT_LOG_RETRY_DELAY_SECONDS,
+        )
     except Exception:
-        logger.exception("Failed to record audit log")
+        logger.exception(
+            "Failed to enqueue audit log for request_log_id=%s",
+            request_log_id,
+        )
 
 
 async def record_loadbalance_event(

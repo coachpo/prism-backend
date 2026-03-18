@@ -7,6 +7,8 @@ from uuid import uuid4
 
 import pytest
 
+from app.services.background_tasks import BackgroundTaskManager
+
 
 class TestDEF062_NonFailover4xxRecoveryState:
     @pytest.mark.asyncio
@@ -522,57 +524,80 @@ class TestDEF021_StreamingCancellationResilience:
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
         model_config.provider.audit_capture_bodies = True
+        log_started = asyncio.Event()
+        release_log = asyncio.Event()
+        manager = BackgroundTaskManager()
+        await manager.start()
 
-        with (
-            patch(
-                "app.routers.proxy.get_model_config_with_connections",
-                AsyncMock(return_value=model_config),
-            ),
-            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
-            patch(
-                "app.routers.proxy._endpoint_is_active_now",
-                AsyncMock(return_value=True),
-            ),
-            patch(
-                "app.routers.proxy.load_costing_settings",
-                AsyncMock(return_value=MagicMock()),
-            ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
-            patch(
-                "app.routers.proxy.log_request", AsyncMock(return_value=501)
-            ) as log_mock,
-            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
-        ):
-            response = await _handle_proxy(
-                request=request,
-                db=mock_db,
-                raw_body=raw_body,
-                request_path="/v1/responses",
-                profile_id=1,
-            )
+        async def delayed_log_request(*args, **kwargs):
+            log_started.set()
+            await release_log.wait()
+            return 501
 
-            assert response.status_code == 200
-            assert isinstance(response, StreamingResponse)
-            stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+        try:
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy.log_request",
+                    AsyncMock(side_effect=delayed_log_request),
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
 
-            first = await stream.__anext__()
-            assert first.startswith(b"data: ")
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
 
-            with pytest.raises(asyncio.CancelledError):
-                await stream.__anext__()
+                first = await stream.__anext__()
+                assert first.startswith(b"data: ")
 
-            await self._wait_for_asyncmock_calls(log_mock)
-            await self._wait_for_asyncmock_calls(audit_mock)
+                next_task = asyncio.create_task(stream.__anext__())
+                await asyncio.wait_for(log_started.wait(), timeout=1)
+                assert audit_mock.await_count == 0
+                release_log.set()
 
-            assert upstream_resp.closed is True
-            log_mock.assert_awaited_once()
-            audit_mock.assert_awaited_once()
-            audit_call = audit_mock.await_args
-            assert audit_call is not None
-            assert audit_call.kwargs["response_body"] == first
-            assert audit_call.kwargs["capture_bodies"] is True
-            assert "Failed to log streaming request" not in caplog.text
-            assert "Failed to record streaming audit log" not in caplog.text
+                with pytest.raises(asyncio.CancelledError):
+                    await next_task
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert upstream_resp.closed is True
+                log_mock.assert_awaited_once()
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 501
+                assert audit_call.kwargs["response_body"] == first
+                assert audit_call.kwargs["capture_bodies"] is True
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
 
     @pytest.mark.asyncio
     async def test_stream_success_audits_buffered_payload_when_capture_enabled(
@@ -637,6 +662,130 @@ class TestDEF021_StreamingCancellationResilience:
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
         model_config.provider.audit_capture_bodies = True
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=888)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                assert response.headers["content-type"] == "text/event-stream"
+                assert "content-encoding" not in response.headers
+                assert "content-length" not in response.headers
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+                log_mock.assert_awaited_once()
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 888
+                assert audit_call.kwargs["response_body"] == expected_payload
+                assert audit_call.kwargs["capture_bodies"] is True
+                assert audit_call.kwargs["response_headers"] == {
+                    "content-type": "text/event-stream"
+                }
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_stream_success_falls_back_to_inline_request_log_when_enqueue_fails(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        chunk_one = b'data: {"usage":{"prompt_tokens":1,'
+        chunk_two = b'"completion_tokens":1,"total_tokens":2}}\n\n'
+        expected_payload = chunk_one + chunk_two
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield chunk_one
+                yield chunk_two
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
 
         with (
             patch(
@@ -654,9 +803,13 @@ class TestDEF021_StreamingCancellationResilience:
             ),
             patch("app.routers.proxy.compute_cost_fields", return_value={}),
             patch(
-                "app.routers.proxy.log_request", AsyncMock(return_value=888)
+                "app.routers.proxy.log_request", AsyncMock(return_value=889)
             ) as log_mock,
             patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+            patch(
+                "app.routers.proxy_domains.attempt_streaming.background_task_manager.enqueue",
+                MagicMock(side_effect=RuntimeError("queue unavailable")),
+            ),
         ):
             response = await _handle_proxy(
                 request=request,
@@ -668,29 +821,15 @@ class TestDEF021_StreamingCancellationResilience:
 
             assert response.status_code == 200
             assert isinstance(response, StreamingResponse)
-            assert response.headers["content-type"] == "text/event-stream"
-            assert "content-encoding" not in response.headers
-            assert "content-length" not in response.headers
-
             stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
             received = [chunk async for chunk in stream]
-
-            await self._wait_for_asyncmock_calls(log_mock)
-            await self._wait_for_asyncmock_calls(audit_mock)
 
             assert b"".join(received) == expected_payload
             assert upstream_resp.closed is True
             log_mock.assert_awaited_once()
-            audit_mock.assert_awaited_once()
-            audit_call = audit_mock.await_args
-            assert audit_call is not None
-            assert audit_call.kwargs["response_body"] == expected_payload
-            assert audit_call.kwargs["capture_bodies"] is True
-            assert audit_call.kwargs["response_headers"] == {
-                "content-type": "text/event-stream"
-            }
+            audit_mock.assert_not_awaited()
+            assert "Failed to enqueue stream finalization" in caplog.text
             assert "Failed to log streaming request" not in caplog.text
-            assert "Failed to record streaming audit log" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_non_stream_response_and_audit_use_sanitized_headers(self):
@@ -940,48 +1079,72 @@ class TestDEF021_StreamingCancellationResilience:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
+        log_started = asyncio.Event()
+        release_log = asyncio.Event()
+        manager = BackgroundTaskManager()
+        await manager.start()
 
-        with (
-            patch(
-                "app.routers.proxy.get_model_config_with_connections",
-                AsyncMock(return_value=model_config),
-            ),
-            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
-            patch(
-                "app.routers.proxy._endpoint_is_active_now",
-                AsyncMock(return_value=True),
-            ),
-            patch(
-                "app.routers.proxy.load_costing_settings",
-                AsyncMock(return_value=MagicMock()),
-            ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
-            patch(
-                "app.routers.proxy.log_request", AsyncMock(return_value=777)
-            ) as log_mock,
-            patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
-        ):
-            response = await _handle_proxy(
-                request=request,
-                db=mock_db,
-                raw_body=raw_body,
-                request_path="/v1/responses",
-                profile_id=1,
-            )
+        async def delayed_log_request(*args, **kwargs):
+            log_started.set()
+            await release_log.wait()
+            return 777
 
-            assert response.status_code == 200
-            assert isinstance(response, StreamingResponse)
-            stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+        try:
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy.log_request",
+                    AsyncMock(side_effect=delayed_log_request),
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
 
-            first = await stream.__anext__()
-            assert first.startswith(b"data: ")
-            await stream.aclose()
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
 
-            await self._wait_for_asyncmock_calls(log_mock)
-            await self._wait_for_asyncmock_calls(audit_mock)
+                first = await stream.__anext__()
+                assert first.startswith(b"data: ")
+                close_task = asyncio.create_task(stream.aclose())
+                await asyncio.wait_for(log_started.wait(), timeout=1)
+                assert audit_mock.await_count == 0
+                release_log.set()
+                await close_task
 
-            assert upstream_resp.closed is True
-            log_mock.assert_awaited_once()
-            audit_mock.assert_awaited_once()
-            assert "Failed to log streaming request" not in caplog.text
-            assert "Failed to record streaming audit log" not in caplog.text
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert upstream_resp.closed is True
+                log_mock.assert_awaited_once()
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 777
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()

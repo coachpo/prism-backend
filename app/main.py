@@ -40,14 +40,36 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await bootstrap.run_startup_sequence()
-    app.state.http_client = bootstrap.build_http_client()
+    app.state.background_task_manager = None
+    app.state.http_client = None
+    http_client = None
+
+    try:
+        await bootstrap.run_startup_sequence()
+        http_client = bootstrap.build_http_client()
+        await background_task_manager.start()
+    except Exception:
+        if http_client is not None:
+            await http_client.aclose()
+        await get_engine().dispose()
+        raise
+
+    app.state.http_client = http_client
     app.state.background_task_manager = background_task_manager
-    await background_task_manager.start()
-    yield
-    await background_task_manager.shutdown()
-    await app.state.http_client.aclose()
-    await get_engine().dispose()
+
+    try:
+        yield
+    finally:
+        try:
+            await background_task_manager.shutdown()
+        finally:
+            app.state.background_task_manager = None
+            try:
+                if http_client is not None:
+                    await http_client.aclose()
+            finally:
+                app.state.http_client = None
+                await get_engine().dispose()
 
 
 app = FastAPI(

@@ -104,16 +104,12 @@ class TestDEF007_EndpointIdentityInLogs:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_record_audit_log_ignores_cancelled_error(self):
+    async def test_record_audit_log_enqueue_failure_does_not_raise(self):
         from app.services.audit_service import record_audit_log
 
-        mock_session_ctx = AsyncMock()
-        mock_session_ctx.__aenter__ = AsyncMock(side_effect=asyncio.CancelledError())
-        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
-
         with patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=mock_session_ctx,
+            "app.services.audit_service.background_task_manager.enqueue",
+            MagicMock(side_effect=RuntimeError("queue unavailable")),
         ):
             await record_audit_log(
                 request_log_id=1,
@@ -139,14 +135,29 @@ class TestDEF007_EndpointIdentityInLogs:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
+        enqueued_job = {}
 
         mock_session_ctx = AsyncMock()
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
 
-        with patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=mock_session_ctx,
+        def capture_enqueue(*, name, run, max_retries=0, retry_delay_seconds=0.0):
+            enqueued_job.update(
+                name=name,
+                run=run,
+                max_retries=max_retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
+        with (
+            patch(
+                "app.core.database.AsyncSessionLocal",
+                return_value=mock_session_ctx,
+            ),
+            patch(
+                "app.services.audit_service.background_task_manager.enqueue",
+                MagicMock(side_effect=capture_enqueue),
+            ),
         ):
             await record_audit_log(
                 request_log_id=2,
@@ -165,6 +176,8 @@ class TestDEF007_EndpointIdentityInLogs:
                 capture_bodies=True,
             )
 
+            await enqueued_job["run"]()
+
         mock_session.add.assert_called_once()
         audit_entry = mock_session.add.call_args[0][0]
         assert audit_entry.response_body == 'data: {"id":"resp_123"}\n\n'
@@ -176,17 +189,32 @@ class TestDEF007_EndpointIdentityInLogs:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
+        enqueued_job = {}
 
         mock_session_ctx = AsyncMock()
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
 
+        def capture_enqueue(*, name, run, max_retries=0, retry_delay_seconds=0.0):
+            enqueued_job.update(
+                name=name,
+                run=run,
+                max_retries=max_retries,
+                retry_delay_seconds=retry_delay_seconds,
+            )
+
         request_payload = ("req-" + ("x" * 70000)).encode("utf-8")
         response_payload = ("resp-" + ("y" * 70000)).encode("utf-8")
 
-        with patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=mock_session_ctx,
+        with (
+            patch(
+                "app.core.database.AsyncSessionLocal",
+                return_value=mock_session_ctx,
+            ),
+            patch(
+                "app.services.audit_service.background_task_manager.enqueue",
+                MagicMock(side_effect=capture_enqueue),
+            ),
         ):
             await record_audit_log(
                 request_log_id=3,
@@ -204,6 +232,8 @@ class TestDEF007_EndpointIdentityInLogs:
                 duration_ms=25,
                 capture_bodies=True,
             )
+
+            await enqueued_job["run"]()
 
         mock_session.add.assert_called_once()
         audit_entry = mock_session.add.call_args[0][0]

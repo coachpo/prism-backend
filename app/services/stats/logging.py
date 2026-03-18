@@ -7,6 +7,7 @@ from sqlalchemy import case, func, select
 from app.core.time import utc_now
 from app.models.domains.routing import Connection, Endpoint, ModelConfig
 from app.models.models import RequestLog
+from app.services.background_tasks import background_task_manager
 from app.schemas.domains.stats import (
     DashboardRealtimeUpdateResponse,
     DashboardRouteSnapshotResponse,
@@ -162,7 +163,7 @@ async def build_dashboard_route_snapshot(
 
 
 async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict:
-    window_end = utc_now()
+    window_end = entry.created_at or utc_now()
     window_start_24h = window_end - timedelta(hours=24)
 
     request_log = RequestLogResponse.model_validate(entry)
@@ -219,6 +220,56 @@ async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict:
         "type": "dashboard.update",
         **update.model_dump(mode="json"),
     }
+
+
+async def broadcast_dashboard_update_for_request_log(
+    *,
+    request_log_id: int,
+    profile_id: int,
+) -> None:
+    from app.core.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        entry = await db.get(RequestLog, request_log_id)
+        if entry is None:
+            logger.warning(
+                "Skipping dashboard.update for missing request log: profile_id=%d request_log_id=%d",
+                profile_id,
+                request_log_id,
+            )
+            return
+        if entry.profile_id != profile_id:
+            logger.warning(
+                "Skipping dashboard.update for mismatched request log profile: expected_profile_id=%d actual_profile_id=%d request_log_id=%d",
+                profile_id,
+                entry.profile_id,
+                request_log_id,
+            )
+            return
+
+        dashboard_message = await build_dashboard_update_message(db=db, entry=entry)
+        await connection_manager.broadcast_to_profile(
+            profile_id=profile_id,
+            channel="dashboard",
+            message=dashboard_message,
+        )
+
+
+def enqueue_dashboard_update_broadcast(
+    *,
+    request_log_id: int,
+    profile_id: int,
+) -> None:
+    async def run_broadcast() -> None:
+        await broadcast_dashboard_update_for_request_log(
+            request_log_id=request_log_id,
+            profile_id=profile_id,
+        )
+
+    background_task_manager.enqueue(
+        name=f"dashboard-update:{profile_id}:{request_log_id}",
+        run=run_broadcast,
+    )
 
 
 async def log_request(
@@ -319,17 +370,15 @@ async def log_request(
             await log_db.refresh(entry)
 
             try:
-                dashboard_message = await build_dashboard_update_message(
-                    db=log_db,
-                    entry=entry,
-                )
-                await connection_manager.broadcast_to_profile(
-                    profile_id=profile_id,
-                    channel="dashboard",
-                    message=dashboard_message,
+                enqueue_dashboard_update_broadcast(
+                    request_log_id=entry.id,
+                    profile_id=entry.profile_id,
                 )
             except Exception:
-                logger.exception("Failed to broadcast dashboard.update payload")
+                logger.exception(
+                    "Failed to enqueue dashboard.update payload for request_log_id=%s",
+                    entry.id,
+                )
 
             return entry.id
     except asyncio.CancelledError:

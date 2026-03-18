@@ -110,6 +110,8 @@ async def _record_attempt_audit(
 ) -> None:
     if not state.setup.audit_enabled:
         return
+    if request_log_id is None:
+        return
 
     endpoint = target.connection.endpoint_rel
     await deps.record_audit_log_fn(
