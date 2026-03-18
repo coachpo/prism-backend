@@ -1,7 +1,7 @@
 # BACKEND TEST SUITE KNOWLEDGE BASE
 
 ## OVERVIEW
-`tests/` is a PostgreSQL-backed regression suite. It is organized around defect regressions and profile-isolation guarantees, then supplemented by focused coverage for realtime broadcasting and service-level behavior such as WebAuthn and the shared background task manager.
+`tests/` is a PostgreSQL-backed regression suite executed from the uv-managed backend environment. It is organized around defect regressions and profile-isolation guarantees, then supplemented by focused coverage for realtime broadcasting and service-level behavior such as WebAuthn and the shared background task manager.
 
 ## STRUCTURE
 ```
@@ -18,6 +18,7 @@ tests/
 ## WHERE TO LOOK
 
 - Container lifecycle and migrated DB setup: `conftest.py`
+- Test dependency declaration and lockfile: `../pyproject.toml`, `../uv.lock`
 - DEF regression exports: `test_smoke_defect_regressions.py`
 - Profile-isolation exports: `test_multi_profile_isolation.py`
 - Realtime broadcasting and channel fanout: `test_realtime_broadcast.py`
@@ -38,6 +39,7 @@ tests/
 ## COMMANDS
 
 ```bash
+uv sync --locked
 uv run pytest tests/ -v
 uv run pytest tests/test_smoke_defect_regressions.py -v
 uv run pytest tests/test_multi_profile_isolation.py -v
@@ -47,6 +49,7 @@ uv run pytest tests/ -k "DEF008" -v
 ## CONVENTIONS
 
 - `conftest.py` starts `postgres:16-alpine`, converts the sync URL to `asyncpg`, and applies Alembic migrations before tests run.
+- Run the suite from the backend root through `uv run`; the dev dependency group in `../pyproject.toml` owns pytest, pytest-asyncio, pytest-cov, and testcontainers.
 - Smoke regressions use `TestDEF###_*` naming and are grouped by semantic domain, then re-exported through top-level and domain-level aggregator files.
 - Multi-profile tests group by concern (`lifecycle`, `scoping`, `runtime`, `observability`, `config import/export`) and re-export through `test_multi_profile_isolation.py`.
 - Startup smoke cases now use explicit concern file names for auth, CORS, stats/batch delete, model health, loadbalance migration, and proxy-key generation.
@@ -57,7 +60,13 @@ uv run pytest tests/ -k "DEF008" -v
 ## ANTI-PATTERNS
 
 - Do not assume SQLite or in-memory DB behavior; these tests exercise PostgreSQL semantics.
+- Do not run pytest from a hand-managed interpreter or stale virtualenv when `uv run` is the supported path.
 - Do not skip migrations in test setup.
 - Do not reuse old DEF IDs for new regressions.
 - Do not scatter one-off test files outside the domain folders when a matching domain already exists.
 - Do not add a new smoke leaf file without wiring it into the domain and top-level aggregators when that path applies.
+
+## NOTES
+
+- Docker must be available locally because `testcontainers[postgres]` boots the PostgreSQL fixture container from `conftest.py`.
+- `../docs/SMOKE_TEST_PLAN.md` is the manual counterpart for end-to-end validation; it should agree with the current `uv run pytest ...` preflight flow.

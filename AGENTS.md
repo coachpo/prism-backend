@@ -1,7 +1,7 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, PostgreSQL-backed, migration-on-startup, and owns operator auth, password reset, proxy API keys, passkeys, realtime broadcasts, loadbalance events, pricing templates, profile-scoped admin flows, and a lifespan-managed background task worker in addition to routing and observability.
+FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, uv-managed from `pyproject.toml` + `uv.lock`, PostgreSQL-backed, migration-on-startup, and owns operator auth, password reset, proxy API keys, passkeys, realtime broadcasts, loadbalance events, pricing templates, profile-scoped admin flows, and a lifespan-managed background task worker in addition to routing and observability.
 
 ## STRUCTURE
 ```
@@ -21,9 +21,11 @@ backend/
 ├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
 ├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
+├── Dockerfile                                   # Runtime image; copies uv and installs from `uv.lock`
 ├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
+├── docker-compose.yml                           # Local PostgreSQL helper
 ├── pyproject.toml                               # Runtime deps, dev dependency group, package data, and `prism-backend`
-└── docker-compose.yml              # Local PostgreSQL helper
+└── uv.lock                                      # Locked dependency graph consumed by `uv sync --locked`
 ```
 
 ## CHILD DOCS
@@ -55,6 +57,7 @@ backend/
 ## WHERE TO LOOK
 
 - Startup + shared clients/workers: `app/main.py`, `app/services/background_tasks.py`
+- Uv-managed packaging, lockfile, and local launcher flow: `pyproject.toml`, `uv.lock`, `../start.sh`, `Dockerfile`, `docker-compose.yml`
 - Startup sequence + auth bifurcation: `app/bootstrap/startup.py`, `app/bootstrap/auth_middleware.py`
 - Scope resolution: `app/dependencies.py`
 - Operator auth, verified email, password reset, proxy API keys, passkeys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/services/webauthn_service.py`, `app/services/webauthn/`, `app/core/auth.py`
@@ -68,6 +71,7 @@ backend/
 ## COMMANDS
 
 ```bash
+uv sync --locked
 uv run pytest tests/ -v
 uv run prism-backend --reload
 docker compose up -d postgres
@@ -76,6 +80,7 @@ docker compose up -d postgres
 ## CONVENTIONS
 
 - Keep handlers and services async; use the shared lifespan `httpx.AsyncClient` instead of per-request clients.
+- Treat `pyproject.toml` plus `uv.lock` as the dependency source of truth, and run backend entrypoints through `uv run` in local development and tests.
 - Keep top-level routers thin when a matching domain folder exists; heavy request logic belongs in `app/routers/*_domains/` or `app/services/*`.
 - Use `selectinload` for relationship-heavy fetches and keep schema contracts aligned with frontend types.
 - Normalize and validate endpoint base URLs before persisting them.
@@ -89,6 +94,7 @@ docker compose up -d postgres
 ## ANTI-PATTERNS
 
 - Do not reintroduce `round_robin`, unsupported providers, proxy chaining, or float-based money values.
+- Do not reintroduce hand-managed backend virtualenv instructions, `pip install -r requirements.txt`, or other non-uv setup paths.
 - Do not leak secrets in audit output or allow blocked headers to sneak back in after custom header merge.
 - Do not let management auth assumptions leak into proxy runtime auth; they are separate enforcement paths.
 - Do not assume management profile overrides apply to runtime proxy traffic.
@@ -101,3 +107,9 @@ docker compose up -d postgres
 - Auth, password-reset, email-delivery, and proxy-key regressions cluster under `tests/smoke_defect_regressions/test_startup_cases/`, especially `tests/smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`.
 - Realtime broadcasting is covered by `tests/test_realtime_broadcast.py`; service-level coverage includes `tests/services/test_webauthn_service.py` and `tests/services/test_background_tasks.py`.
 - For end-to-end behavior checks beyond pytest, use `../docs/SMOKE_TEST_PLAN.md` from the repo root.
+
+## NOTES
+
+- `../start.sh` syncs the backend with `uv sync --locked --python "$BACKEND_PYTHON_BIN"` before running `uv run --no-sync --python "$BACKEND_PYTHON_BIN" prism-backend --reload --port 18000`.
+- `Dockerfile` copies `uv` from `ghcr.io/astral-sh/uv:0.9.8`, installs runtime deps from `uv.lock`, and runs `prism-backend` from `/app/.venv/bin`.
+- `docker-compose.yml` provisions PostgreSQL on host port `15432`; it is a local helper, not a full backend+frontend stack definition.
