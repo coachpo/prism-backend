@@ -21,6 +21,8 @@ backend/
 ├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
 ├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
 ├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
+├── tests/multi_profile_isolation/AGENTS.md      # Selected-vs-active profile isolation suite
+├── tests/smoke_defect_regressions/AGENTS.md     # DEF regressions and startup/runtime edge cases
 ├── Dockerfile                                   # Runtime image; copies uv and installs from `uv.lock`
 ├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
 ├── docker-compose.yml                           # Local PostgreSQL helper
@@ -41,8 +43,11 @@ backend/
 - `app/services/loadbalancer_support/AGENTS.md`: use for recovery-state mutation, attempt planning, and loadbalance event helpers.
 - `app/services/proxy_support/AGENTS.md`: use for upstream URL/header/body/compression/transport helpers behind `proxy_service.py`.
 - `app/services/realtime/AGENTS.md`: use for WebSocket room state, profile/channel subscriptions, and broadcast helpers.
+- `app/services/stats/AGENTS.md`: use for telemetry logging, request-log queries, summary, spending, throughput, and model-metrics helpers behind `stats_service.py`.
 - `app/services/webauthn/AGENTS.md`: use for passkey registration, authentication, and credential management behind `webauthn_service.py`.
 - `tests/AGENTS.md`: use for defect IDs, aggregators, startup/auth regressions, realtime coverage, and container-backed test setup.
+- `tests/smoke_defect_regressions/AGENTS.md`: use for DEF-numbered regressions, startup edge cases, and proxy/runtime recovery coverage.
+- `tests/multi_profile_isolation/AGENTS.md`: use for selected-vs-active profile isolation, observability attribution, and config import/export containment.
 
 ## RUNTIME SEMANTICS
 

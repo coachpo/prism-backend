@@ -11,8 +11,10 @@ tests/
 ├── test_multi_profile_isolation.py    # Top-level isolation aggregator
 ├── test_realtime_broadcast.py         # WebSocket channels and `dashboard.update` payload coverage
 ├── services/                          # Focused service coverage such as WebAuthn and background task manager
-├── smoke_defect_regressions/          # Proxy, config, costing, startup, standalone DEF domains
-└── multi_profile_isolation/           # Lifecycle, scoping, runtime, observability, import/export domains
+├── smoke_defect_regressions/
+│   └── AGENTS.md                      # Proxy, config, costing, startup, and standalone DEF domain map
+└── multi_profile_isolation/
+    └── AGENTS.md                      # Lifecycle, scoping, runtime, observability, and import/export map
 ```
 
 ## WHERE TO LOOK
