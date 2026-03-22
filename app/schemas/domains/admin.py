@@ -9,15 +9,17 @@ from app.schemas.domains.core import AuthType, _HEADER_TOKEN_RE
 
 
 class ConfigEndpointExport(BaseModel):
-    endpoint_id: int
     name: str
     base_url: str
     api_key: str
     position: int | None = Field(default=None, ge=0)
 
 
+class ConfigEndpointImport(ConfigEndpointExport):
+    endpoint_id: int | None = None
+
+
 class ConfigPricingTemplateExport(BaseModel):
-    pricing_template_id: int
     name: str
     description: str | None = None
     pricing_unit: Literal["PER_1M"] = "PER_1M"
@@ -33,10 +35,26 @@ class ConfigPricingTemplateExport(BaseModel):
     version: int = 1
 
 
-class ConfigConnectionExport(BaseModel):
-    connection_id: int
-    endpoint_id: int
+class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
     pricing_template_id: int | None = None
+
+
+class ConfigConnectionExport(BaseModel):
+    endpoint_name: str
+    pricing_template_name: str | None = None
+    is_active: bool = True
+    priority: int = Field(default=0, ge=0)
+    name: str | None = None
+    auth_type: AuthType | None = None
+    custom_headers: dict[str, str] | None = None
+
+
+class ConfigConnectionImport(BaseModel):
+    connection_id: int | None = None
+    endpoint_id: int | None = None
+    endpoint_name: str | None = None
+    pricing_template_id: int | None = None
+    pricing_template_name: str | None = None
     is_active: bool = True
     priority: int = Field(default=0, ge=0)
     name: str | None = None
@@ -57,9 +75,29 @@ class ConfigModelExport(BaseModel):
     connections: list[ConfigConnectionExport] = Field(default_factory=list)
 
 
+class ConfigModelImport(BaseModel):
+    provider_type: str
+    model_id: str
+    display_name: str | None = None
+    model_type: Literal["native", "proxy"] = "native"
+    redirect_to: str | None = None
+    lb_strategy: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = True
+    failover_recovery_cooldown_seconds: int = 60
+    is_enabled: bool = True
+    connections: list[ConfigConnectionImport] = Field(default_factory=list)
+
+
 class ConfigEndpointFxRateExport(BaseModel):
     model_id: str
-    endpoint_id: int
+    endpoint_name: str
+    fx_rate: str
+
+
+class ConfigEndpointFxRateImport(BaseModel):
+    model_id: str
+    endpoint_id: int | None = None
+    endpoint_name: str | None = None
     fx_rate: str
 
 
@@ -67,6 +105,12 @@ class ConfigUserSettingsExport(BaseModel):
     report_currency_code: str = "USD"
     report_currency_symbol: str = "$"
     endpoint_fx_mappings: list[ConfigEndpointFxRateExport] = Field(default_factory=list)
+
+
+class ConfigUserSettingsImport(BaseModel):
+    report_currency_code: str = "USD"
+    report_currency_symbol: str = "$"
+    endpoint_fx_mappings: list[ConfigEndpointFxRateImport] = Field(default_factory=list)
 
 
 class ConfigExportResponse(BaseModel):
@@ -84,10 +128,10 @@ class ConfigExportResponse(BaseModel):
 class ConfigImportRequest(BaseModel):
     version: int
     exported_at: datetime | None = None
-    endpoints: list[ConfigEndpointExport]
-    pricing_templates: list[ConfigPricingTemplateExport]
-    models: list[ConfigModelExport]
-    user_settings: ConfigUserSettingsExport | None = None
+    endpoints: list[ConfigEndpointImport]
+    pricing_templates: list[ConfigPricingTemplateImport]
+    models: list[ConfigModelImport]
+    user_settings: ConfigUserSettingsImport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(
         default_factory=list
     )

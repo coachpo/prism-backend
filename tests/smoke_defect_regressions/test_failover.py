@@ -13,6 +13,7 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 
+
 class TestFailoverRecoveryFieldValidation:
     """Validate failover recovery field validation and config version 2."""
 
@@ -117,8 +118,7 @@ class TestFailoverRecoveryFieldValidation:
             failover_recovery_cooldown_seconds=300,
             connections=[
                 ConfigConnectionExport(
-                    connection_id=1,
-                    endpoint_id=1,
+                    endpoint_name="openai-main",
                 )
             ],
         )
@@ -180,8 +180,8 @@ class TestFailoverRecoveryFieldValidation:
             )
         assert "Input should be 'single' or 'failover'" in str(exc_info.value)
 
-    def test_config_import_rejects_duplicate_connection_id(self):
-        """Config import validation rejects duplicate connection IDs."""
+    def test_config_import_accepts_duplicate_connection_id(self):
+        """Config import validation ignores duplicate connection IDs."""
         from app.routers.config import _validate_import
         from app.schemas.schemas import ConfigImportRequest
 
@@ -225,11 +225,7 @@ class TestFailoverRecoveryFieldValidation:
             }
         )
 
-        with pytest.raises(HTTPException) as exc_info:
-            _validate_import(data)
-
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Duplicate connection_id in import: 1"
+        _validate_import(data)
 
     def test_config_roundtrip(self):
         """Config export/import roundtrip with strict schema and recovery fields."""
@@ -246,7 +242,6 @@ class TestFailoverRecoveryFieldValidation:
             exported_at=datetime.now(timezone.utc),
             endpoints=[
                 ConfigEndpointExport(
-                    endpoint_id=1,
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
@@ -266,8 +261,7 @@ class TestFailoverRecoveryFieldValidation:
                     failover_recovery_cooldown_seconds=180,
                     connections=[
                         ConfigConnectionExport(
-                            connection_id=1,
-                            endpoint_id=1,
+                            endpoint_name="openai-main",
                             is_active=True,
                             priority=0,
                         )
@@ -283,6 +277,7 @@ class TestFailoverRecoveryFieldValidation:
         assert m.lb_strategy == "failover"
         assert m.failover_recovery_enabled is False
         assert m.failover_recovery_cooldown_seconds == 180
+
 
 class TestDEF010_EndpointToggleClearsRecoveryState:
     def _make_connection(self, connection_id: int):
@@ -335,13 +330,18 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         mark_connection_failed(1, connection.id, 60, 10.0, "transient_http")
 
         mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=connection)))
+        mock_db.execute = AsyncMock(
+            return_value=MagicMock(
+                scalar_one_or_none=MagicMock(return_value=connection)
+            )
+        )
         mock_db.delete = AsyncMock()
 
         try:
-            await delete_connection(connection_id=connection.id, db=mock_db, profile_id=1)
+            await delete_connection(
+                connection_id=connection.id, db=mock_db, profile_id=1
+            )
             assert (1, connection.id) not in _recovery_state
             mock_db.delete.assert_awaited_once_with(connection)
         finally:
             _recovery_state.pop((1, connection.id), None)
-

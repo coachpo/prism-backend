@@ -13,6 +13,7 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 
+
 class TestDEF031_StartupUserSettingsSeed:
     """DEF-031 (P0): startup must seed user settings with profile_id."""
 
@@ -83,6 +84,7 @@ class TestDEF031_StartupUserSettingsSeed:
         mock_session.add.assert_not_called()
         mock_session.commit.assert_not_awaited()
 
+
 class TestDEF006_ConfigExportImportFieldCoverage:
     """DEF-006 (P0): config export/import must preserve all mutable fields including custom_headers."""
 
@@ -91,7 +93,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConfigEndpointExport.model_fields.keys())
         expected = {
-            "endpoint_id",
             "name",
             "base_url",
             "api_key",
@@ -104,9 +105,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConfigConnectionExport.model_fields.keys())
         expected = {
-            "connection_id",
-            "endpoint_id",
-            "pricing_template_id",
+            "endpoint_name",
+            "pricing_template_name",
             "is_active",
             "priority",
             "name",
@@ -114,7 +114,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "custom_headers",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
-
 
     def test_export_schema_includes_all_model_fields(self):
         from app.schemas.schemas import ConfigModelExport
@@ -139,8 +138,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         headers = {"X-Custom": "value", "X-Another": "test"}
         connection = ConfigConnectionExport(
-            endpoint_id=1,
-            connection_id=1,
+            endpoint_name="openai-main",
             custom_headers=headers,
             auth_type="openai",
         )
@@ -153,8 +151,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from app.schemas.schemas import ConfigConnectionExport
 
         connection = ConfigConnectionExport(
-            endpoint_id=1,
-            connection_id=2,
+            endpoint_name="openai-main",
             custom_headers=None,
         )
         exported = connection.model_dump(mode="json")
@@ -165,8 +162,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         from app.schemas.schemas import ConfigConnectionExport
 
         connection = ConfigConnectionExport(
-            endpoint_id=1,
-            connection_id=3,
+            endpoint_name="openai-main",
             custom_headers={},
         )
         exported = connection.model_dump(mode="json")
@@ -195,7 +191,6 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             exported_at=datetime.now(timezone.utc),
             endpoints=[
                 ConfigEndpointExport(
-                    endpoint_id=1,
                     name="openai-main",
                     base_url="https://api.openai.com/v1",
                     api_key="sk-test",
@@ -215,8 +210,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     failover_recovery_cooldown_seconds=60,
                     connections=[
                         ConfigConnectionExport(
-                            connection_id=1,
-                            endpoint_id=1,
+                            endpoint_name="openai-main",
                             is_active=True,
                             priority=0,
                             name="Primary",
@@ -241,6 +235,8 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert connection.custom_headers == {"X-Org": "my-org"}
         assert connection.auth_type == "openai"
         assert connection.priority == 0
+        assert connection.endpoint_name == "openai-main"
+
 
 class TestDEF023_ConfigImportReferenceValidation:
     def test_validate_import_accepts_numeric_ids(self):
@@ -287,7 +283,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         _validate_import(data)
 
-    def test_validate_import_rejects_duplicate_connection_ids(self):
+    def test_validate_import_accepts_duplicate_connection_ids(self):
         from app.routers.config import _validate_import
         from app.schemas.schemas import ConfigImportRequest
 
@@ -330,9 +326,45 @@ class TestDEF023_ConfigImportReferenceValidation:
             }
         )
 
-        with pytest.raises(HTTPException) as exc_info:
-            _validate_import(data)
+        _validate_import(data)
 
-        assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "Duplicate connection_id in import: 1"
+    def test_validate_import_accepts_name_references_without_ids(self):
+        from app.routers.config import _validate_import
+        from app.schemas.schemas import ConfigImportRequest
 
+        data = ConfigImportRequest.model_validate(
+            {
+                "version": 2,
+                "endpoints": [
+                    {
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "pricing_templates": [],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4o",
+                        "model_type": "native",
+                        "connections": [
+                            {
+                                "endpoint_name": "openai-main",
+                            }
+                        ],
+                    }
+                ],
+                "user_settings": {
+                    "endpoint_fx_mappings": [
+                        {
+                            "model_id": "gpt-4o",
+                            "endpoint_name": "openai-main",
+                            "fx_rate": "1",
+                        }
+                    ]
+                },
+            }
+        )
+
+        _validate_import(data)

@@ -331,14 +331,13 @@ class TestDEF009_ConnectionDefaultsPersist:
         from app.schemas.schemas import ConfigConnectionExport
 
         export = ConfigConnectionExport(
-            endpoint_id=1,
-            connection_id=1,
-            pricing_template_id=11,
+            endpoint_name="openai-main",
+            pricing_template_name="default-pricing",
         )
-        assert export.pricing_template_id == 11
+        assert export.pricing_template_name == "default-pricing"
 
-        export_default = ConfigConnectionExport(connection_id=2, endpoint_id=1)
-        assert export_default.pricing_template_id is None
+        export_default = ConfigConnectionExport(endpoint_name="openai-main")
+        assert export_default.pricing_template_name is None
 
     @pytest.mark.asyncio
     async def test_create_endpoint_persists_pricing_enabled(self):

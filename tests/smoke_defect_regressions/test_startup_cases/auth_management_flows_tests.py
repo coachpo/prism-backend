@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from http.cookies import SimpleCookie
 import socket
+from typing import cast
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, func, select
@@ -495,7 +497,7 @@ class TestDEF069_AuthSessionLifecycle:
             websocket = _FakeWebSocket(cookies={custom_cookie_name: access_token})
 
             async with AsyncSessionLocal() as session:
-                await websocket_endpoint(websocket, session)
+                await websocket_endpoint(cast(WebSocket, websocket), session)
 
             assert websocket.accepted is True
             assert websocket.close_code is None
@@ -651,7 +653,9 @@ class TestDEF071_ProxyApiKeyHeaderAcceptance:
 
 class TestDEF072_SecretSanitization:
     @pytest.mark.asyncio
-    async def test_endpoint_responses_and_exports_never_return_raw_api_keys(self):
+    async def test_endpoint_responses_hide_raw_api_keys_but_config_export_includes_them(
+        self,
+    ):
         profile_id = await _reset_auth_state()
         transport = ASGITransport(app=app)
         endpoint_name = f"DEF072 endpoint {uuid4().hex[:8]}"
@@ -703,7 +707,7 @@ class TestDEF072_SecretSanitization:
                     for item in export_response.json()["endpoints"]
                     if item["name"] == endpoint_name
                 )
-                assert export_endpoint["api_key"] == ""
+                assert export_endpoint["api_key"] == raw_secret
         finally:
             await _cleanup_auth_state()
 

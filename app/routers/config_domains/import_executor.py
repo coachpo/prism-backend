@@ -80,6 +80,114 @@ def _sorted_import_connections(connections):
     ]
 
 
+def _normalize_reference_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _resolve_endpoint_name(
+    *,
+    context: str,
+    endpoint_id: int | None,
+    endpoint_name: str | None,
+    endpoint_name_to_id: dict[str, int],
+    endpoint_id_to_name: dict[int, str],
+) -> str:
+    resolved_endpoint_name = _normalize_reference_name(endpoint_name)
+    if resolved_endpoint_name is None and endpoint_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{context} must include endpoint_name or endpoint_id",
+        )
+
+    if endpoint_id is not None:
+        mapped_endpoint_name = endpoint_id_to_name.get(endpoint_id)
+        if mapped_endpoint_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{context} references unknown endpoint_id '{endpoint_id}'",
+            )
+        if resolved_endpoint_name is None:
+            resolved_endpoint_name = mapped_endpoint_name
+        elif resolved_endpoint_name != mapped_endpoint_name:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{context} endpoint_name '{resolved_endpoint_name}' does not match "
+                    f"endpoint_id '{endpoint_id}'"
+                ),
+            )
+
+    if resolved_endpoint_name is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{context} must include endpoint_name or endpoint_id",
+        )
+
+    if resolved_endpoint_name not in endpoint_name_to_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{context} references unknown endpoint_name '{resolved_endpoint_name}'",
+        )
+
+    return resolved_endpoint_name
+
+
+def _resolve_pricing_template_id(
+    *,
+    context: str,
+    pricing_template_id: int | None,
+    pricing_template_name: str | None,
+    pricing_template_name_to_id: dict[str, int],
+    pricing_template_id_to_name: dict[int, str],
+) -> int | None:
+    resolved_pricing_template_name = _normalize_reference_name(pricing_template_name)
+    if resolved_pricing_template_name is None and pricing_template_id is None:
+        return None
+
+    if pricing_template_id is not None:
+        mapped_pricing_template_name = pricing_template_id_to_name.get(
+            pricing_template_id
+        )
+        if mapped_pricing_template_name is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{context} references unknown pricing_template_id "
+                    f"'{pricing_template_id}'"
+                ),
+            )
+        if resolved_pricing_template_name is None:
+            resolved_pricing_template_name = mapped_pricing_template_name
+        elif resolved_pricing_template_name != mapped_pricing_template_name:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{context} pricing_template_name '{resolved_pricing_template_name}' "
+                    f"does not match pricing_template_id '{pricing_template_id}'"
+                ),
+            )
+
+    if resolved_pricing_template_name is None:
+        return None
+
+    mapped_pricing_template_id = pricing_template_name_to_id.get(
+        resolved_pricing_template_name
+    )
+    if mapped_pricing_template_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{context} references unknown pricing_template_name "
+                f"'{resolved_pricing_template_name}'"
+            ),
+        )
+
+    return mapped_pricing_template_id
+
+
 async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
 ) -> ConfigImportResponse:
@@ -139,7 +247,8 @@ async def execute_import_payload(
     fx_setting_id_allocator = await _build_id_allocator(db, EndpointFxRateSetting)
     header_rule_id_allocator = await _build_id_allocator(db, HeaderBlocklistRule)
 
-    endpoint_id_map: dict[int, int] = {}
+    endpoint_name_to_id: dict[str, int] = {}
+    endpoint_id_to_name: dict[int, str] = {}
     endpoints_count = 0
     sorted_endpoints = sorted(
         enumerate(data.endpoints),
@@ -150,10 +259,11 @@ async def execute_import_payload(
     )
 
     for normalized_position, (_, endpoint_data) in enumerate(sorted_endpoints):
+        endpoint_name = endpoint_data.name.strip()
         endpoint = Endpoint(
             id=endpoint_id_allocator.take(),
             profile_id=profile_id,
-            name=endpoint_data.name.strip(),
+            name=endpoint_name,
             base_url=normalize_base_url(endpoint_data.base_url),
             api_key=encrypt_secret(endpoint_data.api_key),
             position=normalized_position,
@@ -161,16 +271,21 @@ async def execute_import_payload(
         db.add(endpoint)
         await db.flush()
 
-        endpoint_id_map[endpoint_data.endpoint_id] = endpoint.id
+        endpoint_name_to_id[endpoint_name] = endpoint.id
+        endpoint_import_id = endpoint_data.endpoint_id
+        if endpoint_import_id is not None:
+            endpoint_id_to_name[endpoint_import_id] = endpoint_name
         endpoints_count += 1
 
-    template_id_map: dict[int, int] = {}
+    pricing_template_name_to_id: dict[str, int] = {}
+    pricing_template_id_to_name: dict[int, str] = {}
     templates_count = 0
     for template_data in data.pricing_templates:
+        template_name = template_data.name.strip()
         template = PricingTemplate(
             id=template_id_allocator.take(),
             profile_id=profile_id,
-            name=template_data.name.strip(),
+            name=template_name,
             description=template_data.description,
             pricing_unit="PER_1M",
             pricing_currency_code=template_data.pricing_currency_code,
@@ -188,11 +303,14 @@ async def execute_import_payload(
         db.add(template)
         await db.flush()
 
-        template_id_map[template_data.pricing_template_id] = template.id
+        pricing_template_name_to_id[template_name] = template.id
+        template_import_id = template_data.pricing_template_id
+        if template_import_id is not None:
+            pricing_template_id_to_name[template_import_id] = template_name
         templates_count += 1
 
     connections_count = 0
-    imported_connection_pairs: set[tuple[str, int]] = set()
+    imported_connection_pairs: set[tuple[str, str]] = set()
 
     for model in data.models:
         is_proxy = model.model_type == "proxy"
@@ -222,26 +340,29 @@ async def execute_import_payload(
         for normalized_priority, connection_data in enumerate(
             _sorted_import_connections(model.connections)
         ):
-            mapped_endpoint_id = endpoint_id_map.get(connection_data.endpoint_id)
-            if mapped_endpoint_id is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Connection for model '{model.model_id}' references unknown "
-                        f"endpoint_id '{connection_data.endpoint_id}'"
-                    ),
-                )
+            resolved_endpoint_name = _resolve_endpoint_name(
+                context=f"Connection for model '{model.model_id}'",
+                endpoint_id=connection_data.endpoint_id,
+                endpoint_name=connection_data.endpoint_name,
+                endpoint_name_to_id=endpoint_name_to_id,
+                endpoint_id_to_name=endpoint_id_to_name,
+            )
+            mapped_endpoint_id = endpoint_name_to_id[resolved_endpoint_name]
+
+            mapped_pricing_template_id = _resolve_pricing_template_id(
+                context=f"Connection for model '{model.model_id}'",
+                pricing_template_id=connection_data.pricing_template_id,
+                pricing_template_name=connection_data.pricing_template_name,
+                pricing_template_name_to_id=pricing_template_name_to_id,
+                pricing_template_id_to_name=pricing_template_id_to_name,
+            )
 
             connection = Connection(
                 id=connection_id_allocator.take(),
                 model_config_id=model_config.id,
                 profile_id=profile_id,
                 endpoint_id=mapped_endpoint_id,
-                pricing_template_id=(
-                    template_id_map[connection_data.pricing_template_id]
-                    if connection_data.pricing_template_id is not None
-                    else None
-                ),
+                pricing_template_id=mapped_pricing_template_id,
                 is_active=connection_data.is_active,
                 priority=normalized_priority,
                 name=connection_data.name,
@@ -255,7 +376,7 @@ async def execute_import_payload(
             )
             db.add(connection)
             connections_count += 1
-            imported_connection_pairs.add((model.model_id, connection_data.endpoint_id))
+            imported_connection_pairs.add((model.model_id, resolved_endpoint_name))
     await db.flush()
 
     user_settings = (
@@ -279,9 +400,19 @@ async def execute_import_payload(
         user_settings.report_currency_code = data.user_settings.report_currency_code
         user_settings.report_currency_symbol = data.user_settings.report_currency_symbol
         for mapping in data.user_settings.endpoint_fx_mappings:
-            if (mapping.model_id, mapping.endpoint_id) not in imported_connection_pairs:
+            resolved_endpoint_name = _resolve_endpoint_name(
+                context=f"FX mapping for model '{mapping.model_id}'",
+                endpoint_id=mapping.endpoint_id,
+                endpoint_name=mapping.endpoint_name,
+                endpoint_name_to_id=endpoint_name_to_id,
+                endpoint_id_to_name=endpoint_id_to_name,
+            )
+            if (
+                mapping.model_id,
+                resolved_endpoint_name,
+            ) not in imported_connection_pairs:
                 continue
-            mapped_endpoint_id = endpoint_id_map.get(mapping.endpoint_id)
+            mapped_endpoint_id = endpoint_name_to_id.get(resolved_endpoint_name)
             if mapped_endpoint_id is None:
                 continue
             db.add(
