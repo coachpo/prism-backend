@@ -41,7 +41,7 @@ def _build_attempt_target(
 
     return ProxyAttemptTarget(
         connection=connection,
-        description=connection.name,
+        description=connection.name or f"Connection {connection.id}",
         endpoint_body=setup.rewritten_body,
         headers=deps.build_upstream_headers_fn(
             connection,
@@ -82,12 +82,9 @@ async def execute_proxy_attempts(
             continue
 
         if not await endpoint_is_active_now_fn(db, connection.id):
-            deps.mark_connection_recovered_fn(
+            await deps.clear_current_state_fn(
                 profile_id,
                 connection.id,
-                setup.model_id,
-                connection.endpoint_id,
-                setup.provider_id,
             )
             logger.info(
                 "Skipping endpoint %d because it is currently disabled",

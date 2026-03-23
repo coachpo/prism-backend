@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_active_profile_id
 from app.services.loadbalancer import (
     build_attempt_plan,
+    clear_current_state,
     get_model_config_with_connections,
     mark_connection_failed,
     mark_connection_recovered,
@@ -71,6 +72,7 @@ async def _handle_proxy(
         deps=ProxyRuntimeDependencies(
             build_upstream_headers_fn=build_upstream_headers,
             build_upstream_url_fn=build_upstream_url,
+            clear_current_state_fn=clear_current_state,
             filter_response_headers_fn=filter_response_headers,
             log_request_fn=log_request,
             mark_connection_failed_fn=mark_connection_failed,

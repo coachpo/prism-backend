@@ -295,10 +295,8 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
     async def test_update_endpoint_disable_clears_recovery_state(self):
         from app.routers.connections import update_connection
         from app.schemas.schemas import ConnectionUpdate
-        from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(401)
-        mark_connection_failed(1, connection.id, 60, 10.0, "transient_http")
 
         mock_db = AsyncMock()
         mock_db.get = AsyncMock(return_value=connection)
@@ -309,25 +307,24 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         )
         mock_db.flush = AsyncMock()
 
-        try:
+        with patch(
+            "app.routers.connections.clear_current_state", AsyncMock()
+        ) as clear_state:
             await update_connection(
                 connection_id=connection.id,
                 body=ConnectionUpdate(is_active=False),
                 db=mock_db,
                 profile_id=1,
             )
-            assert connection.is_active is False
-            assert (1, connection.id) not in _recovery_state
-        finally:
-            _recovery_state.pop((1, connection.id), None)
+
+        assert connection.is_active is False
+        clear_state.assert_awaited_once_with(1, connection.id)
 
     @pytest.mark.asyncio
     async def test_delete_endpoint_clears_recovery_state(self):
         from app.routers.connections import delete_connection
-        from app.services.loadbalancer import _recovery_state, mark_connection_failed
 
         connection = self._make_connection(402)
-        mark_connection_failed(1, connection.id, 60, 10.0, "transient_http")
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(
@@ -337,11 +334,95 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         )
         mock_db.delete = AsyncMock()
 
-        try:
+        with patch(
+            "app.routers.connections.clear_current_state", AsyncMock()
+        ) as clear_state:
             await delete_connection(
                 connection_id=connection.id, db=mock_db, profile_id=1
             )
-            assert (1, connection.id) not in _recovery_state
-            mock_db.delete.assert_awaited_once_with(connection)
-        finally:
-            _recovery_state.pop((1, connection.id), None)
+
+        clear_state.assert_awaited_once_with(1, connection.id)
+        mock_db.delete.assert_awaited_once_with(connection)
+
+
+class TestLoadbalanceCurrentStateContracts:
+    @pytest.mark.asyncio
+    async def test_current_state_list_returns_derived_states(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+
+        from app.routers.loadbalance import list_loadbalance_current_state
+
+        blocked_until = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        probe_eligible = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        created_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        updated_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
+
+        mock_db = AsyncMock()
+        mock_db.scalar = AsyncMock(return_value=11)
+
+        rows = [
+            SimpleNamespace(
+                connection_id=1,
+                consecutive_failures=1,
+                last_failure_kind="timeout",
+                last_cooldown_seconds=0,
+                blocked_until_at=None,
+                probe_eligible_logged=False,
+                created_at=created_at,
+                updated_at=updated_at,
+            ),
+            SimpleNamespace(
+                connection_id=2,
+                consecutive_failures=3,
+                last_failure_kind="transient_http",
+                last_cooldown_seconds=30,
+                blocked_until_at=blocked_until,
+                probe_eligible_logged=False,
+                created_at=created_at,
+                updated_at=updated_at,
+            ),
+            SimpleNamespace(
+                connection_id=3,
+                consecutive_failures=4,
+                last_failure_kind="timeout",
+                last_cooldown_seconds=45,
+                blocked_until_at=probe_eligible,
+                probe_eligible_logged=True,
+                created_at=created_at,
+                updated_at=updated_at,
+            ),
+        ]
+
+        with patch(
+            "app.routers.loadbalance.list_current_states_for_model",
+            AsyncMock(return_value=rows),
+        ):
+            response = await list_loadbalance_current_state(
+                db=mock_db,
+                profile_id=5,
+                model_config_id=11,
+            )
+
+        assert [item.state for item in response.items] == [
+            "counting",
+            "blocked",
+            "probe_eligible",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_current_state_reset_is_idempotent(self):
+        from app.routers.loadbalance import reset_loadbalance_current_state
+
+        with patch(
+            "app.routers.loadbalance.clear_current_state",
+            AsyncMock(return_value=False),
+        ) as clear_current_state:
+            response = await reset_loadbalance_current_state(
+                connection_id=44,
+                profile_id=8,
+            )
+
+        clear_current_state.assert_awaited_once_with(8, 44)
+        assert response.connection_id == 44
+        assert response.cleared is False

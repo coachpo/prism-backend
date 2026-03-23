@@ -17,7 +17,6 @@ class TestDEF062_NonFailover4xxRecoveryState:
         from starlette.requests import Request
         import httpx
         from app.routers.proxy import _handle_proxy
-        from app.services.loadbalancer import _recovery_state
 
         class DummyHttpClient:
             def build_request(self, method: str, upstream_url: str, **kwargs):
@@ -88,56 +87,49 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.failover_recovery_enabled = True
         model_config.failover_recovery_cooldown_seconds = 60
 
-        state_key = (1, connection.id)
-        _recovery_state[state_key] = {
-            "consecutive_failures": 3,
-            "blocked_until_mono": 1234.0,
-            "last_cooldown_seconds": 120.0,
-            "last_failure_kind": "transient_http",
-            "probe_eligible_logged": False,
-        }
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
 
-        try:
-            mock_rules_result = MagicMock()
-            mock_rules_result.scalars.return_value.all.return_value = []
-            mock_db = AsyncMock()
-            mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        with (
+            patch(
+                "app.routers.proxy.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy.build_attempt_plan",
+                AsyncMock(return_value=[connection]),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch(
+                "app.routers.proxy.mark_connection_failed", AsyncMock()
+            ) as mark_failed,
+            patch(
+                "app.routers.proxy.mark_connection_recovered", AsyncMock()
+            ) as mark_recovered,
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
 
-            with (
-                patch(
-                    "app.routers.proxy.get_model_config_with_connections",
-                    AsyncMock(return_value=model_config),
-                ),
-                patch(
-                    "app.routers.proxy.build_attempt_plan",
-                    return_value=[connection],
-                ),
-                patch(
-                    "app.routers.proxy._endpoint_is_active_now",
-                    AsyncMock(return_value=True),
-                ),
-                patch(
-                    "app.routers.proxy.load_costing_settings",
-                    AsyncMock(return_value=MagicMock()),
-                ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
-                patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
-                patch("app.routers.proxy.record_audit_log", AsyncMock()),
-            ):
-                response = await _handle_proxy(
-                    request=request,
-                    db=mock_db,
-                    raw_body=raw_body,
-                    request_path="/v1/chat/completions",
-                    profile_id=1,
-                )
-
-            assert response.status_code == 404
-            assert state_key in _recovery_state
-            assert _recovery_state[state_key]["consecutive_failures"] == 3
-            assert _recovery_state[state_key]["blocked_until_mono"] == 1234.0
-        finally:
-            _recovery_state.pop(state_key, None)
+        assert response.status_code == 404
+        mark_failed.assert_not_awaited()
+        mark_recovered.assert_not_awaited()
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:
@@ -190,7 +182,6 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         )
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer import (
-            _recovery_state,
             build_attempt_plan as real_build_attempt_plan,
         )
 
@@ -331,8 +322,15 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
                 toggle_applied = False
 
-                def build_plan_with_assert(profile_id, model_config, now_mono):
-                    plan = real_build_attempt_plan(profile_id, model_config, now_mono)
+                async def build_plan_with_assert(
+                    current_db, profile_id, model_config, now_at
+                ):
+                    plan = await real_build_attempt_plan(
+                        current_db,
+                        profile_id,
+                        model_config,
+                        now_at,
+                    )
                     assert [ep.id for ep in plan] == [primary_id, secondary_id]
                     return plan
 
@@ -386,7 +384,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 assert primary_row.scalar_one() is False
                 assert secondary_row.scalar_one() is True
         finally:
-            _recovery_state.clear()
+            pass
 
 
 class TestDEF021_StreamingCancellationResilience:

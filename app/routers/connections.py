@@ -18,6 +18,7 @@ from app.schemas.schemas import (
     HealthCheckResponse,
 )
 from app.services.loadbalancer import mark_connection_recovered
+from app.services.loadbalancer import clear_current_state
 from app.services.proxy_service import (
     build_upstream_headers,
 )
@@ -60,6 +61,7 @@ router = APIRouter(tags=["connections"])
 
 def _crud_deps() -> ConnectionCrudDependencies:
     return ConnectionCrudDependencies(
+        clear_current_state_fn=clear_current_state,
         create_endpoint_from_inline_fn=_create_endpoint_from_inline,
         ensure_model_config_ids_exist_fn=_ensure_model_config_ids_exist,
         list_ordered_connections_fn=_list_ordered_connections,
@@ -67,7 +69,6 @@ def _crud_deps() -> ConnectionCrudDependencies:
         load_connection_or_404_fn=_load_connection_or_404,
         load_model_or_404_fn=_load_model_or_404,
         lock_profile_row_fn=_lock_profile_row,
-        mark_connection_recovered_fn=mark_connection_recovered,
         normalize_connection_priorities_fn=_normalize_connection_priorities,
         serialize_custom_headers_fn=_serialize_custom_headers,
         validate_pricing_template_id_fn=_validate_pricing_template_id,

@@ -1,13 +1,19 @@
 import random
+from datetime import datetime, timedelta
 
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+
+from app.core.database import AsyncSessionLocal
+from app.core.time import ensure_utc_datetime, utc_now
+from app.models.models import LoadbalanceCurrentState
 from app.services.loadbalancer_support.events import (
     record_failed_transition,
     record_recovered_transition,
 )
 from app.services.loadbalancer_support.state import (
     FailureKind,
-    RecoveryStateEntry,
-    _recovery_state,
+    current_state_to_recovery_entry,
     get_loadbalancer_settings,
 )
 
@@ -46,105 +52,126 @@ def _apply_jitter(cooldown_seconds: float) -> float:
     return cooldown_seconds * jitter_multiplier
 
 
-def _build_recovery_state_entry(
-    *,
-    consecutive_failures: int,
-    blocked_until_mono: float | None,
-    cooldown_seconds: float,
-    failure_kind: FailureKind,
-) -> RecoveryStateEntry:
-    return {
-        "consecutive_failures": consecutive_failures,
-        "blocked_until_mono": blocked_until_mono,
-        "last_cooldown_seconds": cooldown_seconds,
-        "last_failure_kind": failure_kind,
-        "probe_eligible_logged": False,
-    }
-
-
-def mark_connection_failed(
+async def mark_connection_failed(
     profile_id: int,
     connection_id: int,
     base_cooldown_seconds: float,
-    now_mono: float,
     failure_kind: FailureKind,
     model_id: str | None = None,
     endpoint_id: int | None = None,
     provider_id: int | None = None,
+    now_at: datetime | None = None,
 ) -> None:
-    key = (profile_id, connection_id)
-    previous_state = _recovery_state.get(key)
-    previous_blocked_until = (
-        previous_state["blocked_until_mono"] if previous_state is not None else None
-    )
-    consecutive_failures = (
-        previous_state["consecutive_failures"] if previous_state is not None else 0
-    ) + 1
+    normalized_now = ensure_utc_datetime(now_at) or utc_now()
 
-    base_cooldown = _compute_base_cooldown(
-        base_cooldown_seconds=base_cooldown_seconds,
-        consecutive_failures=consecutive_failures,
-        failure_kind=failure_kind,
-    )
-    cooldown_seconds = _apply_jitter(base_cooldown)
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            insert(LoadbalanceCurrentState)
+            .values(
+                profile_id=profile_id,
+                connection_id=connection_id,
+                consecutive_failures=0,
+                last_failure_kind=None,
+                last_cooldown_seconds=0.0,
+                blocked_until_at=None,
+                probe_eligible_logged=False,
+                created_at=normalized_now,
+                updated_at=normalized_now,
+            )
+            .on_conflict_do_nothing(index_elements=["profile_id", "connection_id"])
+        )
+        result = await session.execute(
+            select(LoadbalanceCurrentState)
+            .where(
+                LoadbalanceCurrentState.profile_id == profile_id,
+                LoadbalanceCurrentState.connection_id == connection_id,
+            )
+            .with_for_update()
+        )
+        current_state = result.scalar_one()
+        previous_blocked_until = current_state.blocked_until_at
+        consecutive_failures = current_state.consecutive_failures + 1
 
-    if cooldown_seconds <= 0.0:
-        _recovery_state[key] = _build_recovery_state_entry(
+        base_cooldown = _compute_base_cooldown(
+            base_cooldown_seconds=base_cooldown_seconds,
             consecutive_failures=consecutive_failures,
-            blocked_until_mono=None,
-            cooldown_seconds=0.0,
             failure_kind=failure_kind,
         )
-        record_failed_transition(
-            event_type="not_opened",
-            profile_id=profile_id,
-            connection_id=connection_id,
-            failure_kind=failure_kind,
-            consecutive_failures=consecutive_failures,
-            cooldown_seconds=0.0,
-            blocked_until_mono=None,
-            model_id=model_id,
-            endpoint_id=endpoint_id,
-            provider_id=provider_id,
-        )
-        return
+        cooldown_seconds = _apply_jitter(base_cooldown)
 
-    blocked_until = now_mono + cooldown_seconds
-    transition = "opened"
-    if previous_blocked_until is not None and now_mono < previous_blocked_until:
-        transition = "extended"
+        current_state.consecutive_failures = consecutive_failures
+        current_state.last_failure_kind = failure_kind
+        current_state.last_cooldown_seconds = max(cooldown_seconds, 0.0)
+        current_state.probe_eligible_logged = False
 
-    _recovery_state[key] = _build_recovery_state_entry(
-        consecutive_failures=consecutive_failures,
-        blocked_until_mono=blocked_until,
-        cooldown_seconds=cooldown_seconds,
-        failure_kind=failure_kind,
-    )
+        if cooldown_seconds <= 0.0:
+            current_state.blocked_until_at = None
+            snapshot = current_state_to_recovery_entry(current_state)
+            await session.commit()
+            record_failed_transition(
+                event_type="not_opened",
+                profile_id=profile_id,
+                connection_id=connection_id,
+                failure_kind=failure_kind,
+                consecutive_failures=consecutive_failures,
+                cooldown_seconds=0.0,
+                blocked_until_at=None,
+                model_id=model_id,
+                endpoint_id=endpoint_id,
+                provider_id=provider_id,
+            )
+            return
+
+        blocked_until_at = normalized_now + timedelta(seconds=cooldown_seconds)
+        transition = "opened"
+        if (
+            previous_blocked_until is not None
+            and normalized_now < previous_blocked_until
+        ):
+            transition = "extended"
+
+        current_state.blocked_until_at = blocked_until_at
+        snapshot = current_state_to_recovery_entry(current_state)
+        await session.commit()
+
     record_failed_transition(
         event_type=transition,
         profile_id=profile_id,
         connection_id=connection_id,
         failure_kind=failure_kind,
-        consecutive_failures=consecutive_failures,
-        cooldown_seconds=cooldown_seconds,
-        blocked_until_mono=blocked_until,
+        consecutive_failures=snapshot["consecutive_failures"],
+        cooldown_seconds=snapshot["last_cooldown_seconds"],
+        blocked_until_at=snapshot["blocked_until_at"],
         model_id=model_id,
         endpoint_id=endpoint_id,
         provider_id=provider_id,
     )
 
 
-def mark_connection_recovered(
+async def mark_connection_recovered(
     profile_id: int,
     connection_id: int,
     model_id: str | None = None,
     endpoint_id: int | None = None,
     provider_id: int | None = None,
 ) -> None:
-    key = (profile_id, connection_id)
-    state = _recovery_state.pop(key, None)
-    if state is None:
-        return
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(LoadbalanceCurrentState)
+            .where(
+                LoadbalanceCurrentState.profile_id == profile_id,
+                LoadbalanceCurrentState.connection_id == connection_id,
+            )
+            .with_for_update()
+        )
+        current_state = result.scalar_one_or_none()
+        if current_state is None:
+            await session.rollback()
+            return
+
+        state = current_state_to_recovery_entry(current_state)
+        await session.delete(current_state)
+        await session.commit()
 
     record_recovered_transition(
         profile_id=profile_id,

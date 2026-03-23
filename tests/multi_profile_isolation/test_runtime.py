@@ -20,13 +20,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from sqlalchemy import select, func
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from app.core.database import AsyncSessionLocal
 from app.models.models import (
     Profile,
     Provider,
     ModelConfig,
     Endpoint,
     Connection,
+    LoadbalanceCurrentState,
     UserSetting,
     EndpointFxRateSetting,
     RequestLog,
@@ -57,6 +60,7 @@ from app.services.stats_service import (
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+
 
 class TestProxyRuntimeIsolation:
     """FR-003: Proxy Runtime Isolation"""
@@ -110,6 +114,7 @@ class TestProxyRuntimeIsolation:
             db=mock_db, model_id="gpt-4-alias", profile_id=1
         )
 
+        assert resolved is not None
         assert resolved.profile_id == 1
         assert resolved.model_id == "gpt-4-alias"
 
@@ -130,41 +135,124 @@ class TestProxyRuntimeIsolation:
 
         assert resolved is None
 
+
 class TestFailoverRecoveryStateIsolation:
-    """FR-005: In-Memory State Isolation"""
-
     @pytest.mark.asyncio
-    async def test_recovery_state_keyed_by_profile_and_connection(self):
-        """Failover recovery state is keyed by (profile_id, connection_id)."""
-        from app.services.loadbalancer import _recovery_state
-
-        # Profile 1, connection 10
-        key1 = (1, 10)
-        _recovery_state[key1] = {
-            "consecutive_failures": 2,
-            "blocked_until_mono": 120.0,
-            "last_cooldown_seconds": 60.0,
-            "last_failure_kind": "transient_http",
-            "probe_eligible_logged": False,
-        }
-
-        # Profile 2, connection 10 (same connection ID, different profile)
-        key2 = (2, 10)
-        _recovery_state[key2] = {
-            "consecutive_failures": 4,
-            "blocked_until_mono": 240.0,
-            "last_cooldown_seconds": 120.0,
-            "last_failure_kind": "timeout",
-            "probe_eligible_logged": True,
-        }
-
-        # Both can coexist without collision
-        assert key1 in _recovery_state
-        assert key2 in _recovery_state
-        assert (
-            _recovery_state[key1]["last_cooldown_seconds"]
-            != _recovery_state[key2]["last_cooldown_seconds"]
+    async def test_current_state_reads_are_profile_scoped(self):
+        from app.services.loadbalancer_support.state import (
+            get_current_states_for_connections,
         )
-        assert _recovery_state[key1]["last_failure_kind"] == "transient_http"
-        assert _recovery_state[key2]["last_failure_kind"] == "timeout"
 
+        suffix = uuid4().hex[:8]
+
+        async with AsyncSessionLocal() as session:
+            provider = Provider(
+                name=f"OpenAI Isolation {suffix}",
+                provider_type="openai",
+                audit_enabled=False,
+                audit_capture_bodies=False,
+            )
+            profile_one = Profile(
+                name=f"Isolation One {suffix}", is_active=False, version=0
+            )
+            profile_two = Profile(
+                name=f"Isolation Two {suffix}", is_active=False, version=0
+            )
+            model_one = ModelConfig(
+                provider=provider,
+                profile=profile_one,
+                model_id=f"iso-model-one-{suffix}",
+                display_name="Isolation Model One",
+                model_type="native",
+                lb_strategy="failover",
+                is_enabled=True,
+            )
+            model_two = ModelConfig(
+                provider=provider,
+                profile=profile_two,
+                model_id=f"iso-model-two-{suffix}",
+                display_name="Isolation Model Two",
+                model_type="native",
+                lb_strategy="failover",
+                is_enabled=True,
+            )
+            endpoint_one = Endpoint(
+                profile=profile_one,
+                name=f"endpoint-one-{suffix}",
+                base_url="https://one.example.com/v1",
+                api_key="sk-one",
+                position=0,
+            )
+            endpoint_two = Endpoint(
+                profile=profile_two,
+                name=f"endpoint-two-{suffix}",
+                base_url="https://two.example.com/v1",
+                api_key="sk-two",
+                position=0,
+            )
+            connection_one = Connection(
+                profile=profile_one,
+                model_config_rel=model_one,
+                endpoint_rel=endpoint_one,
+                is_active=True,
+                priority=0,
+                name="one",
+            )
+            connection_two = Connection(
+                profile=profile_two,
+                model_config_rel=model_two,
+                endpoint_rel=endpoint_two,
+                is_active=True,
+                priority=0,
+                name="two",
+            )
+
+            session.add_all(
+                [
+                    provider,
+                    profile_one,
+                    profile_two,
+                    model_one,
+                    model_two,
+                    endpoint_one,
+                    endpoint_two,
+                    connection_one,
+                    connection_two,
+                ]
+            )
+            await session.commit()
+            await session.refresh(connection_one)
+            await session.refresh(connection_two)
+
+            session.add_all(
+                [
+                    LoadbalanceCurrentState(
+                        profile_id=profile_one.id,
+                        connection_id=connection_one.id,
+                        consecutive_failures=2,
+                        last_failure_kind="transient_http",
+                        last_cooldown_seconds=60.0,
+                        probe_eligible_logged=False,
+                    ),
+                    LoadbalanceCurrentState(
+                        profile_id=profile_two.id,
+                        connection_id=connection_two.id,
+                        consecutive_failures=4,
+                        last_failure_kind="timeout",
+                        last_cooldown_seconds=120.0,
+                        probe_eligible_logged=True,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            rows = await get_current_states_for_connections(
+                session,
+                profile_id=profile_one.id,
+                connection_ids=[connection_one.id, connection_two.id],
+            )
+
+        assert list(rows) == [connection_one.id]
+        assert float(rows[connection_one.id].last_cooldown_seconds) == 60.0
+        assert rows[connection_one.id].last_failure_kind == "transient_http"

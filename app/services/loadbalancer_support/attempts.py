@@ -1,6 +1,15 @@
+from datetime import datetime
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, ModelConfig
 from app.services.loadbalancer_support.events import record_probe_eligible_transition
-from app.services.loadbalancer_support.state import _recovery_state, logger
+from app.services.loadbalancer_support.state import (
+    get_current_states_for_connections,
+    logger,
+    mark_probe_eligible_logged,
+)
 
 
 def get_active_connections(model_config: ModelConfig) -> list[Connection]:
@@ -25,10 +34,11 @@ def _failover_sort_key(connection: Connection) -> tuple[bool, int, int]:
     return (connection.health_status == "unhealthy", connection.priority, connection.id)
 
 
-def build_attempt_plan(
+async def build_attempt_plan(
+    db: AsyncSession,
     profile_id: int,
     model_config: ModelConfig,
-    now_mono: float,
+    now_at: datetime | None = None,
 ) -> list[Connection]:
     active = get_active_connections(model_config)
     if not active:
@@ -57,31 +67,42 @@ def build_attempt_plan(
         )
         return ordered_active
 
+    normalized_now = ensure_utc_datetime(now_at) or utc_now()
+    state_by_connection_id = await get_current_states_for_connections(
+        db,
+        profile_id=profile_id,
+        connection_ids=[connection.id for connection in ordered_active],
+    )
+
     attempt_plan: list[Connection] = []
     blocked_connection_ids: list[int] = []
 
     for connection in ordered_active:
-        key = (profile_id, connection.id)
-        state = _recovery_state.get(key)
-        if state is None:
+        current_state = state_by_connection_id.get(connection.id)
+        if current_state is None:
             attempt_plan.append(connection)
             continue
 
-        blocked_until = state["blocked_until_mono"]
-        if blocked_until is not None and now_mono < blocked_until:
+        blocked_until_at = ensure_utc_datetime(current_state.blocked_until_at)
+        if blocked_until_at is not None and normalized_now < blocked_until_at:
             blocked_connection_ids.append(connection.id)
             continue
 
-        if blocked_until is not None and not state["probe_eligible_logged"]:
-            state["probe_eligible_logged"] = True
-            record_probe_eligible_transition(
+        if blocked_until_at is not None and not current_state.probe_eligible_logged:
+            claimed_state = await mark_probe_eligible_logged(
                 profile_id=profile_id,
                 connection_id=connection.id,
-                state=state,
-                model_id=model_config.model_id,
-                endpoint_id=connection.endpoint_id,
-                provider_id=model_config.provider_id,
+                now_at=normalized_now,
             )
+            if claimed_state is not None:
+                record_probe_eligible_transition(
+                    profile_id=profile_id,
+                    connection_id=connection.id,
+                    state=claimed_state,
+                    model_id=model_config.model_id,
+                    endpoint_id=connection.endpoint_id,
+                    provider_id=model_config.provider_id,
+                )
 
         attempt_plan.append(connection)
 

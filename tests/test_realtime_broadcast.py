@@ -18,7 +18,6 @@ from app.services.loadbalancer_support.recovery import (
     mark_connection_failed,
     mark_connection_recovered,
 )
-from app.services.loadbalancer_support.state import _recovery_state
 from app.services.audit_service import (
     AUDIT_LOG_MAX_RETRIES,
     AUDIT_LOG_RETRY_DELAY_SECONDS,
@@ -47,6 +46,10 @@ def make_session_context(session: AsyncMock) -> AsyncMock:
     return session_ctx
 
 
+def as_websocket(mock_websocket: MockWebSocket) -> WebSocket:
+    return cast(WebSocket, cast(object, mock_websocket))
+
+
 def test_supported_realtime_channels_only_include_dashboard():
     assert SUPPORTED_REALTIME_CHANNELS == {"dashboard"}
 
@@ -54,7 +57,7 @@ def test_supported_realtime_channels_only_include_dashboard():
 @pytest.mark.asyncio
 async def test_connection_manager_supports_dashboard_subscriptions():
     manager = ConnectionManager()
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
 
     connection_id = await manager.connect(websocket)
 
@@ -79,7 +82,7 @@ async def test_connection_manager_supports_dashboard_subscriptions():
 @pytest.mark.asyncio
 async def test_disconnect_cleans_up_active_subscription_membership():
     manager = ConnectionManager()
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
 
     connection_id = await manager.connect(websocket)
     assert await manager.subscribe(connection_id, 7, "dashboard") is True
@@ -94,7 +97,7 @@ async def test_disconnect_cleans_up_active_subscription_membership():
 @pytest.mark.asyncio
 async def test_broadcast_to_profile_removes_connection_when_send_fails():
     manager = ConnectionManager()
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
     send_json = cast(AsyncMock, websocket.send_json)
     send_json.side_effect = RuntimeError("socket closed")
 
@@ -115,7 +118,7 @@ async def test_broadcast_to_profile_removes_connection_when_send_fails():
 
 @pytest.mark.asyncio
 async def test_websocket_endpoint_returns_after_failed_initial_control_send():
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
     websocket.receive_json = AsyncMock(
         side_effect=AssertionError("route should stop after failed send")
     )
@@ -167,7 +170,7 @@ async def test_websocket_endpoint_returns_after_failed_initial_control_send():
 @pytest.mark.asyncio
 async def test_broadcast_to_profile_does_not_retry_stale_connection_after_failed_send():
     manager = ConnectionManager()
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
     send_json = cast(AsyncMock, websocket.send_json)
     send_json.side_effect = RuntimeError("socket closed")
 
@@ -195,7 +198,7 @@ async def test_broadcast_to_profile_does_not_retry_stale_connection_after_failed
 @pytest.mark.asyncio
 async def test_send_to_connection_returns_false_and_cleans_up_when_send_fails():
     manager = ConnectionManager()
-    websocket = cast(WebSocket, MockWebSocket())
+    websocket = as_websocket(MockWebSocket())
     send_json = cast(AsyncMock, websocket.send_json)
     send_json.side_effect = RuntimeError("socket closed")
 
@@ -1073,7 +1076,7 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
             failure_kind="timeout",
             consecutive_failures=4,
             cooldown_seconds=30.0,
-            blocked_until_mono=99.5,
+            blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             model_id="gpt-4o-mini",
             endpoint_id=12,
             provider_id=1,
@@ -1122,7 +1125,7 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
             failure_kind="timeout",
             consecutive_failures=4,
             cooldown_seconds=30.0,
-            blocked_until_mono=99.5,
+            blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             model_id="gpt-4o-mini",
             endpoint_id=12,
             provider_id=1,
@@ -1136,48 +1139,82 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
     persist_session.commit.assert_awaited_once()
 
 
-def test_mark_connection_failed_preserves_state_when_loadbalance_enqueue_fails() -> (
+@pytest.mark.asyncio
+async def test_mark_connection_failed_preserves_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
-    _recovery_state.clear()
+    from app.models.models import LoadbalanceCurrentState
 
-    with patch(
-        "app.services.loadbalancer_support.events.background_task_manager.enqueue",
-        MagicMock(side_effect=RuntimeError("queue unavailable")),
+    current_state = LoadbalanceCurrentState(
+        profile_id=4,
+        connection_id=9,
+        consecutive_failures=0,
+        last_cooldown_seconds=0.0,
+        probe_eligible_logged=False,
+    )
+    mock_session = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one.return_value = current_state
+    mock_session.execute = AsyncMock(side_effect=[MagicMock(), mock_result])
+
+    with (
+        patch(
+            "app.services.loadbalancer_support.recovery.AsyncSessionLocal",
+            return_value=make_session_context(mock_session),
+        ),
+        patch(
+            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            MagicMock(side_effect=RuntimeError("queue unavailable")),
+        ),
     ):
-        mark_connection_failed(
+        await mark_connection_failed(
             profile_id=4,
             connection_id=9,
             base_cooldown_seconds=30.0,
-            now_mono=100.0,
             failure_kind="timeout",
             model_id="gpt-4o-mini",
             endpoint_id=12,
             provider_id=1,
         )
 
-    state = _recovery_state[(4, 9)]
-    assert state["consecutive_failures"] == 1
-    _recovery_state.clear()
+    assert current_state.profile_id == 4
+    assert current_state.connection_id == 9
+    assert current_state.consecutive_failures == 1
+    mock_session.commit.assert_awaited_once()
 
 
-def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_fails() -> (
+@pytest.mark.asyncio
+async def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
-    _recovery_state.clear()
-    _recovery_state[(4, 9)] = {
-        "consecutive_failures": 3,
-        "blocked_until_mono": 140.0,
-        "last_cooldown_seconds": 30.0,
-        "last_failure_kind": "timeout",
-        "probe_eligible_logged": False,
-    }
+    current_state = SimpleNamespace(
+        consecutive_failures=3,
+        blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        last_cooldown_seconds=30.0,
+        last_failure_kind="timeout",
+        probe_eligible_logged=False,
+    )
+    mock_session = AsyncMock()
+    mock_session.commit = AsyncMock()
+    mock_session.rollback = AsyncMock()
+    mock_session.delete = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalar_one_or_none.return_value = current_state
+    mock_session.execute = AsyncMock(return_value=mock_result)
 
-    with patch(
-        "app.services.loadbalancer_support.events.background_task_manager.enqueue",
-        MagicMock(side_effect=RuntimeError("queue unavailable")),
+    with (
+        patch(
+            "app.services.loadbalancer_support.recovery.AsyncSessionLocal",
+            return_value=make_session_context(mock_session),
+        ),
+        patch(
+            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            MagicMock(side_effect=RuntimeError("queue unavailable")),
+        ),
     ):
-        mark_connection_recovered(
+        await mark_connection_recovered(
             profile_id=4,
             connection_id=9,
             model_id="gpt-4o-mini",
@@ -1185,13 +1222,14 @@ def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_fails()
             provider_id=1,
         )
 
-    assert (4, 9) not in _recovery_state
+    mock_session.delete.assert_awaited_once_with(current_state)
+    mock_session.commit.assert_awaited_once()
 
 
-def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalance_enqueue_fails() -> (
+@pytest.mark.asyncio
+async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalance_enqueue_fails() -> (
     None
 ):
-    _recovery_state.clear()
     connection = SimpleNamespace(
         id=7,
         priority=0,
@@ -1202,35 +1240,58 @@ def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalance_enq
     )
     model_config = cast(
         ModelConfig,
-        SimpleNamespace(
-            connections=[connection],
-            lb_strategy="failover",
-            failover_recovery_enabled=True,
-            model_id="gpt-4o-mini",
-            provider_id=1,
+        cast(
+            object,
+            SimpleNamespace(
+                connections=[connection],
+                lb_strategy="failover",
+                failover_recovery_enabled=True,
+                model_id="gpt-4o-mini",
+                provider_id=1,
+            ),
         ),
     )
-    _recovery_state[(5, 7)] = {
-        "consecutive_failures": 2,
-        "blocked_until_mono": 10.0,
-        "last_cooldown_seconds": 30.0,
-        "last_failure_kind": "timeout",
-        "probe_eligible_logged": False,
-    }
 
-    with patch(
-        "app.services.loadbalancer_support.events.background_task_manager.enqueue",
-        MagicMock(side_effect=RuntimeError("queue unavailable")),
+    current_state = SimpleNamespace(
+        blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        probe_eligible_logged=False,
+    )
+
+    with (
+        patch(
+            "app.services.loadbalancer_support.attempts.get_current_states_for_connections",
+            AsyncMock(return_value={7: current_state}),
+        ),
+        patch(
+            "app.services.loadbalancer_support.attempts.mark_probe_eligible_logged",
+            AsyncMock(
+                return_value={
+                    "consecutive_failures": 2,
+                    "blocked_until_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                    "last_cooldown_seconds": 30.0,
+                    "last_failure_kind": "timeout",
+                    "probe_eligible_logged": True,
+                }
+            ),
+        ) as mock_mark_probe_eligible_logged,
+        patch(
+            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            MagicMock(side_effect=RuntimeError("queue unavailable")),
+        ),
     ):
-        attempt_plan = build_attempt_plan(
+        attempt_plan = await build_attempt_plan(
+            db=AsyncMock(),
             profile_id=5,
             model_config=model_config,
-            now_mono=100.0,
+            now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         )
 
     assert attempt_plan == [connection]
-    assert _recovery_state[(5, 7)]["probe_eligible_logged"] is True
-    _recovery_state.clear()
+    mock_mark_probe_eligible_logged.assert_awaited_once_with(
+        profile_id=5,
+        connection_id=7,
+        now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+    )
 
 
 @pytest.mark.asyncio

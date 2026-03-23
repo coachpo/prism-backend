@@ -13,7 +13,7 @@ from app.schemas.schemas import (
     EndpointResponse,
     EndpointUpdate,
 )
-from app.services.loadbalancer import mark_connection_recovered
+from app.services.loadbalancer import clear_current_state
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 from .helpers import (
@@ -43,7 +43,7 @@ async def create_endpoint_record(
     db: AsyncSession,
     *,
     profile_id: int,
-) -> EndpointResponse:
+) -> Endpoint:
     endpoint_name = body.name.strip()
     if not endpoint_name:
         raise HTTPException(status_code=422, detail="name must not be empty")
@@ -79,7 +79,7 @@ async def move_endpoint_position_record(
     db: AsyncSession,
     *,
     profile_id: int,
-) -> list[EndpointResponse]:
+) -> list[Endpoint]:
     await lock_profile_row(db, profile_id=profile_id)
     endpoints = await list_ordered_endpoints(db, profile_id=profile_id)
     current_index = next(
@@ -131,7 +131,7 @@ async def update_endpoint_record(
     db: AsyncSession,
     *,
     profile_id: int,
-) -> EndpointResponse:
+) -> Endpoint:
     endpoint = await load_endpoint_or_404(
         db,
         endpoint_id=endpoint_id,
@@ -183,7 +183,7 @@ async def update_endpoint_record(
             endpoint_id=endpoint.id,
         )
         for connection_id in dependent_connection_ids:
-            mark_connection_recovered(profile_id, connection_id)
+            await clear_current_state(profile_id, connection_id)
 
     endpoint.updated_at = utc_now()
     await db.flush()
@@ -196,7 +196,7 @@ async def duplicate_endpoint_record(
     db: AsyncSession,
     *,
     profile_id: int,
-) -> EndpointResponse:
+) -> Endpoint:
     await lock_profile_row(db, profile_id=profile_id)
     source_endpoint = await load_endpoint_or_404(
         db,

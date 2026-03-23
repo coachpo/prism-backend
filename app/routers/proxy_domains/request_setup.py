@@ -1,13 +1,15 @@
-import time
+import inspect
+from datetime import datetime
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Awaitable, Callable
 
 import httpx
 from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import HeaderBlocklistRule, ModelConfig
+from app.core.time import utc_now
+from app.models.models import Connection, HeaderBlocklistRule, ModelConfig
 from app.services.costing_service import CostFieldPayload
 from app.services.proxy_service import (
     extract_model_from_body,
@@ -34,7 +36,7 @@ class ProxyRequestSetup:
     client: httpx.AsyncClient
     client_headers: dict[str, str]
     effective_request_path: str
-    endpoints_to_try: list
+    endpoints_to_try: list[Connection]
     is_streaming: bool
     method: str
     model_config: ModelConfig
@@ -49,10 +51,16 @@ class ProxyRequestSetup:
 
 async def prepare_proxy_request(
     *,
-    build_attempt_plan_fn: Callable,
-    compute_cost_fields_fn: Callable,
-    get_model_config_with_connections_fn: Callable,
-    load_costing_settings_fn: Callable,
+    build_attempt_plan_fn: Callable[
+        [AsyncSession, int, ModelConfig, datetime | None],
+        Awaitable[list[Connection]] | list[Connection],
+    ],
+    compute_cost_fields_fn: Callable[..., CostFieldPayload],
+    get_model_config_with_connections_fn: Callable[
+        [AsyncSession, int, str],
+        Awaitable[ModelConfig | None],
+    ],
+    load_costing_settings_fn: Callable[..., Awaitable[Any]],
     request: Request,
     db: AsyncSession,
     raw_body: bytes | None,
@@ -115,7 +123,17 @@ async def prepare_proxy_request(
         )
     )
 
-    endpoints_to_try = build_attempt_plan_fn(profile_id, model_config, time.monotonic())
+    attempt_plan_result = build_attempt_plan_fn(
+        db,
+        profile_id,
+        model_config,
+        utc_now(),
+    )
+    endpoints_to_try = (
+        await attempt_plan_result
+        if inspect.isawaitable(attempt_plan_result)
+        else attempt_plan_result
+    )
     if not endpoints_to_try:
         raise HTTPException(
             status_code=503,

@@ -64,7 +64,7 @@ async def perform_connection_health_check(
     profile_id: int,
     build_upstream_headers_fn: Callable[..., dict[str, str]],
     probe_connection_health_fn: Callable[..., Awaitable[tuple[str, str, int, str]]],
-    mark_connection_recovered_fn: Callable[..., None],
+    mark_connection_recovered_fn: Callable[..., Awaitable[None]],
 ) -> HealthCheckResponse:
     connection = await _load_health_check_connection_or_404(
         db,
@@ -110,7 +110,13 @@ async def perform_connection_health_check(
     connection.health_detail = detail
     connection.last_health_check = checked_at
     if health_status == "healthy":
-        mark_connection_recovered_fn(profile_id, connection.id)
+        await mark_connection_recovered_fn(
+            profile_id,
+            connection.id,
+            model_id,
+            connection.endpoint_id,
+            provider.id,
+        )
 
     await db.flush()
 

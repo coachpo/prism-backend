@@ -1,5 +1,6 @@
 # ruff: noqa: F821,F401
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
@@ -19,6 +20,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.core.time import utc_now
+
+if TYPE_CHECKING:
+    from app.models.domains.identity import Profile, Provider
 
 
 class RequestLog(Base):
@@ -290,14 +294,18 @@ class LoadbalanceEvent(Base):
     failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     consecutive_failures: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
-    blocked_until_mono: Mapped[float | None] = mapped_column(Numeric(20, 6), nullable=True)
+    blocked_until_mono: Mapped[float | None] = mapped_column(
+        Numeric(20, 6), nullable=True
+    )
     model_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provider_id: Mapped[int | None] = mapped_column(
         ForeignKey("providers.id"), nullable=True
     )
     failure_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    backoff_multiplier: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
+    backoff_multiplier: Mapped[float | None] = mapped_column(
+        Numeric(5, 2), nullable=True
+    )
     max_cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
@@ -305,3 +313,54 @@ class LoadbalanceEvent(Base):
 
     profile: Mapped["Profile"] = relationship(back_populates="loadbalance_events")
     provider: Mapped["Provider"] = relationship()
+
+
+class LoadbalanceCurrentState(Base):
+    __tablename__ = "loadbalance_current_state"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "connection_id",
+            name="uq_loadbalance_current_state_profile_connection",
+        ),
+        Index(
+            "idx_loadbalance_current_state_profile_connection",
+            "profile_id",
+            "connection_id",
+        ),
+        CheckConstraint(
+            "last_failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR last_failure_kind IS NULL",
+            name="chk_loadbalance_current_state_failure_kind",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    last_failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    last_cooldown_seconds: Mapped[float] = mapped_column(
+        Numeric(10, 2), nullable=False, default=0
+    )
+    blocked_until_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    probe_eligible_logged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    profile: Mapped["Profile"] = relationship(
+        back_populates="loadbalance_current_states"
+    )

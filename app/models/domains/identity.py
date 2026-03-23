@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         AuditLog,
         EndpointFxRateSetting,
         HeaderBlocklistRule,
+        LoadbalanceCurrentState,
         LoadbalanceEvent,
         RequestLog,
         UserSetting,
@@ -100,6 +101,9 @@ class Profile(Base):
         back_populates="profile", cascade="all, delete-orphan"
     )
     loadbalance_events: Mapped[list["LoadbalanceEvent"]] = relationship(
+        back_populates="profile", cascade="all, delete-orphan"
+    )
+    loadbalance_current_states: Mapped[list["LoadbalanceCurrentState"]] = relationship(
         back_populates="profile", cascade="all, delete-orphan"
     )
 
@@ -288,6 +292,7 @@ class WebAuthnChallenge(Base):
         DateTime(timezone=True), default=utc_now
     )
 
+
 class WebAuthnCredential(Base):
     __tablename__ = "webauthn_credentials"
     __table_args__ = (
@@ -303,9 +308,7 @@ class WebAuthnCredential(Base):
     )
 
     # WebAuthn core fields
-    credential_id: Mapped[bytes] = mapped_column(
-        "credential_id", nullable=False
-    )
+    credential_id: Mapped[bytes] = mapped_column("credential_id", nullable=False)
     public_key: Mapped[bytes] = mapped_column("public_key", nullable=False)
     sign_count: Mapped[int] = mapped_column(
         BigInteger, default=0, nullable=False, server_default="0"
@@ -314,9 +317,7 @@ class WebAuthnCredential(Base):
     # Device management
     device_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     aaguid: Mapped[bytes | None] = mapped_column("aaguid", nullable=True)
-    transports: Mapped[list[str] | None] = mapped_column(
-        ARRAY(Text), nullable=True
-    )
+    transports: Mapped[list[str] | None] = mapped_column(ARRAY(Text), nullable=True)
 
     # Backup and sync identifiers
     backup_eligible: Mapped[bool | None] = mapped_column(

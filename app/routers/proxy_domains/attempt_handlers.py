@@ -74,7 +74,7 @@ async def handle_streaming_attempt(
                 elapsed_ms=elapsed_ms,
                 error_detail=error_detail,
             )
-            _mark_connection_failed_if_needed(
+            await _mark_connection_failed_if_needed(
                 deps=deps,
                 state=state,
                 target=target,
@@ -96,7 +96,7 @@ async def handle_streaming_attempt(
             error_detail=error_detail,
             tokens=tokens,
         )
-        _mark_connection_recovered_if_needed(
+        await _mark_connection_recovered_if_needed(
             deps=deps,
             state=state,
             target=target,
@@ -111,7 +111,7 @@ async def handle_streaming_attempt(
             None,
         )
 
-    _mark_connection_recovered_if_needed(
+    await _mark_connection_recovered_if_needed(
         deps=deps,
         state=state,
         target=target,
@@ -169,7 +169,7 @@ async def handle_buffered_attempt(
             elapsed_ms=elapsed_ms,
             error_detail=_response_error_detail(response.content),
         )
-        _mark_connection_failed_if_needed(
+        await _mark_connection_failed_if_needed(
             deps=deps,
             state=state,
             target=target,
@@ -195,7 +195,7 @@ async def handle_buffered_attempt(
         error_detail=error_detail,
         tokens=tokens,
     )
-    _mark_connection_recovered_if_needed(
+    await _mark_connection_recovered_if_needed(
         deps=deps,
         state=state,
         target=target,
@@ -238,7 +238,7 @@ async def handle_transport_exception(
         elapsed_ms=elapsed_ms,
         error_detail=str(exc)[:500],
     )
-    _mark_connection_failed_if_needed(
+    await _mark_connection_failed_if_needed(
         deps=deps,
         state=state,
         target=target,

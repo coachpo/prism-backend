@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import utc_now
 from app.models.models import ModelConfig
+from app.services.loadbalancer import clear_current_state_for_model
 from app.schemas.schemas import (
     ModelConfigCreate,
     ModelConfigUpdate,
@@ -131,6 +132,20 @@ async def update_model_config_record(
     )
     apply_model_type_update_defaults(update_data, model_type=new_model_type)
 
+    clear_model_current_state = any(
+        (
+            "is_enabled" in update_data
+            and update_data["is_enabled"] != config.is_enabled,
+            "lb_strategy" in update_data
+            and update_data["lb_strategy"] != config.lb_strategy,
+            "failover_recovery_enabled" in update_data
+            and update_data["failover_recovery_enabled"]
+            != config.failover_recovery_enabled,
+            "model_type" in update_data and new_model_type != config.model_type,
+            "provider_id" in update_data and new_provider_id != config.provider_id,
+        )
+    )
+
     for key, value in update_data.items():
         setattr(config, key, value)
 
@@ -143,6 +158,9 @@ async def update_model_config_record(
             new_model_id=update_data["model_id"],
             new_model_type=new_model_type,
         )
+
+    if clear_model_current_state and config.model_type == "native":
+        await clear_current_state_for_model(profile_id, config.id)
 
     config.updated_at = utc_now()
     await db.flush()
@@ -182,6 +200,7 @@ async def delete_model_config_record(
                 detail=f"Cannot delete: proxy models [{ids}] point to this model",
             )
 
+    await clear_current_state_for_model(profile_id, config.id)
     await db.delete(config)
     await db.flush()
     return {"deleted": True}

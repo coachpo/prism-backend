@@ -102,10 +102,14 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def078_{uuid4().hex[:12]}"
         )
-        observability_tables = (
+        pre_current_state_tables = (
             "request_logs",
             "audit_logs",
             "loadbalance_events",
+        )
+        all_observability_tables = (
+            *pre_current_state_tables,
+            "loadbalance_current_state",
         )
         current_head_revision = _get_current_head_revision(migration_database_url)
 
@@ -124,7 +128,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 "0011_observability_unlogged"
             ]
-            for table_name in observability_tables:
+            for table_name in pre_current_state_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)
                 ) == "u"
@@ -136,7 +140,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 "0010_webauthn_challenges"
             ]
-            for table_name in observability_tables:
+            for table_name in pre_current_state_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)
                 ) == "p"
@@ -146,7 +150,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 current_head_revision
             ]
-            for table_name in observability_tables:
+            for table_name in all_observability_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)
                 ) == "u"

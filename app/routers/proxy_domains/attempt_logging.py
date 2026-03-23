@@ -17,7 +17,7 @@ def _response_error_detail(raw_body: bytes | None) -> str | None:
     return raw_body.decode("utf-8", errors="replace")[:500]
 
 
-def _mark_connection_recovered_if_needed(
+async def _mark_connection_recovered_if_needed(
     *,
     deps: ProxyRuntimeDependencies,
     state: ProxyRequestState,
@@ -26,7 +26,7 @@ def _mark_connection_recovered_if_needed(
 ) -> None:
     if not state.setup.recovery_active or not _is_recovery_success_status(status_code):
         return
-    deps.mark_connection_recovered_fn(
+    await deps.mark_connection_recovered_fn(
         state.profile_id,
         target.connection.id,
         state.setup.model_id,
@@ -35,7 +35,7 @@ def _mark_connection_recovered_if_needed(
     )
 
 
-def _mark_connection_failed_if_needed(
+async def _mark_connection_failed_if_needed(
     *,
     deps: ProxyRuntimeDependencies,
     state: ProxyRequestState,
@@ -51,15 +51,15 @@ def _mark_connection_failed_if_needed(
         raw_body=raw_body,
         exception=exception,
     )
-    deps.mark_connection_failed_fn(
+    await deps.mark_connection_failed_fn(
         state.profile_id,
         target.connection.id,
         state.setup.model_config.failover_recovery_cooldown_seconds,
-        time.monotonic(),
         failure_kind,
         state.setup.model_id,
         target.connection.endpoint_id,
         state.setup.provider_id,
+        now_at=None,
     )
 
 
