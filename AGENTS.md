@@ -1,77 +1,58 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-FastAPI backend for Prism's management plane (`/api/*`) and runtime proxy plane (`/v1/*`, `/v1beta/*`). It is async end-to-end, uv-managed from `pyproject.toml` + `uv.lock`, PostgreSQL-backed, migration-on-startup, and owns operator auth, password reset, proxy API keys, passkeys, realtime broadcasts, loadbalance events, pricing templates, profile-scoped admin flows, and a lifespan-managed background task worker in addition to routing and observability.
+FastAPI backend for Prism's management plane, `/api/*`, and runtime proxy plane, `/v1/*` and `/v1beta/*`. It is async end-to-end, uv-managed from `pyproject.toml` and `uv.lock`, PostgreSQL-backed, migration-on-startup, and owns auth, proxy keys, passkeys, realtime broadcasts, loadbalance events, costing, and observability.
 
 ## STRUCTURE
 ```
 backend/
-├── app/alembic/                                 # Packaged Alembic env + revisions used at runtime
-├── app/bootstrap/AGENTS.md                       # Startup sequence and auth bifurcation
-├── app/core/AGENTS.md                            # Config, DB, crypto, auth, time helpers
-├── app/AGENTS.md                                # Runtime and management implementation details
-├── app/models/AGENTS.md                         # ORM models and domain splits
-├── app/routers/AGENTS.md                        # API surface and domain-shell layout
-├── app/schemas/AGENTS.md                        # Pydantic contract domains and re-export boundary
-├── app/services/AGENTS.md                       # Service-root entrypoints and shared workers
-├── app/services/auth/AGENTS.md                  # Session, email, password reset, proxy keys
-├── app/services/loadbalancer_support/AGENTS.md  # Recovery state, attempts, event helpers
-├── app/services/proxy_support/AGENTS.md         # Upstream request/header/url/transport helpers
-├── app/services/realtime/AGENTS.md              # WebSocket room manager and broadcasts
-├── app/services/stats/AGENTS.md                 # Telemetry and spending query cluster
-├── app/services/webauthn/AGENTS.md              # Passkey registration, authentication, and credentials
-├── tests/AGENTS.md                              # Test organization, aggregators, realtime/service coverage
-├── tests/multi_profile_isolation/AGENTS.md      # Selected-vs-active profile isolation suite
-├── tests/smoke_defect_regressions/AGENTS.md     # DEF regressions and startup/runtime edge cases
-├── Dockerfile                                   # Runtime image; copies uv and installs from `uv.lock`
-├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
-├── docker-compose.yml                           # Local PostgreSQL helper
-├── pyproject.toml                               # Runtime deps, dev dependency group, package data, and `prism-backend`
-└── uv.lock                                      # Locked dependency graph consumed by `uv sync --locked`
+├── app/AGENTS.md                                # Live implementation map
+├── app/bootstrap/AGENTS.md                      # Startup sequence and auth split
+├── app/core/AGENTS.md                           # Config, DB, auth, crypto, migrations
+├── app/models/AGENTS.md                         # ORM domains
+├── app/routers/AGENTS.md                        # 14 router shells and domain folders
+├── app/schemas/AGENTS.md                        # Pydantic contract ownership
+├── app/services/AGENTS.md                       # Service-root boundaries and worker infra
+├── app/services/auth/AGENTS.md                  # Session, email, reset, proxy-key internals
+├── app/services/loadbalancer_support/AGENTS.md
+├── app/services/proxy_support/AGENTS.md
+├── app/services/realtime/AGENTS.md
+├── app/services/stats/AGENTS.md
+├── app/services/webauthn/AGENTS.md
+├── tests/AGENTS.md                              # Test map and aggregators
+├── tests/multi_profile_isolation/AGENTS.md
+├── tests/smoke_defect_regressions/AGENTS.md
+├── Dockerfile
+├── docker-compose.yml                           # Local PostgreSQL helper on 15432
+├── pyproject.toml
+└── uv.lock
 ```
 
 ## CHILD DOCS
 
-- `app/AGENTS.md`: use for router, service, schema, and startup behavior once you are inside implementation code.
-- `app/services/AGENTS.md`: use for service-root entrypoints such as `auth_service.py`, `proxy_service.py`, `stats_service.py`, and `background_tasks.py`.
-- `app/bootstrap/AGENTS.md`: use for startup sequencing, seed defaults, auth middleware, and public-management auth exceptions.
-- `app/core/AGENTS.md`: use for shared config, SQLAlchemy engine/session setup, crypto, auth helpers, and migrations.
-- `app/models/AGENTS.md`: use for ORM model definitions and domain splits (identity, routing, observability).
-- `app/routers/AGENTS.md`: use when working in the API surface layer or deciding where new handlers belong.
-- `app/schemas/AGENTS.md`: use for Pydantic contract ownership, domain splits, and schema export conventions.
-- `app/services/auth/AGENTS.md`: use for auth/session/OTP/proxy-key internals behind `auth_service.py`.
-- `app/services/loadbalancer_support/AGENTS.md`: use for recovery-state mutation, attempt planning, and loadbalance event helpers.
-- `app/services/proxy_support/AGENTS.md`: use for upstream URL/header/body/compression/transport helpers behind `proxy_service.py`.
-- `app/services/realtime/AGENTS.md`: use for WebSocket room state, profile/channel subscriptions, and broadcast helpers.
-- `app/services/stats/AGENTS.md`: use for telemetry logging, request-log queries, summary, spending, throughput, and model-metrics helpers behind `stats_service.py`.
-- `app/services/webauthn/AGENTS.md`: use for passkey registration, authentication, and credential management behind `webauthn_service.py`.
-- `tests/AGENTS.md`: use for defect IDs, aggregators, startup/auth regressions, realtime coverage, and container-backed test setup.
-- `tests/smoke_defect_regressions/AGENTS.md`: use for DEF-numbered regressions, startup edge cases, and proxy/runtime recovery coverage.
-- `tests/multi_profile_isolation/AGENTS.md`: use for selected-vs-active profile isolation, observability attribution, and config import/export containment.
+- `app/AGENTS.md`: use once you are inside backend implementation code.
+- `app/bootstrap/AGENTS.md`: startup sequence, seeded defaults, auth middleware, and public auth exceptions.
+- `app/routers/AGENTS.md`: API surface layout and router-domain ownership.
+- `app/services/AGENTS.md`: service-root public boundaries, cleanup helpers, and background worker wiring.
+- `tests/AGENTS.md`: test organization, aggregators, and container-backed suite facts.
 
-## RUNTIME SEMANTICS
+## RUNTIME FACTS
 
-- Profile-scoped management endpoints use effective profile scope; global management endpoints include profile lifecycle, provider audit settings, `/api/auth/*`, `/api/realtime/*`, and the auth/email/proxy-key settings routes.
-- When auth is enabled, management uses session cookies while runtime proxy traffic requires a proxy API key header.
-- Providers are global seed rows: `openai`, `anthropic`, `gemini`.
-- Failover recovery memory is in-process and keyed by `(profile_id, connection_id)`.
-- Loadbalance events are also persisted and queryable through `/api/loadbalance/*`.
-- A shared `background_task_manager` is started in FastAPI lifespan and attached to `app.state`.
-- Profile deletion is soft-delete for inactive profiles only; activation is CAS-guarded.
+- `app/main.py` mounts 14 routers: auth, profiles, providers, models, endpoints, connections, stats, audit, loadbalance, config, settings, pricing templates, realtime, and proxy.
+- FastAPI lifespan runs the startup sequence, creates the shared `httpx.AsyncClient`, configures and starts the shared `BackgroundTaskManager`, and shuts them down in reverse order.
+- Management uses effective profile scope. Runtime proxy traffic uses the active profile only.
+- When auth is enabled, management uses session cookies while runtime proxy traffic uses proxy API keys.
+- Providers remain the seeded global rows `openai`, `anthropic`, and `gemini`.
 
 ## WHERE TO LOOK
 
-- Startup + shared clients/workers: `app/main.py`, `app/services/background_tasks.py`
-- Uv-managed packaging, lockfile, and local launcher flow: `pyproject.toml`, `uv.lock`, `../start.sh`, `Dockerfile`, `docker-compose.yml`
-- Startup sequence + auth bifurcation: `app/bootstrap/startup.py`, `app/bootstrap/auth_middleware.py`
+- Startup, router registration, and lifespan-managed worker setup: `app/main.py`
+- Startup sequencing and auth bifurcation: `app/bootstrap/startup.py`, `app/bootstrap/auth_middleware.py`
 - Scope resolution: `app/dependencies.py`
-- Operator auth, verified email, password reset, proxy API keys, passkeys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/services/webauthn_service.py`, `app/services/webauthn/`, `app/core/auth.py`
-- Proxy routing flow: `app/routers/proxy.py`, `app/routers/proxy_domains/`, `app/services/loadbalancer.py`, `app/services/proxy_service.py`
-- Config import/export + header blocklist: `app/routers/config.py`, `app/routers/config_domains/`
-- Health checks + owner lookups + runtime blocklist merge: `app/routers/connections.py`, `app/routers/connections_domains/`
-- Stats, costing, audit, and loadbalance events: `app/routers/stats.py`, `app/routers/audit.py`, `app/routers/loadbalance.py`, `app/routers/pricing_templates.py`, `app/services/stats_service.py`, `app/services/costing_service.py`, `app/services/audit_service.py`
-- Realtime websocket transport: `app/routers/realtime.py`, `app/services/realtime/connection_manager.py`
-- Service-root public boundaries and cleanup helpers: `app/services/AGENTS.md`, `app/services/background_cleanup.py`, `app/services/loadbalance_cleanup.py`
+- Auth, proxy keys, and passkeys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/services/webauthn_service.py`
+- Runtime routing and failover: `app/routers/proxy.py`, `app/routers/proxy_domains/`, `app/services/loadbalancer.py`, `app/services/proxy_service.py`
+- Realtime transport and broadcasts: `app/routers/realtime.py`, `app/services/realtime/connection_manager.py`
+- Packaging and local launcher behavior: `pyproject.toml`, `uv.lock`, `../start.sh`, `Dockerfile`, `docker-compose.yml`
 
 ## COMMANDS
 
@@ -84,37 +65,20 @@ docker compose up -d postgres
 
 ## CONVENTIONS
 
-- Keep handlers and services async; use the shared lifespan `httpx.AsyncClient` instead of per-request clients.
-- Treat `pyproject.toml` plus `uv.lock` as the dependency source of truth, and run backend entrypoints through `uv run` in local development and tests.
-- Keep top-level routers thin when a matching domain folder exists; heavy request logic belongs in `app/routers/*_domains/` or `app/services/*`.
-- Use `selectinload` for relationship-heavy fetches and keep schema contracts aligned with frontend types.
-- Normalize and validate endpoint base URLs before persisting them.
-- Keep SMTP, verified-email, password-reset, refresh-token, and proxy-key logic centralized behind `app/services/auth_service.py` (the re-export boundary over `app/services/auth/`) and `app/core/auth.py`.
-- Keep passkey registration/authentication/credential lifecycle behind `app/services/webauthn_service.py` and `app/services/webauthn/` rather than folding it into the auth package.
-- Keep realtime payload emission inside stats/audit/loadbalance services and the websocket connection manager rather than in route handlers.
-- Keep shared worker lifecycle in `app/main.py` plus `app/services/background_tasks.py`; feature code should consume app-owned infrastructure rather than spawning orphan workers.
-- Keep settings, costing, and profile invariants as startup-enforced behavior, not optional manual steps.
-- Preserve provider-specific health-check behavior in `app/routers/connections.py`; OpenAI has fallback probes by design.
+- Keep backend flows async end-to-end.
+- Treat `pyproject.toml` and `uv.lock` as the dependency source of truth.
+- Keep top-level routers thin when a matching domain folder already owns the logic.
+- Keep shared worker lifecycle in `app/main.py` and `app/services/background_tasks.py`.
+- Use child docs for deeper router, service, schema, and test details instead of repeating them here.
 
 ## ANTI-PATTERNS
 
-- Do not reintroduce `round_robin`, unsupported providers, proxy chaining, or float-based money values.
-- Do not reintroduce hand-managed backend virtualenv instructions, `pip install -r requirements.txt`, or other non-uv setup paths.
-- Do not leak secrets in audit output or allow blocked headers to sneak back in after custom header merge.
-- Do not let management auth assumptions leak into proxy runtime auth; they are separate enforcement paths.
-- Do not assume management profile overrides apply to runtime proxy traffic.
-- Do not bypass `app/services/auth_service.py`, `app/services/loadbalancer.py`, or `app/services/proxy_service.py` public boundaries when the split package already owns the behavior.
-
-## TESTING
-
-- The suite runs against PostgreSQL testcontainers via `tests/conftest.py`; do not assume SQLite semantics.
-- `tests/test_smoke_defect_regressions.py` and `tests/test_multi_profile_isolation.py` are the top-level aggregators.
-- Auth, password-reset, email-delivery, and proxy-key regressions cluster under `tests/smoke_defect_regressions/test_startup_cases/`, especially `tests/smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`.
-- Realtime broadcasting is covered by `tests/test_realtime_broadcast.py`; service-level coverage includes `tests/services/test_webauthn_service.py` and `tests/services/test_background_tasks.py`.
-- For end-to-end behavior checks beyond pytest, use `../docs/SMOKE_TEST_PLAN.md` from the repo root.
+- Do not reintroduce unsupported providers, proxy chaining, round-robin routing, or float money values.
+- Do not reintroduce manual venv or `pip install` setup language.
+- Do not let management auth assumptions leak into runtime proxy auth.
+- Do not treat `docker-compose.yml` as a full stack definition. It provisions PostgreSQL only.
 
 ## NOTES
 
-- `../start.sh` syncs the backend with `uv sync --locked --python "$BACKEND_PYTHON_BIN"` before running `uv run --no-sync --python "$BACKEND_PYTHON_BIN" prism-backend --reload --port 18000`.
-- `Dockerfile` copies `uv` from `ghcr.io/astral-sh/uv:0.9.8`, installs runtime deps from `uv.lock`, and runs `prism-backend` from `/app/.venv/bin`.
-- `docker-compose.yml` provisions PostgreSQL on host port `15432`; it is a local helper, not a full backend+frontend stack definition.
+- `../start.sh` syncs with `uv sync --locked --python "$BACKEND_PYTHON_BIN"` and runs the backend on port `18000` in local launcher mode.
+- `docker-compose.yml` exposes PostgreSQL on host port `15432` for local backend work.

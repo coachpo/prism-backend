@@ -1,53 +1,51 @@
 # BACKEND SMOKE DEFECT REGRESSIONS KNOWLEDGE BASE
 
 ## OVERVIEW
-`smoke_defect_regressions/` is the regression corpus for named defects and behavior guards. It groups cases by runtime concern, then re-exports them through `tests/test_smoke_defect_regressions.py`; the current DEF range reaches DEF078, including the observability-unlogged migration checks.
+`smoke_defect_regressions/` is the named-defect regression corpus. It groups DEF cases by concern, then re-exports them through `../test_smoke_defect_regressions.py`. The current top-level range reaches DEF078.
 
 ## STRUCTURE
 ```
 smoke_defect_regressions/
-├── test_proxy_cases/         # Routing, failover, streaming, model/path handling
-├── test_config_cases/        # Import/export, validation, user-setting seeding
-├── test_costing_cases/       # Token parsing, missing-price handling, pricing template CAS
-├── test_startup_cases/       # Auth, CORS, batch delete, model health, owner mapping, migrations
-├── test_proxy.py             # Proxy-domain aggregator
-├── test_config.py            # Config-domain aggregator
-├── test_costing.py           # Costing-domain aggregator
-├── test_startup.py           # Startup-domain aggregator
-├── test_failover.py          # Standalone recovery toggle regression
-├── test_headers.py           # Header behavior regression
-├── test_connection_priority.py # Connection priority regression
-├── test_conditional_decompression.py # Decompression regression
-└── test_endpoint_ordering.py # Endpoint ordering regression
+├── test_proxy_cases/                 # Routing, failover, streaming, model or path guards
+├── test_config_cases/                # Config export or import, schema validation, user-settings seed cases
+├── test_costing_cases/               # Token parsing, special-token rules, pricing template CAS
+├── test_startup_cases/               # Auth, CORS, batch delete, model health, migrations, startup contracts
+├── test_proxy.py                     # Proxy-domain aggregator
+├── test_config.py                    # Config-domain aggregator
+├── test_costing.py                   # Costing-domain aggregator
+├── test_startup.py                   # Startup-domain aggregator
+├── test_failover.py                  # Standalone failover recovery regression
+├── test_headers.py                   # Header blocklist regression
+├── test_connection_priority.py       # Connection priority regression
+├── test_conditional_decompression.py # Conditional decompression regression
+└── test_endpoint_ordering.py         # Endpoint ordering regression
 ```
 
 ## WHERE TO LOOK
 
-- High-level export surface: `../test_smoke_defect_regressions.py`
-- Auth, password reset, email delivery, proxy-key acceptance, secret sanitization: `test_startup_cases/auth_management_flows_tests.py`
-- Proxy-key prefix generation: `test_startup_cases/auth_proxy_key_generation_tests.py`
-- CORS auth middleware guard: `test_startup_cases/cors_preflight_auth_middleware_tests.py`
-- Request-log batch delete, timezone normalization, endpoint-owner mapping: `test_startup_cases/stats_timezone_batch_delete_and_endpoint_mapping_tests.py`
-- Logging, endpoint-owner mapping, and connection-default coverage: `test_startup_cases/logging_endpoint_owner_and_connection_defaults_tests.py`
-- Profile scope and model-health eager loading: `test_startup_cases/profile_scope_and_model_health_eagerload_tests.py`
-- Loadbalance migration owner-key repair: `test_startup_cases/loadbalance_migration_profile_pk_repair_tests.py`
-- Observability unlogged/logged migration behavior: `test_startup_cases/observability_unlogged_migration_tests.py`
-- Recovery, streaming, runtime failover: `test_proxy_cases/recovery_runtime_and_streaming_tests.py`
-- Health-check classification, provider-path validation, and 4xx recovery rules: `test_proxy_cases/healthcheck_and_failover_classification_tests.py`
-- Config v2 roundtrip and validation: `test_config_cases/`
-- Special-token costing and pricing template CAS: `test_costing_cases/`
-- Standalone decompression, header, endpoint-ordering, and connection-priority guards: `test_conditional_decompression.py`, `test_headers.py`, `test_endpoint_ordering.py`, `test_connection_priority.py`
+- Top-level export surface and full DEF list through DEF078: `../test_smoke_defect_regressions.py`
+- Proxy-domain aggregators and leaf cases: `test_proxy.py`, `test_proxy_cases/`
+- Config-domain aggregators and leaf cases: `test_config.py`, `test_config_cases/`
+- Costing-domain aggregators and leaf cases: `test_costing.py`, `test_costing_cases/`
+- Startup-domain aggregators and leaf cases: `test_startup.py`, `test_startup_cases/`
+- Standalone guards outside the grouped folders: `test_failover.py`, `test_headers.py`, `test_connection_priority.py`, `test_conditional_decompression.py`, `test_endpoint_ordering.py`
+- Startup auth and proxy-key management flows: `test_startup_cases/auth_management_flows_tests.py`, `test_startup_cases/auth_proxy_key_generation_tests.py`
+- Startup migration and observability guards: `test_startup_cases/loadbalance_migration_profile_pk_repair_tests.py`, `test_startup_cases/observability_unlogged_migration_tests.py`
+
+## DEF FACTS
+
+- The current top-level smoke aggregator exports DEF cases through `TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence`.
+- Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
+- The grouped folders already provide the parent structure for their leaf files. Don't add extra AGENTS docs under `test_proxy_cases/`, `test_config_cases/`, `test_costing_cases/`, or `test_startup_cases/` for the current layout.
 
 ## CONVENTIONS
 
-- New regression classes use `TestDEF###_*` naming; keep IDs unique and append-only.
-- Domain-specific files can be large; preserve semantic grouping by concern instead of splitting into arbitrary unit or integration buckets.
-- Aggregator files are suite shape, not convenience wrappers; when you add a case, update the relevant aggregator and top-level export if needed.
-- Keep startup-domain regressions explicit in file and class names; auth, CORS, batch delete, model-health, migration, and proxy-key concerns should stay visible.
-- Keep proxy-domain regressions explicit about whether they target path rewrites, recovery-state rules, streaming cleanup, or failover classification.
+- Keep new DEF classes uniquely numbered with `TestDEF###_*` naming.
+- Add new leaf tests to the right concern folder first, then wire the matching domain aggregator and the top-level smoke aggregator when needed.
+- Keep file names explicit about the guarded behavior so the regression map stays readable.
 
 ## ANTI-PATTERNS
 
-- Do not drop a new DEF case into the wrong concern folder just because it is nearby.
-- Do not add a regression only in a leaf file and forget the aggregator re-export path.
-- Do not hide profile-scope or auth regressions in generic startup names; make the concern obvious in file or class naming.
+- Do not reuse old DEF numbers or insert a new regression into the wrong concern folder just because it is nearby.
+- Do not stop at a leaf test file and forget the domain or top-level re-export path.
+- Do not hide startup, auth, or observability regressions behind vague file names.

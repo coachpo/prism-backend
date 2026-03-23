@@ -1,42 +1,38 @@
 # BACKEND TEST SUITE KNOWLEDGE BASE
 
 ## OVERVIEW
-`tests/` is a PostgreSQL-backed regression suite executed from the uv-managed backend environment. It is organized around defect regressions and profile-isolation guarantees, then supplemented by focused coverage for realtime broadcasting and service-level behavior such as WebAuthn and the shared background task manager.
+`tests/` is the backend regression suite. It runs against PostgreSQL through the testcontainer setup in `conftest.py`, centers its high-level shape on the top-level smoke and isolation aggregators, and keeps extra focused coverage for realtime and service boundaries.
 
 ## STRUCTURE
 ```
 tests/
-├── conftest.py                        # PostgreSQL testcontainer + Alembic bootstrap
-├── test_smoke_defect_regressions.py   # Top-level DEF aggregator
-├── test_multi_profile_isolation.py    # Top-level isolation aggregator
-├── test_realtime_broadcast.py         # WebSocket channels and `dashboard.update` payload coverage
-├── services/                          # Focused service coverage such as WebAuthn and background task manager
+├── conftest.py                           # PostgreSQL testcontainer and Alembic bootstrap
+├── test_smoke_defect_regressions.py      # Top-level DEF aggregator, currently through DEF078
+├── test_multi_profile_isolation.py       # Top-level selected-vs-active profile isolation aggregator
+├── test_realtime_broadcast.py            # Websocket channel fanout and dashboard update coverage
+├── services/                             # Focused service coverage outside the main hierarchies
 ├── smoke_defect_regressions/
-│   └── AGENTS.md                      # Proxy, config, costing, startup, and standalone DEF domain map
+│   └── AGENTS.md                         # DEF-domain map and aggregator expectations
 └── multi_profile_isolation/
-    └── AGENTS.md                      # Lifecycle, scoping, runtime, observability, and import/export map
+    └── AGENTS.md                         # Isolation-domain map, including config export or import containment
 ```
 
 ## WHERE TO LOOK
 
-- Container lifecycle and migrated DB setup: `conftest.py`
-- Test dependency declaration and lockfile: `../pyproject.toml`, `../uv.lock`
-- DEF regression exports: `test_smoke_defect_regressions.py`
-- Profile-isolation exports: `test_multi_profile_isolation.py`
-- Realtime broadcasting and channel fanout: `test_realtime_broadcast.py`
-- WebAuthn service coverage: `services/test_webauthn_service.py`
-- Background worker lifecycle and retry semantics: `services/test_background_tasks.py`
-- Proxy and failover regressions: `smoke_defect_regressions/`, `smoke_defect_regressions/test_proxy_cases/`
-- Config and costing regressions: `smoke_defect_regressions/test_config_cases/`, `smoke_defect_regressions/test_costing_cases/`
-- Auth, password reset, email delivery, and proxy-key regressions: `smoke_defect_regressions/test_startup_cases/auth_management_flows_tests.py`
-- Logging, endpoint-owner mapping, and connection-default startup coverage: `smoke_defect_regressions/test_startup_cases/logging_endpoint_owner_and_connection_defaults_tests.py`
-- CORS, request-log batch delete, stats timezone normalization, model-health, and loadbalance migration startup cases: `smoke_defect_regressions/test_startup_cases/`
-- Profile isolation details: `multi_profile_isolation/`, `multi_profile_isolation/AGENTS.md`
+- Test container setup and migrated database bootstrap: `conftest.py`
+- Smoke regression export surface and current DEF range: `test_smoke_defect_regressions.py`
+- Multi-profile export surface: `test_multi_profile_isolation.py`
+- Realtime websocket and `dashboard.update` behavior: `test_realtime_broadcast.py`
+- Service-level coverage: `services/test_background_tasks.py`, `services/test_webauthn_service.py`, `services/test_stats_summary_request_logs.py`, `services/test_throughput_service.py`, `services/test_crypto.py`, `services/test_auth_hot_path_cache.py`
+- DEF smoke hierarchy: `smoke_defect_regressions/AGENTS.md`, `smoke_defect_regressions/`
+- Multi-profile hierarchy, including profile-scoped config export or import isolation: `multi_profile_isolation/AGENTS.md`, `multi_profile_isolation/`
 
-## CHILD DOCS
+## TEST FACTS
 
-- `smoke_defect_regressions/AGENTS.md`: defect-regression domain map and aggregator expectations.
-- `multi_profile_isolation/AGENTS.md`: selected-vs-active profile isolation test map.
+- `test_smoke_defect_regressions.py` is the top-level aggregator for DEF regressions and currently exports cases through `TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence`.
+- `test_multi_profile_isolation.py` is the top-level aggregator for lifecycle, scoping, runtime, observability, and config export or import isolation.
+- `services/` holds focused tests that don't belong in the DEF or isolation hierarchies.
+- Parent coverage for the smoke and isolation trees lives in the two child AGENTS files. Don't add new AGENTS docs beneath those trees for the current structure.
 
 ## COMMANDS
 
@@ -45,30 +41,17 @@ uv sync --locked
 uv run pytest tests/ -v
 uv run pytest tests/test_smoke_defect_regressions.py -v
 uv run pytest tests/test_multi_profile_isolation.py -v
-uv run pytest tests/ -k "DEF008" -v
 ```
 
 ## CONVENTIONS
 
-- `conftest.py` starts `postgres:16-alpine`, converts the sync URL to `asyncpg`, and applies Alembic migrations before tests run.
-- Run the suite from the backend root through `uv run`; the dev dependency group in `../pyproject.toml` owns pytest, pytest-asyncio, pytest-cov, and testcontainers.
-- Smoke regressions use `TestDEF###_*` naming and are grouped by semantic domain, then re-exported through top-level and domain-level aggregator files.
-- Multi-profile tests group by concern (`lifecycle`, `scoping`, `runtime`, `observability`, `config import/export`) and re-export through `test_multi_profile_isolation.py`.
-- Startup smoke cases now use explicit concern file names for auth, CORS, stats/batch delete, model health, loadbalance migration, and proxy-key generation.
-- Realtime and service-focused coverage stays in top-level files or `services/` when it does not fit the DEF or isolation hierarchies.
-- `services/` currently covers WebAuthn, throughput helpers, crypto helpers, and the shared `BackgroundTaskManager` lifecycle.
-- Aggregator files are part of the suite shape; when you add a new case, update every relevant aggregator layer.
+- Run backend tests from `backend/` through `uv run`.
+- Keep top-level aggregators up to date when adding new smoke or isolation leaf files.
+- Put defect-numbered regressions under `smoke_defect_regressions/` and cross-profile guarantees under `multi_profile_isolation/`.
+- Keep service or realtime tests outside those hierarchies when they don't map cleanly to a DEF or profile-isolation concern.
 
 ## ANTI-PATTERNS
 
-- Do not assume SQLite or in-memory DB behavior; these tests exercise PostgreSQL semantics.
-- Do not run pytest from a hand-managed interpreter or stale virtualenv when `uv run` is the supported path.
-- Do not skip migrations in test setup.
-- Do not reuse old DEF IDs for new regressions.
-- Do not scatter one-off test files outside the domain folders when a matching domain already exists.
-- Do not add a new smoke leaf file without wiring it into the domain and top-level aggregators when that path applies.
-
-## NOTES
-
-- Docker must be available locally because `testcontainers[postgres]` boots the PostgreSQL fixture container from `conftest.py`.
-- `../docs/SMOKE_TEST_PLAN.md` is the manual counterpart for end-to-end validation; it should agree with the current `uv run pytest ...` preflight flow.
+- Do not assume SQLite-like behavior. This suite is grounded in PostgreSQL semantics.
+- Do not add a new smoke or isolation leaf without wiring the relevant top-level aggregator.
+- Do not invent extra hierarchy docs under the existing smoke or isolation subtrees when the parent coverage already explains the shape.

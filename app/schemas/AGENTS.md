@@ -1,39 +1,47 @@
 # BACKEND SCHEMAS KNOWLEDGE BASE
 
 ## OVERVIEW
-`schemas/` is the backend contract layer: domain-scoped Pydantic models plus the `schemas.py` re-export surface imported by routers.
+`schemas/` is the backend contract boundary. The domain modules hold the Pydantic models, while `schemas.py` is the large explicit re-export surface that route handlers and other callers should import from.
 
 ## STRUCTURE
 ```
 schemas/
-├── schemas.py                 # Public re-export boundary for router imports
+├── schemas.py             # Explicit public export surface for routers and service callers
 └── domains/
-    ├── admin.py              # Audit/config/blocklist payloads
-    ├── auth.py               # Session, password reset, proxy-key, WebAuthn payloads
-    ├── common.py             # Shared base helpers and enums
-    ├── connection_model.py   # Connection and model payloads
-    ├── core.py               # Endpoint, pricing-template, provider, profile payloads
-    ├── endpoint_pricing.py   # Pricing-specific endpoint payload helpers
-    ├── profile_provider.py   # Profile/provider shared response shapes
-    └── stats.py              # Request-log, spending, throughput, realtime payloads
+    ├── admin.py           # Audit logs, config export or import, blocklist, batch-delete payloads
+    ├── auth.py            # Sessions, login, password reset, proxy keys, WebAuthn payloads
+    ├── common.py          # Shared schema helpers and enums
+    ├── connection_model.py
+    ├── core.py            # Profiles, providers, endpoints, connections, models, pricing templates
+    ├── endpoint_pricing.py
+    ├── profile_provider.py
+    └── stats.py           # Request logs, spending, throughput, metrics batch, loadbalance payloads
 ```
 
 ## WHERE TO LOOK
 
-- Router import surface: `schemas.py`
+- Supported import surface: `schemas.py`
+- Admin contracts for audit logs, config export or import, and blocklist rules: `domains/admin.py`
 - Auth and passkey contracts: `domains/auth.py`
-- Profile, endpoint, connection, model, and pricing contracts: `domains/core.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_provider.py`
-- Audit/config/admin contracts: `domains/admin.py`
-- Stats, throughput, loadbalance, and realtime update payloads: `domains/stats.py`
+- Core management contracts for profiles, providers, endpoints, connections, models, and pricing templates: `domains/core.py`
+- Shared helpers and split support modules behind the public surface: `domains/common.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_provider.py`
+- Stats and observability contracts for request logs, spending, throughput, metrics batches, and loadbalance events: `domains/stats.py`
+
+## SCHEMA FACTS
+
+- `schemas.py` currently re-exports a broad explicit surface from `domains/admin.py`, `domains/auth.py`, `domains/core.py`, and `domains/stats.py`.
+- Supporting domain files such as `common.py`, `connection_model.py`, `endpoint_pricing.py`, and `profile_provider.py` still live under `domains/`, but the stable router-facing boundary is `schemas.py`.
+- The parent doc covers schema-domain ownership. Don't create new AGENTS docs inside `schemas/domains/` for the current layout.
+- Routers should depend on the re-export boundary, not on scattered leaf-module imports.
 
 ## CONVENTIONS
 
-- Add new Pydantic models to the matching domain module, then re-export them through `schemas.py`.
-- Keep field names aligned with the JSON contract; frontend types intentionally mirror snake_case responses.
-- Treat this layer as the public contract boundary for routers and the frontend type mirror.
+- Add or update models in the correct domain file, then re-export them through `schemas.py`.
+- Keep field naming aligned with the actual wire contract. Frontend mirror types follow this backend surface.
+- Keep response and request shapes explicit in the schema layer instead of constructing anonymous dict contracts in handlers.
 
 ## ANTI-PATTERNS
 
-- Do not import leaf domain schemas ad hoc from routers when `app.schemas.schemas` already re-exports the supported surface.
-- Do not camelCase API payload fields here; contract naming should mirror wire format.
-- Do not let route handlers invent response shapes that bypass the schema layer.
+- Do not import domain leaf modules directly from routers when `app.schemas.schemas` already defines the supported surface.
+- Do not document internal helper modules as if they are public schema domains when the stable boundary is `admin`, `auth`, `core`, and `stats`.
+- Do not let route handlers drift into hand-built payloads that bypass the schema layer.

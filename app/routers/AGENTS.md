@@ -1,55 +1,58 @@
 # BACKEND ROUTERS KNOWLEDGE BASE
 
 ## OVERVIEW
-`routers/` is the backend API surface: 14 top-level FastAPI router shells plus domain folders that keep heavy request logic out of the route entrypoints.
+`routers/` is the backend API surface. `main.py` mounts 14 top-level routers here, and most management areas stay thin by handing dense request logic to existing `*_domains/` folders. The main exceptions are the small standalone routers such as `audit.py`, `loadbalance.py`, `providers.py`, and the websocket-focused `realtime.py`.
 
 ## STRUCTURE
 ```
 routers/
-├── auth.py + auth_domains/               # Session, password reset, WebAuthn, cookie helpers
-├── config.py + config_domains/           # Config export/import and header blocklist flows
-├── connections.py + connections_domains/ # CRUD, pricing, health checks, owner lookups, reordering
-├── endpoints.py + endpoints_domains/     # Endpoint CRUD, duplication, dropdown data
-├── models.py + models_domains/           # Model query and mutation split
+├── auth.py + auth_domains/                       # Session, password reset, passkey, cookie auth flows
+├── config.py + config_domains/                   # Config export or import and header blocklist flows
+├── connections.py + connections_domains/         # Connection CRUD, pricing linkage, health checks, ordering
+├── endpoints.py + endpoints_domains/             # Endpoint CRUD, duplication, dropdown and ordering flows
+├── models.py + models_domains/                   # Model CRUD, proxy-model invariants, batch lookups
 ├── pricing_templates.py + pricing_templates_domains/ # Pricing template CRUD and usage lookups
-├── profiles.py + profiles_domains/       # Profile CRUD, activation CAS, soft delete
-├── proxy.py + proxy_domains/             # /v1* and /v1beta* runtime proxy execution
-├── shared/                               # Reused router-layer helpers for profile rows and ordering
-├── settings.py + settings_domains/       # Auth settings, costing, timezone, email verification, proxy keys
-├── stats.py + stats_domains/             # Request logs, metrics batch, summary, spending, throughput
-├── audit.py                              # Audit log queries and retention deletes
-├── loadbalance.py                        # Persistent loadbalance event queries and stats
-├── providers.py                          # Provider audit settings
-└── realtime.py                           # WebSocket subscribe/auth/stats endpoint
+├── profiles.py + profiles_domains/               # Profile lifecycle, activation CAS, soft delete
+├── settings.py + settings_domains/               # Auth settings, costing, timezone, verification, proxy keys
+├── stats.py + stats_domains/                     # Request logs, summary, throughput, metrics batch APIs
+├── proxy.py + proxy_domains/                     # Runtime `/v1*` and `/v1beta*` proxy execution
+├── shared/                                       # Router-layer helpers reused across management routes
+├── audit.py                                      # Audit log queries and retention delete responses
+├── loadbalance.py                                # Persistent loadbalance event queries and deletes
+├── providers.py                                  # Provider audit-setting management
+└── realtime.py                                   # Websocket auth and profile-channel subscription flow
 ```
 
 ## WHERE TO LOOK
 
-- Auth/session/passkey handlers: `auth.py`, `auth_domains/`
-- Config v2 import/export and blocklist rules: `config.py`, `config_domains/`
-- Connection CRUD, pricing-template assignment, owner lookup, health checks: `connections.py`, `connections_domains/`
-- Endpoint CRUD, duplication, and ordering: `endpoints.py`, `endpoints_domains/`
-- Model queries, proxy-model invariants, redirect validation: `models.py`, `models_domains/`
-- Pricing template CRUD and usage lookups: `pricing_templates.py`, `pricing_templates_domains/`
-- Profile lifecycle and active-profile CAS: `profiles.py`, `profiles_domains/`
-- Runtime proxy attempt setup, streaming, logging, and failover handlers: `proxy.py`, `proxy_domains/`
-- Shared router-layer helpers: `shared/`
-- Settings subrouters for auth, costing, timezone, email verification, and proxy keys: `settings.py`, `settings_domains/`
-- Observability APIs: `stats.py`, `stats_domains/request_logs_route_handlers.py`, `audit.py`, `loadbalance.py`, `realtime.py`
-- Metrics batching: `stats_domains/metrics_route_handlers.py` for model and connection metrics.
+- Auth and passkey route entrypoints: `auth.py`, `auth_domains/`
+- Config import or export and blocklist routes: `config.py`, `config_domains/`
+- Connection and endpoint CRUD flows: `connections.py`, `connections_domains/`, `endpoints.py`, `endpoints_domains/`
+- Model, pricing template, and profile management: `models.py`, `models_domains/`, `pricing_templates.py`, `pricing_templates_domains/`, `profiles.py`, `profiles_domains/`
+- Settings composition router and subdomains: `settings.py`, `settings_domains/`
+- Stats request-log, throughput, summary, and metrics batch handlers: `stats.py`, `stats_domains/`
+- Runtime proxy path handling, attempts, streaming, and logging: `proxy.py`, `proxy_domains/`
+- Websocket auth, subscribe or unsubscribe flow, and channel validation: `realtime.py`
+- Shared room-state ownership behind realtime: `../services/realtime/connection_manager.py`
+
+## ROUTER FACTS
+
+- Route shells stay intentionally thin when a matching domain folder exists.
+- `proxy.py` is the runtime entrypoint and is not an `/api` management router.
+- `realtime.py` owns websocket authentication, supported-channel validation, profile existence checks, and subscribe or unsubscribe messages.
+- `realtime.py` delegates connection tracking and room membership to `services/realtime/connection_manager.py`.
+- Parent coverage for router-domain folders lives here. Don't add new AGENTS docs under `auth_domains/`, `config_domains/`, `connections_domains/`, `endpoints_domains/`, `models_domains/`, `pricing_templates_domains/`, `profiles_domains/`, `settings_domains/`, `stats_domains/`, or `proxy_domains/` unless the hierarchy changes.
 
 ## CONVENTIONS
 
-- Keep top-level router files thin; if a matching `*_domains/` folder exists, put request logic there instead of in the shell file.
-- Reuse `shared/` helpers for profile-row locking, endpoint-record invariants, and ordered-field normalization instead of re-implementing them per domain.
-- Profile-scoped management routes use `get_effective_profile*` dependencies; global management routes use plain DB/session auth dependencies; runtime proxy routes use `get_active_profile*` dependencies.
-- `settings.py` and `config.py` are composition routers; extend the domain folders instead of bloating the parent shell.
-- `proxy_domains/` owns attempt setup, streaming/buffered response handling, logging, and helper types; `proxy.py` should stay close to wiring.
-- `realtime.py` owns websocket auth and subscribe/unsubscribe flow, while room state lives in `services/realtime/connection_manager.py`.
+- Put heavy request logic in the existing domain folders or services, not back into the shell routers.
+- Use `dependencies.py` for effective-profile and active-profile resolution instead of ad hoc header parsing.
+- Keep `config.py` and `settings.py` as composition routers that stitch existing domain modules together.
+- Keep websocket room state out of routers. `realtime.py` should authenticate and route messages, then hand room state to the connection manager.
 
 ## ANTI-PATTERNS
 
-- Do not parse `X-Profile-Id` ad hoc inside router handlers when `dependencies.py` already owns that contract.
-- Do not push business logic back into `models.py`, `connections.py`, `settings.py`, or other shell routers when a domain module already exists.
-- Do not treat `proxy.py` as a management router; it owns `/v1*` and `/v1beta*` runtime paths with active-profile semantics.
-- Do not bypass domain helpers for header blocklists, proxy-model validation, or provider-specific health checks.
+- Do not move business logic from `*_domains/` back into `models.py`, `connections.py`, `settings.py`, or other shell routers.
+- Do not treat `proxy.py` as if management profile overrides apply there. Runtime routing uses active-profile semantics.
+- Do not invent new router-domain folders in docs that are not present under `routers/`.
+- Do not duplicate child-level internals here when the parent map is enough.

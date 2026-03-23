@@ -1,61 +1,57 @@
 # BACKEND SERVICES ROOT KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/` is the backend service boundary: public facades such as `auth_service.py`, `proxy_service.py`, `stats_service.py`, and `webauthn_service.py`; shared infrastructure such as `background_tasks.py`; and split child packages for deeper domains.
+`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load-balancing support, and WebAuthn.
 
 ## STRUCTURE
 ```
 services/
-├── AGENTS.md                           # Service-root map
-├── auth/AGENTS.md                      # Session, email, password reset, proxy keys
-├── realtime/AGENTS.md                  # WebSocket room state and broadcasts
-├── stats/AGENTS.md                     # Telemetry queries and dashboard payload assembly
-├── loadbalancer_support/AGENTS.md      # Recovery state, attempts, event helpers
-├── proxy_support/AGENTS.md             # URL/header/body/transport helpers
-├── webauthn/AGENTS.md                  # Passkey registration/authentication internals
-├── auth_service.py                     # Auth public re-export boundary
-├── webauthn_service.py                 # Passkey public re-export boundary
-├── stats_service.py                    # Stats public re-export boundary
-├── proxy_service.py                    # Proxy orchestration boundary
+├── auth_service.py                     # Public auth and proxy-key re-export surface
+├── webauthn_service.py                 # Public passkey re-export surface
+├── stats_service.py                    # Public stats and observability re-export surface
+├── proxy_service.py                    # Upstream forwarding boundary
 ├── loadbalancer.py                     # Runtime model resolution and connection selection
 ├── audit_service.py                    # Audit persistence and redaction
 ├── costing_service.py                  # Pricing and FX helpers
-├── background_tasks.py                 # Shared async worker queue
-├── background_cleanup.py               # Request/audit retention cleanup helpers
+├── background_tasks.py                 # Shared BackgroundTaskManager implementation
+├── background_cleanup.py               # Request and audit retention cleanup helpers
 ├── loadbalance_cleanup.py              # Loadbalance-event retention cleanup helpers
-├── profile_invariants.py               # Active/default profile enforcement
-└── user_settings.py                    # Per-profile settings bootstrap and access helpers
+├── profile_invariants.py               # Active or default profile enforcement
+├── user_settings.py                    # Per-profile settings bootstrap and access helpers
+├── auth/AGENTS.md                      # Session, email, password reset, proxy-key internals
+├── loadbalancer_support/AGENTS.md      # Recovery state, attempts, event helpers
+├── proxy_support/AGENTS.md             # Upstream URL, header, body, transport helpers
+├── realtime/AGENTS.md                  # Connection manager room state and broadcasts
+├── stats/AGENTS.md                     # Telemetry, spending, throughput, dashboard helpers
+└── webauthn/AGENTS.md                  # Passkey registration, authentication, credential helpers
 ```
 
 ## WHERE TO LOOK
 
-- Shared worker lifecycle and retry semantics: `background_tasks.py`, `../main.py`
-- Public auth/session boundary: `auth_service.py`, `auth/AGENTS.md`
-- Runtime routing and upstream forwarding: `loadbalancer.py`, `proxy_service.py`, `loadbalancer_support/AGENTS.md`, `proxy_support/AGENTS.md`
-- Observability and realtime payload shaping: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`, `realtime/AGENTS.md`
-- Passkey public boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
-- Startup-enforced invariants and defaults: `profile_invariants.py`, `user_settings.py`
-- Retention cleanup helpers: `background_cleanup.py`, `loadbalance_cleanup.py`
+- Shared worker lifecycle and metrics snapshots: `background_tasks.py`, `../main.py`
+- Public auth boundary: `auth_service.py`, `auth/AGENTS.md`
+- Public passkey boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
+- Runtime routing, attempt planning, and upstream forwarding: `loadbalancer.py`, `proxy_service.py`, `loadbalancer_support/AGENTS.md`, `proxy_support/AGENTS.md`
+- Observability, request logging, and dashboard payload shaping: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
+- Realtime room-state ownership: `realtime/AGENTS.md`, `realtime/connection_manager.py`
+- Startup-enforced defaults and retention cleanup: `profile_invariants.py`, `user_settings.py`, `background_cleanup.py`, `loadbalance_cleanup.py`
 
-## CHILD DOCS
+## SERVICE FACTS
 
-- `auth/AGENTS.md`: singleton auth settings, sessions, email delivery, password reset, and proxy keys.
-- `loadbalancer_support/AGENTS.md`: recovery-state mutation, attempt planning, and loadbalance-event helpers.
-- `proxy_support/AGENTS.md`: upstream URL/header/body/compression/transport helpers.
-- `realtime/AGENTS.md`: websocket room state and broadcast fan-out.
-- `stats/AGENTS.md`: request logging, aggregations, spending, throughput, and dashboard payload assembly.
-- `webauthn/AGENTS.md`: passkey registration, authentication, and credential management.
+- `background_tasks.py` defines `BackgroundTaskManager`, queue and worker lifecycle, retry handling, enqueue rejection tracking, and metrics snapshots.
+- FastAPI lifespan in `../main.py` configures `background_task_manager` with the settings-derived worker count, starts it, stores it on `app.state`, and shuts it down during teardown.
+- `auth_service.py`, `stats_service.py`, and `webauthn_service.py` are intended public import surfaces over deeper packages.
+- Realtime route handlers depend on `services/realtime/connection_manager.py` for connection tracking and room membership instead of owning that state themselves.
 
 ## CONVENTIONS
 
-- Treat `auth_service.py`, `stats_service.py`, and `webauthn_service.py` as public import surfaces over their split packages.
-- Keep router handlers thin by pushing durable business logic into these service boundaries instead of re-implementing it in `routers/`.
-- Keep shared worker lifecycle in `../main.py` plus `background_tasks.py`; the queue is app-owned infrastructure, not a per-request helper.
-- Keep cleanup helpers separate from query/CRUD services so retention flows stay explicit and testable.
-- Keep WebAuthn separate from the auth package; passkey browser/server ceremony is its own boundary.
+- Keep routers thin by importing service-root facades or package-owned helpers instead of duplicating durable business logic.
+- Treat the shared background task manager as app-owned infrastructure. Start and stop it in lifespan, then consume it from feature code.
+- Keep passkey logic separate from the auth package. The public boundary is `webauthn_service.py` plus `services/webauthn/`.
+- Keep cleanup helpers explicit and separate from request-serving code so retention work stays testable.
 
 ## ANTI-PATTERNS
 
-- Do not import leaf package internals directly when a service-root facade already exists.
-- Do not spawn orphan asyncio workers from feature code when `background_tasks.py` already owns the shared queue.
-- Do not move pricing, audit, or routing logic back into routers once a service boundary exists.
+- Do not import deep package internals when a service-root facade already exists.
+- Do not spawn ad hoc worker pools or background queues from feature code when `background_tasks.py` already owns the shared worker model.
+- Do not push routing, auth, or observability logic back into route handlers once an established service boundary already owns it.

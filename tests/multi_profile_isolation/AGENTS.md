@@ -1,7 +1,7 @@
 # BACKEND MULTI-PROFILE ISOLATION KNOWLEDGE BASE
 
 ## OVERVIEW
-`multi_profile_isolation/` verifies the selected-vs-active profile model end to end: lifecycle limits, management scoping, runtime routing isolation, observability attribution, and config import/export containment.
+`multi_profile_isolation/` verifies the selected-profile versus active-profile split across management and runtime behavior. The suite covers lifecycle, management scoping, runtime routing, observability attribution, connection-priority isolation, and profile-scoped config export or import isolation.
 
 ## STRUCTURE
 ```
@@ -11,30 +11,35 @@ multi_profile_isolation/
 ├── test_runtime.py
 ├── test_observability.py
 ├── test_config_import_export.py
-├── test_config_import_export_cases/   # Profile-scoped import/export leaf cases
+├── test_config_import_export_cases/   # Profile-scoped config export or import isolation leaf cases
 └── test_connection_priority_isolation.py
 ```
 
 ## WHERE TO LOOK
 
-- Lifecycle and CRUD guards: `test_lifecycle.py`
-- Effective-profile management scoping: `test_scoping.py`
-- Runtime model resolution and failover-state isolation: `test_runtime.py`
-- Costing, settings, audit, and blocklist attribution: `test_observability.py`
-- Profile-targeted config import/export: `test_config_import_export.py`, `test_config_import_export_cases/profile_scoped_config_export_import_isolation_tests.py`
-- Priority and ordering isolation: `test_connection_priority_isolation.py`
-- Top-level suite export: `../test_multi_profile_isolation.py`
+- Top-level isolation export surface: `../test_multi_profile_isolation.py`
+- Lifecycle and CRUD limits: `test_lifecycle.py`
+- Effective-profile management scoping and leakage prevention: `test_scoping.py`
+- Runtime model resolution and failover recovery-state isolation: `test_runtime.py`
+- Costing, settings, header blocklist, and observability attribution: `test_observability.py`
+- Config export or import containment: `test_config_import_export.py`, `test_config_import_export_cases/profile_scoped_config_export_import_isolation_tests.py`
+- Connection priority isolation across profiles: `test_connection_priority_isolation.py`
+
+## ISOLATION FACTS
+
+- `../test_multi_profile_isolation.py` is the top-level aggregator for this subtree.
+- The suite explicitly includes profile-scoped config export or import isolation, not just general config validation.
+- Parent coverage for `test_config_import_export_cases/` lives here. Don't add another AGENTS doc under that folder for the current structure.
 
 ## CONVENTIONS
 
-- Keep tests framed in FR and profile-isolation semantics; many files map directly to requirement IDs rather than CRUD surfaces.
-- Runtime tests should prove that profile A and profile B can share overlapping IDs without cross-talk.
-- Observability tests should assert immutable `profile_id` attribution, not just response payload shape.
-- Connection ordering and config import/export belong here when they prove isolation across profiles, even if similar single-profile behavior is also covered in DEF regressions.
-- Config-import cases belong here when they prove isolation boundaries, even if similar validation exists in defect regressions.
+- Keep tests framed around cross-profile containment, not single-profile CRUD behavior.
+- Assert both sides of the split when relevant: selected profile for management scope, active profile for runtime routing.
+- Keep observability assertions tied to `profile_id` attribution and profile-scoped settings or blocklist behavior, not just response status.
+- Put connection-priority or config import or export tests here when the point is isolation between profiles.
 
 ## ANTI-PATTERNS
 
-- Do not write isolation tests that rely on a single-profile fixture shape.
-- Do not assert management-scope behavior using runtime-only dependencies.
-- Do not collapse selected-profile and active-profile expectations into one assertion.
+- Do not write isolation tests that only prove one profile works in isolation.
+- Do not collapse selected-profile and active-profile expectations into one generic assertion.
+- Do not move profile-scoped config export or import isolation cases into the DEF tree when the main point is cross-profile containment.
