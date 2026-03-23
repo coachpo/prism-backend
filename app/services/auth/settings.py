@@ -16,6 +16,7 @@ from app.core.time import utc_now
 from app.models.models import AppAuthSettings
 from app.schemas.schemas import AuthSettingsResponse
 
+from .app_settings import invalidate_app_auth_settings_snapshot_cache
 from .proxy_keys import PROXY_KEY_LIMIT
 from .sessions import revoke_all_refresh_tokens
 
@@ -70,6 +71,7 @@ async def update_auth_settings(
     if revoke_sessions:
         await revoke_all_refresh_tokens(db, auth_subject_id=settings_row.id)
     await db.flush()
+    invalidate_app_auth_settings_snapshot_cache()
     return settings_row
 
 
@@ -85,6 +87,7 @@ async def begin_email_verification(
     settings_row.email_verification_attempt_count = 0
     settings_row.updated_at = utc_now()
     await db.flush()
+    invalidate_app_auth_settings_snapshot_cache()
     return settings_row, otp_code
 
 
@@ -118,6 +121,7 @@ async def confirm_email_verification(
     settings_row.email_verification_attempt_count = 0
     settings_row.updated_at = utc_now()
     await db.flush()
+    invalidate_app_auth_settings_snapshot_cache()
     return settings_row
 
 

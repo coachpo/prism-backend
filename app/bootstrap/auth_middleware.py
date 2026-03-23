@@ -2,12 +2,16 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
+from starlette.background import BackgroundTask
 
 from app.core import database as database_core
 from app.core.auth import decode_access_token, extract_proxy_api_key
 from app.core.config import get_settings
+from app.core.time import utc_now
 from app.services.auth_service import (
-    get_or_create_app_auth_settings,
+    enqueue_proxy_api_key_usage,
+    get_app_auth_settings_snapshot,
+    persist_proxy_api_key_usage,
     verify_proxy_api_key,
 )
 
@@ -51,6 +55,20 @@ def _set_request_auth_state(request: Request, *, auth_enabled: bool) -> None:
     request.state.auth_enabled = auth_enabled
     request.state.auth_subject = None
     request.state.proxy_api_key_id = None
+
+
+def _append_response_background_task(
+    response: Response,
+    task: Callable[[], Awaitable[None]],
+) -> None:
+    existing_background = response.background
+
+    async def run_background_chain() -> None:
+        if existing_background is not None:
+            await existing_background()
+        await task()
+
+    response.background = BackgroundTask(run_background_chain)
 
 
 def _get_authenticated_subject(auth_settings, token_payload: dict[str, object]):
@@ -139,10 +157,29 @@ async def _handle_proxy_authentication(
             detail="Invalid proxy API key",
         )
 
-    proxy_key.last_used_ip = request.client.host if request.client else None
+    last_used_at = utc_now()
+    last_used_ip = request.client.host if request.client else None
     request.state.proxy_api_key_id = proxy_key.id
-    await session.commit()
-    return await call_next(request)
+    response = await call_next(request)
+
+    background_task_manager = getattr(
+        request.app.state, "background_task_manager", None
+    )
+    if not enqueue_proxy_api_key_usage(
+        background_task_manager,
+        key_id=proxy_key.id,
+        last_used_at=last_used_at,
+        last_used_ip=last_used_ip,
+    ):
+        _append_response_background_task(
+            response,
+            lambda: persist_proxy_api_key_usage(
+                key_id=proxy_key.id,
+                last_used_at=last_used_at,
+                last_used_ip=last_used_ip,
+            ),
+        )
+    return response
 
 
 async def handle_authentication(
@@ -157,7 +194,7 @@ async def handle_authentication(
         return await call_next(request)
 
     async with database_core.AsyncSessionLocal() as session:
-        auth_settings = await get_or_create_app_auth_settings(session)
+        auth_settings = await get_app_auth_settings_snapshot(session)
         _set_request_auth_state(request, auth_enabled=auth_settings.auth_enabled)
 
         if request.url.path.startswith("/api/"):

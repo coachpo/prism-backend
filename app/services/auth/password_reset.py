@@ -16,7 +16,10 @@ from app.core.crypto import (
 from app.core.time import utc_now
 from app.models.models import AppAuthSettings, PasswordResetChallenge
 
-from .app_settings import get_or_create_app_auth_settings
+from .app_settings import (
+    get_or_create_app_auth_settings,
+    invalidate_app_auth_settings_snapshot_cache,
+)
 from .sessions import revoke_all_refresh_tokens
 
 
@@ -76,6 +79,7 @@ async def consume_password_reset_challenge(
     settings_row.updated_at = utc_now()
     await revoke_all_refresh_tokens(db, auth_subject_id=settings_row.id)
     await db.flush()
+    invalidate_app_auth_settings_snapshot_cache()
     return settings_row
 
 

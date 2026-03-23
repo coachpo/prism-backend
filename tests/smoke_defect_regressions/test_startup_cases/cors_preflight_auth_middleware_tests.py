@@ -3,7 +3,10 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.database import AsyncSessionLocal, get_engine
 from app.main import app
-from app.services.auth_service import get_or_create_app_auth_settings
+from app.services.auth_service import (
+    get_or_create_app_auth_settings,
+    invalidate_app_auth_settings_snapshot_cache,
+)
 
 
 async def _set_auth_enabled(value: bool) -> None:
@@ -12,6 +15,7 @@ async def _set_auth_enabled(value: bool) -> None:
         settings_row = await get_or_create_app_auth_settings(session)
         settings_row.auth_enabled = value
         await session.commit()
+        invalidate_app_auth_settings_snapshot_cache()
 
 
 class TestDEF068_CorsPreflightBypassesAuthMiddleware:

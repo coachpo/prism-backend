@@ -31,6 +31,7 @@ from app.models.models import (
 from app.routers.realtime import websocket_endpoint
 from app.services.auth_service import (
     get_or_create_app_auth_settings,
+    invalidate_app_auth_settings_snapshot_cache,
     send_password_reset_email,
 )
 from app.services.profile_invariants import ensure_profile_invariants
@@ -94,6 +95,7 @@ async def _reset_auth_state() -> int:
         await session.execute(delete(PasswordResetChallenge))
         await session.execute(delete(ProxyApiKey))
         await session.commit()
+        invalidate_app_auth_settings_snapshot_cache()
         return profile.id
 
 
@@ -115,6 +117,7 @@ async def _cleanup_auth_state() -> None:
         await session.execute(delete(PasswordResetChallenge))
         await session.execute(delete(ProxyApiKey))
         await session.commit()
+        invalidate_app_auth_settings_snapshot_cache()
     await get_engine().dispose()
 
 
@@ -237,6 +240,7 @@ class TestDEF069_AuthSessionLifecycle:
                 settings_row = await get_or_create_app_auth_settings(session)
                 settings_row.auth_enabled = False
                 await session.commit()
+                invalidate_app_auth_settings_snapshot_cache()
 
             async with AsyncClient(
                 transport=transport, base_url="http://testserver"
