@@ -43,6 +43,13 @@ async def get_profile_by_id(db: AsyncSession, profile_id: int) -> Profile | None
     return result.scalar_one_or_none()
 
 
+async def _send_or_stop(
+    connection,
+    payload: dict[str, Any],
+) -> bool:
+    return await connection.send_json(payload)
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -84,15 +91,18 @@ async def websocket_endpoint(
                 return
 
         connection.authenticated = True
-        await connection.send_json(
+        if not await _send_or_stop(
+            connection,
             {
                 "type": "authenticated",
                 "username": settings_row.username,
-            }
-        )
+            },
+        ):
+            return
 
         # Send initial heartbeat
-        await connection.send_json({"type": "heartbeat"})
+        if not await _send_or_stop(connection, {"type": "heartbeat"}):
+            return
 
         # Message loop
         while True:
@@ -101,44 +111,52 @@ async def websocket_endpoint(
 
             if message_type == "subscribe":
                 if auth_enabled and not connection.authenticated:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": "Authentication required",
-                        }
-                    )
+                        },
+                    ):
+                        return
                     continue
 
                 profile_id = data.get("profile_id")
                 channel = data.get("channel", "dashboard")
 
                 if not profile_id:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": "profile_id required",
-                        }
-                    )
+                        },
+                    ):
+                        return
                     continue
 
                 if channel not in SUPPORTED_REALTIME_CHANNELS:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": f"Unsupported channel: {channel}",
-                        }
-                    )
+                        },
+                    ):
+                        return
                     continue
 
                 # Verify profile exists
                 profile = await get_profile_by_id(db, profile_id)
                 if not profile:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": f"Profile {profile_id} not found",
-                        }
-                    )
+                        },
+                    ):
+                        return
                     continue
 
                 # Subscribe to channel
@@ -147,54 +165,65 @@ async def websocket_endpoint(
                 )
 
                 if success:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "subscribed",
                             "profile_id": profile_id,
                             "channel": channel,
-                        }
-                    )
+                        },
+                    ):
+                        return
                 else:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": "Subscription failed",
-                        }
-                    )
+                        },
+                    ):
+                        return
 
             elif message_type == "unsubscribe":
                 await connection_manager.unsubscribe(connection_id)
-                await connection.send_json({"type": "unsubscribed"})
+                if not await _send_or_stop(connection, {"type": "unsubscribed"}):
+                    return
 
             elif message_type == "unsubscribe_channel":
                 channel = data.get("channel")
 
                 if not isinstance(channel, str) or channel.strip() == "":
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": "channel required",
-                        }
-                    )
+                        },
+                    ):
+                        return
                     continue
 
                 success = await connection_manager.unsubscribe_channel(
                     connection_id, channel
                 )
                 if success:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "unsubscribed",
                             "channel": channel,
-                        }
-                    )
+                        },
+                    ):
+                        return
                 else:
-                    await connection.send_json(
+                    if not await _send_or_stop(
+                        connection,
                         {
                             "type": "error",
                             "message": "Channel unsubscribe failed",
-                        }
-                    )
+                        },
+                    ):
+                        return
 
             elif message_type == "pong":
                 # Client responded to heartbeat
@@ -202,15 +231,18 @@ async def websocket_endpoint(
 
             elif message_type == "ping":
                 # Client initiated ping
-                await connection.send_json({"type": "pong"})
+                if not await _send_or_stop(connection, {"type": "pong"}):
+                    return
 
             else:
-                await connection.send_json(
+                if not await _send_or_stop(
+                    connection,
                     {
                         "type": "error",
                         "message": f"Unknown message type: {message_type}",
-                    }
-                )
+                    },
+                ):
+                    return
 
     except WebSocketDisconnect:
         logger.info("WebSocket disconnected: %s", connection_id)

@@ -1,0 +1,152 @@
+from datetime import datetime, timezone
+from types import SimpleNamespace
+from uuid import uuid4
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from app.core.database import AsyncSessionLocal
+from app.models.models import Profile, RequestLog
+
+
+def _request_log(
+    *, profile_id: int, response_time_ms: int, created_at: datetime
+) -> RequestLog:
+    return RequestLog(
+        profile_id=profile_id,
+        model_id="gpt-test",
+        provider_type="openai",
+        endpoint_id=None,
+        connection_id=None,
+        endpoint_base_url="https://api.openai.com/v1",
+        status_code=200,
+        response_time_ms=response_time_ms,
+        is_stream=False,
+        request_path="/v1/chat/completions",
+        created_at=created_at,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_stats_summary_reads_p95_from_sql_aggregate_query() -> None:
+    from app.services.stats.summary import get_stats_summary
+
+    aggregate_result = MagicMock()
+    aggregate_result.one.return_value = SimpleNamespace(
+        total_requests=20,
+        success_count=19,
+        avg_response_time_ms=12.5,
+        p95_response_time_ms=20,
+        total_input_tokens=0,
+        total_output_tokens=0,
+        total_tokens=0,
+    )
+    legacy_p95_result = MagicMock()
+    legacy_p95_result.all.return_value = []
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[aggregate_result, legacy_p95_result])
+
+    summary = await get_stats_summary(db, profile_id=7)
+
+    assert summary["p95_response_time_ms"] == 20
+    assert db.execute.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_stats_summary_preserves_existing_p95_rank_semantics() -> None:
+    from app.services.stats.summary import get_stats_summary
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        primary_profile = Profile(
+            name=f"summary-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        other_profile = Profile(
+            name=f"summary-other-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add_all([primary_profile, other_profile])
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=primary_profile.id,
+                    response_time_ms=response_time_ms,
+                    created_at=created_at,
+                )
+                for response_time_ms in range(1, 21)
+            ]
+            + [
+                _request_log(
+                    profile_id=other_profile.id,
+                    response_time_ms=9_999,
+                    created_at=created_at,
+                )
+            ]
+        )
+        await db.commit()
+
+        summary = await get_stats_summary(db, profile_id=primary_profile.id)
+
+    assert summary["total_requests"] == 20
+    assert summary["p95_response_time_ms"] == 20
+
+
+@pytest.mark.asyncio
+async def test_get_request_logs_uses_stable_id_tiebreaker_for_timestamp_sort() -> None:
+    from app.services.stats.request_logs import get_request_logs
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    rows_result = MagicMock()
+    rows_result.scalars.return_value.all.return_value = []
+    statements = []
+
+    async def capture_execute(statement):
+        statements.append(statement)
+        return count_result if len(statements) == 1 else rows_result
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=capture_execute)
+
+    await get_request_logs(db, profile_id=7, limit=50, offset=0)
+
+    order_clauses = [str(clause) for clause in statements[1]._order_by_clauses]
+    assert order_clauses == [
+        str(RequestLog.created_at.desc()),
+        str(RequestLog.id.desc()),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_operations_request_logs_uses_stable_id_tiebreaker_for_timestamp_sort() -> (
+    None
+):
+    from app.services.stats.request_logs import get_operations_request_logs
+
+    count_result = MagicMock()
+    count_result.scalar.return_value = 0
+    rows_result = MagicMock()
+    rows_result.mappings.return_value.all.return_value = []
+    statements = []
+
+    async def capture_execute(statement):
+        statements.append(statement)
+        return count_result if len(statements) == 1 else rows_result
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=capture_execute)
+
+    await get_operations_request_logs(db, profile_id=7, limit=200, offset=0)
+
+    order_clauses = [str(clause) for clause in statements[1]._order_by_clauses]
+    assert order_clauses == [
+        str(RequestLog.created_at.desc()),
+        str(RequestLog.id.desc()),
+    ]

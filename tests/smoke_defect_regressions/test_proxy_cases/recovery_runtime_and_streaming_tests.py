@@ -535,6 +535,16 @@ class TestDEF021_StreamingCancellationResilience:
             return 501
 
         try:
+
+            def build_cost_fields_for_assertion(**kwargs):
+                return {
+                    "cache_read_input_tokens": kwargs["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": kwargs[
+                        "cache_creation_input_tokens"
+                    ],
+                    "reasoning_tokens": kwargs["reasoning_tokens"],
+                }
+
             with (
                 patch(
                     "app.routers.proxy.get_model_config_with_connections",
@@ -594,6 +604,144 @@ class TestDEF021_StreamingCancellationResilience:
                 assert audit_call.kwargs["request_log_id"] == 501
                 assert audit_call.kwargs["response_body"] == first
                 assert audit_call.kwargs["capture_bodies"] is True
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_cancel_without_body_capture_still_logs_tokens(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        first_chunk = b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+
+        class CancelMidStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield first_chunk
+                raise asyncio.CancelledError()
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CancelMidStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = False
+        log_started = asyncio.Event()
+        release_log = asyncio.Event()
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        async def delayed_log_request(*args, **kwargs):
+            log_started.set()
+            await release_log.wait()
+            return 591
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy.log_request",
+                    AsyncMock(side_effect=delayed_log_request),
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+                first = await stream.__anext__()
+                assert first == first_chunk
+
+                next_task = asyncio.create_task(stream.__anext__())
+                await asyncio.wait_for(log_started.wait(), timeout=1)
+                assert audit_mock.await_count == 0
+                release_log.set()
+
+                with pytest.raises(asyncio.CancelledError):
+                    await next_task
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert upstream_resp.closed is True
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["input_tokens"] == 1
+                assert log_call.kwargs["output_tokens"] == 1
+                assert log_call.kwargs["total_tokens"] == 2
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 591
+                assert audit_call.kwargs["capture_bodies"] is False
+                assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
                 assert "Failed to queue streaming audit follow-up" not in caplog.text
         finally:
@@ -722,6 +870,295 @@ class TestDEF021_StreamingCancellationResilience:
                 assert audit_call.kwargs["response_headers"] == {
                     "content-type": "text/event-stream"
                 }
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_stream_success_without_body_capture_logs_tokens_without_audit_payload(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        chunk_one = b'data: {"usage":{"prompt_tokens":1,'
+        chunk_two = b'"completion_tokens":1,"total_tokens":2}}\n\n'
+        expected_payload = chunk_one + chunk_two
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield chunk_one
+                yield chunk_two
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = False
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+
+            def build_cost_fields_for_assertion(**kwargs):
+                return {
+                    "cache_read_input_tokens": kwargs["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": kwargs[
+                        "cache_creation_input_tokens"
+                    ],
+                    "reasoning_tokens": kwargs["reasoning_tokens"],
+                }
+
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=890)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["input_tokens"] == 1
+                assert log_call.kwargs["output_tokens"] == 1
+                assert log_call.kwargs["total_tokens"] == 2
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 890
+                assert audit_call.kwargs["capture_bodies"] is False
+                assert audit_call.kwargs["response_body"] is None
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_stream_success_without_body_capture_matches_full_payload_multi_event_usage(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.stats_service import extract_token_usage
+
+        caplog.set_level(logging.ERROR)
+
+        event_one = (
+            b'data: {"usage":{"prompt_tokens":10,"cache_read_input_tokens":7}}\n\n'
+        )
+        event_two = b'data: {"usage":{"completion_tokens":5}}\n\n'
+        expected_payload = event_one + event_two
+        expected_tokens = extract_token_usage(expected_payload)
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield event_one
+                yield event_two
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = False
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+
+            def build_cost_fields_for_multi_event_assertion(**kwargs):
+                return {
+                    "cache_read_input_tokens": kwargs["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": kwargs[
+                        "cache_creation_input_tokens"
+                    ],
+                    "reasoning_tokens": kwargs["reasoning_tokens"],
+                }
+
+            with (
+                patch(
+                    "app.routers.proxy.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy.compute_cost_fields",
+                    side_effect=build_cost_fields_for_multi_event_assertion,
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=891)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert received == [event_one, event_two]
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert (
+                    log_call.kwargs["input_tokens"] == expected_tokens["input_tokens"]
+                )
+                assert (
+                    log_call.kwargs["output_tokens"] == expected_tokens["output_tokens"]
+                )
+                assert (
+                    log_call.kwargs["total_tokens"] == expected_tokens["total_tokens"]
+                )
+                assert (
+                    log_call.kwargs["cache_read_input_tokens"]
+                    == expected_tokens["cache_read_input_tokens"]
+                )
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 891
+                assert audit_call.kwargs["capture_bodies"] is False
+                assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
                 assert "Failed to queue streaming audit follow-up" not in caplog.text
         finally:

@@ -3,9 +3,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from pydantic import ValidationError
 
+from app.core.config import Settings
 from app.main import app, lifespan
-from app.services.background_tasks import BackgroundTaskManager
+from app.services.background_tasks import BackgroundTaskManager, background_task_manager
 
 
 @pytest.mark.asyncio
@@ -22,6 +24,81 @@ async def test_background_task_manager_requires_start() -> None:
     assert metrics.last_failure.phase == "enqueue"
     assert metrics.last_failure.failure_kind == "not_started"
     assert metrics.last_failure.job_name == "test-job"
+
+
+def test_settings_reject_background_task_worker_count_below_one() -> None:
+    with pytest.raises(ValidationError, match="background_task_worker_count"):
+        Settings(background_task_worker_count=0)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_configures_singleton_background_task_manager_worker_count() -> (
+    None
+):
+    mock_http_client = SimpleNamespace(aclose=AsyncMock())
+    dispose_mock = AsyncMock()
+    mock_engine = SimpleNamespace(dispose=dispose_mock)
+    release_jobs = asyncio.Event()
+    first_job_started = asyncio.Event()
+    second_job_started = asyncio.Event()
+    third_job_finished = asyncio.Event()
+    original_worker_count = background_task_manager.metrics.worker_count
+
+    async def blocking_job(started: asyncio.Event) -> None:
+        started.set()
+        await release_jobs.wait()
+
+    async def third_job() -> None:
+        third_job_finished.set()
+
+    settings = Settings(background_task_worker_count=2)
+
+    try:
+        with (
+            patch("app.main.bootstrap.run_startup_sequence", AsyncMock()),
+            patch(
+                "app.main.bootstrap.build_http_client", return_value=mock_http_client
+            ),
+            patch("app.main.get_engine", return_value=mock_engine),
+            patch("app.main.get_settings", return_value=settings),
+        ):
+            async with lifespan(app):
+                manager = app.state.background_task_manager
+
+                assert manager is background_task_manager
+
+                manager.enqueue(
+                    name="first-job",
+                    run=lambda: blocking_job(first_job_started),
+                )
+                manager.enqueue(
+                    name="second-job",
+                    run=lambda: blocking_job(second_job_started),
+                )
+                manager.enqueue(name="third-job", run=third_job)
+
+                await asyncio.wait_for(first_job_started.wait(), timeout=1)
+                await asyncio.wait_for(second_job_started.wait(), timeout=1)
+
+                mid_metrics = manager.metrics
+
+                assert third_job_finished.is_set() is False
+                assert mid_metrics.worker_count == 2
+                assert mid_metrics.queue_depth == 3
+                assert mid_metrics.active_jobs == 2
+                assert mid_metrics.total_completed == 0
+
+                release_jobs.set()
+                await manager.wait_for_idle()
+
+                final_metrics = manager.metrics
+
+        assert final_metrics.queue_depth == 0
+        assert final_metrics.active_jobs == 0
+        assert final_metrics.total_completed == 3
+        assert final_metrics.worker_count == 2
+    finally:
+        background_task_manager._worker_count = original_worker_count
 
 
 @pytest.mark.asyncio
@@ -371,6 +448,42 @@ async def test_lifespan_starts_and_stops_background_task_manager() -> None:
     shutdown_mock.assert_awaited_once()
     mock_http_client.aclose.assert_awaited_once()
     dispose_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_cleans_dashboard_debounce_tasks_before_background_shutdown() -> (
+    None
+):
+    mock_http_client = SimpleNamespace(aclose=AsyncMock())
+    dispose_mock = AsyncMock()
+    mock_engine = SimpleNamespace(dispose=dispose_mock)
+    events: list[str] = []
+
+    async def cleanup_dashboard_debounce_tasks() -> None:
+        events.append("cleanup")
+
+    async def shutdown_background_tasks() -> None:
+        events.append("shutdown")
+
+    with (
+        patch("app.main.bootstrap.run_startup_sequence", AsyncMock()),
+        patch("app.main.bootstrap.build_http_client", return_value=mock_http_client),
+        patch("app.main.background_task_manager.start", AsyncMock()),
+        patch(
+            "app.main.background_task_manager.shutdown",
+            AsyncMock(side_effect=shutdown_background_tasks),
+        ),
+        patch(
+            "app.main.shutdown_dashboard_update_lifecycle",
+            AsyncMock(side_effect=cleanup_dashboard_debounce_tasks),
+        ) as cleanup_mock,
+        patch("app.main.get_engine", return_value=mock_engine),
+    ):
+        async with lifespan(app):
+            pass
+
+    cleanup_mock.assert_awaited_once()
+    assert events == ["cleanup", "shutdown"]
 
 
 @pytest.mark.asyncio

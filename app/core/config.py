@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     port: int = 8000
     log_level: str = "info"
     app_env: Literal["development", "test", "production"] = "development"
+    background_task_worker_count: int = Field(default=1, ge=1)
+    dashboard_update_debounce_seconds: float = Field(default=0.0, ge=0.0)
     cors_allowed_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     # Timeout settings for upstream LLM requests
     connect_timeout: float = 10.0

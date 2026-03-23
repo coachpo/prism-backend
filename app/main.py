@@ -14,6 +14,7 @@ from app import bootstrap
 from app.core.config import Settings, get_settings
 from app.core.database import get_engine
 from app.services.background_tasks import background_task_manager
+from app.services.stats.logging import shutdown_dashboard_update_lifecycle
 from app.routers import (
     audit,
     auth,
@@ -162,10 +163,14 @@ async def lifespan(app: FastAPI):
     app.state.background_task_manager = None
     app.state.http_client = None
     http_client = None
+    settings = get_settings()
 
     try:
         await bootstrap.run_startup_sequence()
         http_client = bootstrap.build_http_client()
+        background_task_manager.configure(
+            worker_count=settings.background_task_worker_count
+        )
         await background_task_manager.start()
     except Exception:
         if http_client is not None:
@@ -180,6 +185,7 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         try:
+            await shutdown_dashboard_update_lifecycle()
             await background_task_manager.shutdown()
         finally:
             app.state.background_task_manager = None

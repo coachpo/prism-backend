@@ -26,14 +26,16 @@ class RealtimeConnection:
         self.channels: set[str] = set()
         self.authenticated = False
 
-    async def send_json(self, data: dict[str, Any]) -> None:
+    async def send_json(self, data: dict[str, Any]) -> bool:
         """Send JSON message to client."""
         try:
             await self.websocket.send_json(data)
+            return True
         except Exception:
             logger.exception(
                 "Failed to send message to connection %s", self.connection_id
             )
+            return False
 
 
 class ConnectionManager:
@@ -61,11 +63,8 @@ class ConnectionManager:
     async def disconnect(self, connection_id: str) -> None:
         """Remove connection and clean up subscriptions."""
         async with self._lock:
-            connection = self.connections.pop(connection_id, None)
-            if not connection:
+            if not self._drop_connection_locked(connection_id):
                 return
-
-            self._clear_connection_subscriptions_locked(connection)
 
         logger.info("WebSocket connection closed: %s", connection_id)
 
@@ -129,19 +128,33 @@ class ConnectionManager:
 
         async with self._lock:
             connection_ids = self.rooms.get(room_key, set()).copy()
+            active_connections = []
+            stale_connection_ids = []
+            for conn_id in connection_ids:
+                connection = self.connections.get(conn_id)
+                if connection is None:
+                    stale_connection_ids.append(conn_id)
+                else:
+                    active_connections.append((conn_id, connection))
 
         if not connection_ids:
             return 0
 
-        # Send to all connections in room
-        tasks = []
-        for conn_id in connection_ids:
-            connection = self.connections.get(conn_id)
-            if connection:
-                tasks.append(connection.send_json(message))
+        failed_connection_ids = set(stale_connection_ids)
+        if active_connections:
+            results = await asyncio.gather(
+                *(
+                    connection.send_json(message)
+                    for _, connection in active_connections
+                ),
+                return_exceptions=True,
+            )
+            for (conn_id, _), result in zip(active_connections, results, strict=False):
+                if result is not True:
+                    failed_connection_ids.add(conn_id)
 
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        if failed_connection_ids:
+            await self._drop_connections(failed_connection_ids)
 
         logger.debug(
             "Broadcasted to profile=%d channel=%s: %d connections",
@@ -155,16 +168,24 @@ class ConnectionManager:
         self, connection_id: str, message: dict[str, Any]
     ) -> bool:
         """Send message to specific connection."""
-        connection = self.connections.get(connection_id)
+        async with self._lock:
+            connection = self.connections.get(connection_id)
         if not connection:
             return False
 
-        await connection.send_json(message)
-        return True
+        sent = await connection.send_json(message)
+        if sent:
+            return True
+
+        await self._drop_connections({connection_id})
+        return False
 
     def get_connection(self, connection_id: str) -> RealtimeConnection | None:
         """Get connection by ID."""
         return self.connections.get(connection_id)
+
+    def has_subscribers(self, *, profile_id: int, channel: str) -> bool:
+        return bool(self.rooms.get((profile_id, channel)))
 
     def _remove_channel_subscription_locked(
         self, connection: RealtimeConnection, channel: str
@@ -190,6 +211,36 @@ class ConnectionManager:
 
         connection.channels.clear()
         connection.profile_id = None
+
+    def _drop_connection_locked(self, connection_id: str) -> bool:
+        connection = self.connections.pop(connection_id, None)
+        if connection is not None:
+            self._clear_connection_subscriptions_locked(connection)
+            return True
+
+        removed = False
+        for room_key in tuple(self.rooms):
+            room_members = self.rooms[room_key]
+            if connection_id in room_members:
+                room_members.discard(connection_id)
+                removed = True
+                if not room_members:
+                    del self.rooms[room_key]
+
+        return removed
+
+    async def _drop_connections(self, connection_ids: set[str]) -> None:
+        if not connection_ids:
+            return
+
+        removed_connection_ids = []
+        async with self._lock:
+            for connection_id in connection_ids:
+                if self._drop_connection_locked(connection_id):
+                    removed_connection_ids.append(connection_id)
+
+        for connection_id in removed_connection_ids:
+            logger.info("WebSocket connection closed: %s", connection_id)
 
     def get_stats(self) -> dict[str, Any]:
         """Get connection manager statistics."""

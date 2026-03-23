@@ -70,6 +70,18 @@ class BackgroundTaskManager:
         self._terminal_failures_total = 0
         self._last_failure: BackgroundTaskFailureSnapshot | None = None
 
+    def configure(self, *, worker_count: int) -> None:
+        if worker_count < 1:
+            raise ValueError("worker_count must be at least 1")
+        if self._started:
+            if worker_count == self._worker_count:
+                return
+            raise RuntimeError(
+                "BackgroundTaskManager cannot be reconfigured after start"
+            )
+
+        self._worker_count = worker_count
+
     @property
     def started(self) -> bool:
         return self._started

@@ -50,6 +50,10 @@ async def _get_request_log_total(db: AsyncSession, where) -> int:
     return (await db.execute(count_q)).scalar() or 0
 
 
+def _request_log_order_by():
+    return RequestLog.created_at.desc(), RequestLog.id.desc()
+
+
 async def get_request_logs(
     db: AsyncSession,
     *,
@@ -83,7 +87,7 @@ async def get_request_logs(
     q = (
         select(RequestLog)
         .where(where)
-        .order_by(RequestLog.created_at.desc())
+        .order_by(*_request_log_order_by())
         .limit(limit)
         .offset(offset)
     )
@@ -132,9 +136,7 @@ async def get_operations_request_logs(
             RequestLog.output_tokens.label("output_tokens"),
             RequestLog.total_tokens.label("total_tokens"),
             RequestLog.cache_read_input_tokens.label("cache_read_input_tokens"),
-            RequestLog.cache_creation_input_tokens.label(
-                "cache_creation_input_tokens"
-            ),
+            RequestLog.cache_creation_input_tokens.label("cache_creation_input_tokens"),
             RequestLog.reasoning_tokens.label("reasoning_tokens"),
             RequestLog.total_cost_user_currency_micros.label(
                 "total_cost_user_currency_micros"
@@ -143,7 +145,7 @@ async def get_operations_request_logs(
             RequestLog.created_at.label("created_at"),
         )
         .where(where)
-        .order_by(RequestLog.created_at.desc())
+        .order_by(*_request_log_order_by())
         .limit(limit)
         .offset(offset)
     )

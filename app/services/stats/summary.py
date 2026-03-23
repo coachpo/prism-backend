@@ -39,10 +39,32 @@ async def get_stats_summary(
         else_=0,
     )
 
+    p95_source = (
+        select(
+            RequestLog.response_time_ms.label("response_time_ms"),
+            func.row_number()
+            .over(order_by=RequestLog.response_time_ms.asc())
+            .label("response_time_rank"),
+            func.count().over().label("response_time_count"),
+        )
+        .where(time_filter)
+        .subquery()
+    )
+    p95_subquery = (
+        select(p95_source.c.response_time_ms)
+        .where(
+            p95_source.c.response_time_rank > p95_source.c.response_time_count * 0.95
+        )
+        .order_by(p95_source.c.response_time_rank.asc())
+        .limit(1)
+        .scalar_subquery()
+    )
+
     agg_q = select(
         func.count().label("total_requests"),
         func.sum(success_case).label("success_count"),
         func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
+        func.coalesce(p95_subquery, 0).label("p95_response_time_ms"),
         func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
         func.coalesce(func.sum(RequestLog.output_tokens), 0).label(
             "total_output_tokens"
@@ -58,18 +80,7 @@ async def get_stats_summary(
         round((success_count / total_requests * 100), 2) if total_requests > 0 else 0.0
     )
     avg_rt = round(row.avg_response_time_ms or 0, 1)
-
-    p95_q = (
-        select(RequestLog.response_time_ms)
-        .where(time_filter)
-        .order_by(RequestLog.response_time_ms.asc())
-    )
-    all_rts = [r for (r,) in (await db.execute(p95_q)).all()]
-    p95 = 0
-    if all_rts:
-        idx = int(len(all_rts) * 0.95)
-        idx = min(idx, len(all_rts) - 1)
-        p95 = all_rts[idx]
+    p95 = int(row.p95_response_time_ms or 0)
 
     groups = []
     if group_by in ("model", "provider", "endpoint"):
@@ -121,6 +132,7 @@ async def get_stats_summary(
         "groups": groups,
     }
 
+
 async def get_connection_success_rates(
     db: AsyncSession,
     *,
@@ -169,6 +181,7 @@ async def get_connection_success_rates(
         )
     return results
 
+
 async def get_endpoint_success_rates(
     db: AsyncSession,
     *,
@@ -182,6 +195,7 @@ async def get_endpoint_success_rates(
         from_time=from_time,
         to_time=to_time,
     )
+
 
 async def get_model_health_stats(
     db: AsyncSession,

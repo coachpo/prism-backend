@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from sqlalchemy import case, func, select
 
+from app.core.config import get_settings
 from app.core.time import utc_now
 from app.models.domains.routing import Connection, Endpoint, ModelConfig
 from app.models.models import RequestLog
@@ -22,6 +23,75 @@ from app.services.stats.summary import get_stats_summary
 from app.services.stats.throughput import get_throughput_stats
 
 logger = logging.getLogger(__name__)
+
+_dashboard_update_latest_request_log_ids: dict[int, int] = {}
+_dashboard_update_enqueued_profiles: set[int] = set()
+_dashboard_update_debounce_tasks: dict[int, asyncio.Task[None]] = {}
+
+
+async def shutdown_dashboard_update_lifecycle() -> None:
+    tasks = list(_dashboard_update_debounce_tasks.values())
+    _dashboard_update_debounce_tasks.clear()
+    _dashboard_update_latest_request_log_ids.clear()
+    _dashboard_update_enqueued_profiles.clear()
+
+    for task in tasks:
+        task.cancel()
+
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _enqueue_dashboard_update_worker(*, profile_id: int, request_log_id: int) -> None:
+    async def run_broadcast() -> None:
+        await _broadcast_coalesced_dashboard_updates(profile_id=profile_id)
+
+    _dashboard_update_enqueued_profiles.add(profile_id)
+
+    try:
+        background_task_manager.enqueue(
+            name=f"dashboard-update:{profile_id}:{request_log_id}",
+            run=run_broadcast,
+        )
+    except Exception:
+        _dashboard_update_enqueued_profiles.discard(profile_id)
+        if _dashboard_update_latest_request_log_ids.get(profile_id) == request_log_id:
+            _dashboard_update_latest_request_log_ids.pop(profile_id, None)
+        raise
+
+
+async def _debounce_dashboard_update_enqueue(*, profile_id: int) -> None:
+    try:
+        debounce_seconds = get_settings().dashboard_update_debounce_seconds
+        if debounce_seconds > 0:
+            await asyncio.sleep(debounce_seconds)
+
+        request_log_id = _dashboard_update_latest_request_log_ids.get(profile_id)
+        if request_log_id is None or profile_id in _dashboard_update_enqueued_profiles:
+            return
+
+        if not connection_manager.has_subscribers(
+            profile_id=profile_id,
+            channel="dashboard",
+        ):
+            _dashboard_update_latest_request_log_ids.pop(profile_id, None)
+            return
+
+        _enqueue_dashboard_update_worker(
+            profile_id=profile_id,
+            request_log_id=request_log_id,
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception(
+            "Failed to debounce dashboard.update for profile_id=%d",
+            profile_id,
+        )
+    finally:
+        current_task = asyncio.current_task()
+        if _dashboard_update_debounce_tasks.get(profile_id) is current_task:
+            _dashboard_update_debounce_tasks.pop(profile_id, None)
 
 
 async def build_dashboard_route_snapshot(
@@ -227,6 +297,12 @@ async def broadcast_dashboard_update_for_request_log(
     request_log_id: int,
     profile_id: int,
 ) -> None:
+    if not connection_manager.has_subscribers(
+        profile_id=profile_id,
+        channel="dashboard",
+    ):
+        return
+
     from app.core.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -255,20 +331,78 @@ async def broadcast_dashboard_update_for_request_log(
         )
 
 
+async def _broadcast_coalesced_dashboard_updates(*, profile_id: int) -> None:
+    last_attempted_request_log_id: int | None = None
+    requeue_request_log_id: int | None = None
+
+    try:
+        while True:
+            request_log_id = _dashboard_update_latest_request_log_ids.get(profile_id)
+            if request_log_id is None:
+                return
+
+            last_attempted_request_log_id = request_log_id
+
+            try:
+                await broadcast_dashboard_update_for_request_log(
+                    request_log_id=request_log_id,
+                    profile_id=profile_id,
+                )
+            except Exception:
+                latest_request_log_id = _dashboard_update_latest_request_log_ids.get(
+                    profile_id
+                )
+                if latest_request_log_id not in (None, request_log_id):
+                    requeue_request_log_id = latest_request_log_id
+                raise
+
+            if (
+                _dashboard_update_latest_request_log_ids.get(profile_id)
+                == request_log_id
+            ):
+                return
+    finally:
+        latest_request_log_id = _dashboard_update_latest_request_log_ids.get(profile_id)
+        if latest_request_log_id in (None, last_attempted_request_log_id):
+            _dashboard_update_latest_request_log_ids.pop(profile_id, None)
+        _dashboard_update_enqueued_profiles.discard(profile_id)
+        if requeue_request_log_id is not None:
+            enqueue_dashboard_update_broadcast(
+                request_log_id=requeue_request_log_id,
+                profile_id=profile_id,
+            )
+
+
 def enqueue_dashboard_update_broadcast(
     *,
     request_log_id: int,
     profile_id: int,
 ) -> None:
-    async def run_broadcast() -> None:
-        await broadcast_dashboard_update_for_request_log(
-            request_log_id=request_log_id,
-            profile_id=profile_id,
-        )
+    _dashboard_update_latest_request_log_ids[profile_id] = request_log_id
 
-    background_task_manager.enqueue(
-        name=f"dashboard-update:{profile_id}:{request_log_id}",
-        run=run_broadcast,
+    if profile_id in _dashboard_update_enqueued_profiles:
+        return
+
+    debounce_seconds = get_settings().dashboard_update_debounce_seconds
+    if debounce_seconds > 0 and profile_id in _dashboard_update_debounce_tasks:
+        return
+
+    if not connection_manager.has_subscribers(
+        profile_id=profile_id,
+        channel="dashboard",
+    ):
+        _dashboard_update_latest_request_log_ids.pop(profile_id, None)
+        return
+
+    if debounce_seconds > 0:
+        _dashboard_update_debounce_tasks[profile_id] = asyncio.create_task(
+            _debounce_dashboard_update_enqueue(profile_id=profile_id)
+        )
+        return
+
+    _enqueue_dashboard_update_worker(
+        profile_id=profile_id,
+        request_log_id=request_log_id,
     )
 
 
