@@ -25,7 +25,7 @@ class AuthSettingsResponse(BaseModel):
     pending_email: str | None = None
     email_verification_required: bool = False
     has_password: bool
-    proxy_key_limit: int = 10
+    proxy_key_limit: int = 100
 
 
 class AuthSettingsUpdate(BaseModel):
@@ -135,6 +135,22 @@ class ProxyApiKeyResponse(BaseModel):
     updated_at: datetime
 
 
+def _validate_proxy_api_key_name(value: str) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        raise ValueError("name must not be empty")
+    if len(trimmed) > 200:
+        raise ValueError("name must be at most 200 characters")
+    return trimmed
+
+
+def _normalize_proxy_api_key_notes(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
 class ProxyApiKeyCreate(BaseModel):
     name: str
     notes: str | None = None
@@ -142,12 +158,27 @@ class ProxyApiKeyCreate(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        trimmed = value.strip()
-        if not trimmed:
-            raise ValueError("name must not be empty")
-        if len(trimmed) > 200:
-            raise ValueError("name must be at most 200 characters")
-        return trimmed
+        return _validate_proxy_api_key_name(value)
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        return _normalize_proxy_api_key_notes(value)
+
+
+class ProxyApiKeyUpdate(BaseModel):
+    name: str
+    notes: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        return _validate_proxy_api_key_name(value)
+
+    @field_validator("notes")
+    @classmethod
+    def normalize_notes(cls, value: str | None) -> str | None:
+        return _normalize_proxy_api_key_notes(value)
 
 
 class ProxyApiKeyCreateResponse(BaseModel):
@@ -165,6 +196,7 @@ class ProxyApiKeyRotateResponse(BaseModel):
 
 class WebAuthnRegistrationOptionsResponse(BaseModel):
     """WebAuthn registration options for client."""
+
     challenge: str
     rp: dict[str, str]
     user: dict[str, str]
@@ -177,6 +209,7 @@ class WebAuthnRegistrationOptionsResponse(BaseModel):
 
 class WebAuthnRegistrationVerifyRequest(BaseModel):
     """Client registration response for verification."""
+
     credential: dict[str, Any]
     device_name: str | None = None
 
@@ -195,6 +228,7 @@ class WebAuthnRegistrationVerifyRequest(BaseModel):
 
 class WebAuthnAuthenticationOptionsResponse(BaseModel):
     """WebAuthn authentication options for client."""
+
     challenge: str
     timeout: int
     rpId: str
@@ -204,11 +238,13 @@ class WebAuthnAuthenticationOptionsResponse(BaseModel):
 
 class WebAuthnAuthenticationVerifyRequest(BaseModel):
     """Client authentication response for verification."""
+
     credential: dict[str, Any]
 
 
 class WebAuthnCredentialResponse(BaseModel):
     """WebAuthn credential info for management UI."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -221,5 +257,6 @@ class WebAuthnCredentialResponse(BaseModel):
 
 class WebAuthnCredentialListResponse(BaseModel):
     """List of user's WebAuthn credentials."""
+
     items: list[WebAuthnCredentialResponse]
     total: int

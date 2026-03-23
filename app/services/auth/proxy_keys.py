@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.auth import build_proxy_api_key, parse_proxy_api_key
+from app.core.auth import PROXY_API_KEY_PREFIX, build_proxy_api_key, parse_proxy_api_key
 from app.core.crypto import hash_opaque_token, verify_opaque_token
 from app.core.database import AsyncSessionLocal
 from app.core.time import utc_now
@@ -18,7 +18,8 @@ from app.models.models import ProxyApiKey
 from app.schemas.schemas import ProxyApiKeyResponse
 from app.services.background_tasks import BackgroundTaskManager
 
-PROXY_KEY_LIMIT = 10
+PROXY_KEY_LIMIT = 100
+PROXY_KEY_PREVIEW_LOOKUP_LENGTH = 4
 logger = logging.getLogger(__name__)
 
 
@@ -49,7 +50,10 @@ async def create_proxy_api_key(
 ) -> tuple[str, ProxyApiKey]:
     count = await db.execute(select(func.count(ProxyApiKey.id)))
     if count.scalar_one() >= PROXY_KEY_LIMIT:
-        raise HTTPException(status_code=409, detail="Maximum 10 proxy API keys reached")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Maximum {PROXY_KEY_LIMIT} proxy API keys reached",
+        )
 
     for _ in range(5):
         raw_key, key_prefix, last_four, key_hash = _build_key_material()
@@ -106,6 +110,26 @@ async def rotate_proxy_api_key(
             if "uq_proxy_api_keys_prefix" not in str(exc):
                 raise
     raise HTTPException(status_code=500, detail="Failed to rotate proxy API key")
+
+
+async def update_proxy_api_key(
+    db: AsyncSession,
+    *,
+    key_id: int,
+    name: str,
+    notes: str | None,
+) -> ProxyApiKey:
+    row = (
+        await db.execute(select(ProxyApiKey).where(ProxyApiKey.id == key_id).limit(1))
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Proxy API key not found")
+
+    row.name = name
+    row.notes = notes
+    row.updated_at = utc_now()
+    await db.flush()
+    return row
 
 
 async def delete_proxy_api_key(db: AsyncSession, *, key_id: int) -> None:
@@ -259,11 +283,16 @@ async def persist_proxy_api_key_usage(
 
 
 def serialize_proxy_api_key(row: ProxyApiKey) -> ProxyApiKeyResponse:
+    visible_prefix = row.key_prefix
+    preview_prefix_length = len(PROXY_API_KEY_PREFIX) + PROXY_KEY_PREVIEW_LOOKUP_LENGTH
+    if row.key_prefix.startswith(PROXY_API_KEY_PREFIX):
+        visible_prefix = row.key_prefix[:preview_prefix_length]
+
     return ProxyApiKeyResponse(
         id=row.id,
         name=row.name,
         key_prefix=row.key_prefix,
-        key_preview=f"{row.key_prefix}{'\N{BULLET}' * 8}{row.last_four}",
+        key_preview=f"{visible_prefix}{'\N{BULLET}' * 8}{row.last_four}",
         is_active=row.is_active,
         expires_at=row.expires_at,
         last_used_at=row.last_used_at,
@@ -288,5 +317,6 @@ __all__ = [
     "record_proxy_api_key_usage",
     "rotate_proxy_api_key",
     "serialize_proxy_api_key",
+    "update_proxy_api_key",
     "verify_proxy_api_key",
 ]

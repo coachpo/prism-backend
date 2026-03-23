@@ -24,6 +24,7 @@ from app.services.auth.proxy_keys import (
     record_proxy_api_key_usage,
     rotate_proxy_api_key,
     serialize_proxy_api_key,
+    update_proxy_api_key,
     verify_proxy_api_key,
 )
 from app.services.auth.sessions import (
@@ -70,6 +71,7 @@ __all__ = [
     "send_email_verification_otp",
     "send_password_reset_email",
     "serialize_proxy_api_key",
+    "update_proxy_api_key",
     "update_auth_settings",
     "verify_proxy_api_key",
 ]

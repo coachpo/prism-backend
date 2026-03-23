@@ -9,6 +9,7 @@ from app.schemas.schemas import (
     ProxyApiKeyCreateResponse,
     ProxyApiKeyResponse,
     ProxyApiKeyRotateResponse,
+    ProxyApiKeyUpdate,
 )
 from app.services.auth_service import (
     create_proxy_api_key,
@@ -16,6 +17,7 @@ from app.services.auth_service import (
     list_proxy_api_keys,
     rotate_proxy_api_key,
     serialize_proxy_api_key,
+    update_proxy_api_key,
 )
 
 from .helpers import extract_request_auth_subject_id
@@ -58,6 +60,21 @@ async def post_rotate_proxy_api_key(
     return ProxyApiKeyRotateResponse(key=raw_key, item=serialize_proxy_api_key(row))
 
 
+@router.patch("/auth/proxy-keys/{key_id}", response_model=ProxyApiKeyResponse)
+async def patch_proxy_api_key(
+    key_id: int,
+    body: ProxyApiKeyUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    row = await update_proxy_api_key(
+        db,
+        key_id=key_id,
+        name=body.name,
+        notes=body.notes,
+    )
+    return serialize_proxy_api_key(row)
+
+
 @router.delete("/auth/proxy-keys/{key_id}")
 async def remove_proxy_api_key(
     key_id: int,
@@ -71,6 +88,7 @@ __all__ = [
     "get_proxy_api_keys",
     "post_proxy_api_key",
     "post_rotate_proxy_api_key",
+    "patch_proxy_api_key",
     "remove_proxy_api_key",
     "router",
 ]

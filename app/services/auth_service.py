@@ -28,6 +28,7 @@ from app.services.auth import (
     send_email_verification_otp,
     send_password_reset_email,
     serialize_proxy_api_key,
+    update_proxy_api_key,
     update_auth_settings,
     verify_proxy_api_key,
 )
@@ -64,6 +65,7 @@ __all__ = [
     "send_password_reset_email",
     "smtplib",
     "serialize_proxy_api_key",
+    "update_proxy_api_key",
     "update_auth_settings",
     "verify_proxy_api_key",
 ]

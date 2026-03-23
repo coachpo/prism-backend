@@ -655,6 +655,94 @@ class TestDEF071_ProxyApiKeyHeaderAcceptance:
             await _cleanup_auth_state()
 
 
+class TestDEF079_ProxyApiKeyMetadataManagement:
+    @pytest.mark.asyncio
+    async def test_proxy_api_key_update_route_returns_shorter_preview_and_updates_metadata(
+        self,
+    ):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                settings_response = await client.get("/api/settings/auth")
+                assert settings_response.status_code == 200
+                assert settings_response.json()["proxy_key_limit"] == 100
+
+                create_response = await client.post(
+                    "/api/settings/auth/proxy-keys",
+                    json={"name": "Original key", "notes": "Original note"},
+                )
+                assert create_response.status_code == 201
+                created_payload = create_response.json()
+                created_item = created_payload["item"]
+                assert created_payload["key"].startswith("pm-")
+                assert created_item["key_preview"] == (
+                    f"{created_item['key_prefix'][:7]}{'•' * 8}{created_payload['key'][-4:]}"
+                )
+
+                update_response = await client.patch(
+                    f"/api/settings/auth/proxy-keys/{created_item['id']}",
+                    json={"name": "Renamed key", "notes": "Updated note"},
+                )
+                assert update_response.status_code == 200
+                assert update_response.json()["name"] == "Renamed key"
+                assert update_response.json()["notes"] == "Updated note"
+                assert (
+                    update_response.json()["key_preview"] == created_item["key_preview"]
+                )
+
+                clear_note_response = await client.patch(
+                    f"/api/settings/auth/proxy-keys/{created_item['id']}",
+                    json={"name": "Renamed key", "notes": "   "},
+                )
+                assert clear_note_response.status_code == 200
+                assert clear_note_response.json()["notes"] is None
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_proxy_api_key_create_stops_after_100_keys(self):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+
+        try:
+            async with AsyncSessionLocal() as session:
+                session.add_all(
+                    [
+                        ProxyApiKey(
+                            name=f"Seeded key {index}",
+                            key_prefix=f"pm-{index:08x}",
+                            key_hash=hash_opaque_token(f"seeded-proxy-key-{index}"),
+                            last_four=f"{index:04x}"[-4:],
+                            is_active=True,
+                        )
+                        for index in range(100)
+                    ]
+                )
+                await session.commit()
+
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                create_response = await client.post(
+                    "/api/settings/auth/proxy-keys",
+                    json={"name": "Overflow key"},
+                )
+                assert create_response.status_code == 409
+                assert create_response.json() == {
+                    "detail": "Maximum 100 proxy API keys reached"
+                }
+        finally:
+            await _cleanup_auth_state()
+
+
 class TestDEF072_SecretSanitization:
     @pytest.mark.asyncio
     async def test_endpoint_responses_hide_raw_api_keys_but_config_export_includes_them(
