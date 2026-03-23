@@ -1,9 +1,10 @@
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
+from app.services.loadbalance_event_summary import describe_loadbalance_event
 from app.schemas.domains.core import _CURRENCY_CODE_RE
 
 # --- Statistics Schemas ---
@@ -343,6 +344,13 @@ class SpendingReportResponse(BaseModel):
 # --- Loadbalance Event Schemas ---
 
 
+class LoadbalanceEventSummary(BaseModel):
+    event: str
+    reason: str
+    operation: str
+    cooldown: str
+
+
 class LoadbalanceEventListItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -357,7 +365,43 @@ class LoadbalanceEventListItem(BaseModel):
     model_id: str | None
     endpoint_id: int | None
     provider_id: int | None
+    summary: LoadbalanceEventSummary
     created_at: datetime
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_summary(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            event_type = data.get("event_type")
+            if not event_type:
+                return data
+            return {
+                **data,
+                "summary": describe_loadbalance_event(
+                    event_type=event_type,
+                    failure_kind=data.get("failure_kind"),
+                    consecutive_failures=data.get("consecutive_failures", 0),
+                    cooldown_seconds=float(data.get("cooldown_seconds", 0.0)),
+                    failure_threshold=data.get("failure_threshold"),
+                ),
+            }
+
+        if hasattr(data, "event_type"):
+            payload = {
+                field_name: getattr(data, field_name)
+                for field_name in cls.model_fields
+                if field_name != "summary" and hasattr(data, field_name)
+            }
+            payload["summary"] = describe_loadbalance_event(
+                event_type=getattr(data, "event_type"),
+                failure_kind=getattr(data, "failure_kind", None),
+                consecutive_failures=getattr(data, "consecutive_failures", 0),
+                cooldown_seconds=float(getattr(data, "cooldown_seconds", 0.0)),
+                failure_threshold=getattr(data, "failure_threshold", None),
+            )
+            return payload
+
+        return data
 
 
 class LoadbalanceEventDetail(LoadbalanceEventListItem):
@@ -375,6 +419,32 @@ class LoadbalanceEventListResponse(BaseModel):
 
 class LoadbalanceEventDeleteResponse(BaseModel):
     accepted: bool
+
+
+LoadbalanceCurrentStateValue = Literal["counting", "blocked", "probe_eligible"]
+
+
+class LoadbalanceCurrentStateItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    connection_id: int
+    consecutive_failures: int
+    last_failure_kind: str | None
+    last_cooldown_seconds: float
+    blocked_until_at: datetime | None
+    probe_eligible_logged: bool
+    state: LoadbalanceCurrentStateValue
+    created_at: datetime
+    updated_at: datetime
+
+
+class LoadbalanceCurrentStateListResponse(BaseModel):
+    items: list[LoadbalanceCurrentStateItem]
+
+
+class LoadbalanceCurrentStateResetResponse(BaseModel):
+    connection_id: int
+    cleared: bool
 
 
 # --- Throughput Schemas ---

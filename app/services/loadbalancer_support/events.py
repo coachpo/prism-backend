@@ -1,6 +1,8 @@
+from datetime import datetime
 from typing import TypedDict
 
 from app.services.background_tasks import background_task_manager
+from app.services.loadbalance_event_summary import describe_loadbalance_event
 from app.services.loadbalancer_support.state import (
     FailureKind,
     RecoveryStateEntry,
@@ -16,7 +18,7 @@ class LoadbalanceEventPayload(TypedDict):
     failure_kind: FailureKind | None
     consecutive_failures: int
     cooldown_seconds: float
-    blocked_until_mono: float | None
+    blocked_until_at: datetime | None
     model_id: str | None
     endpoint_id: int | None
     provider_id: int | None
@@ -38,7 +40,11 @@ def _record_loadbalance_event(event_payload: LoadbalanceEventPayload) -> None:
             failure_kind=event_payload_snapshot["failure_kind"],
             consecutive_failures=event_payload_snapshot["consecutive_failures"],
             cooldown_seconds=event_payload_snapshot["cooldown_seconds"],
-            blocked_until_mono=event_payload_snapshot["blocked_until_mono"],
+            blocked_until_mono=(
+                event_payload_snapshot["blocked_until_at"].timestamp()
+                if event_payload_snapshot["blocked_until_at"] is not None
+                else None
+            ),
             model_id=event_payload_snapshot["model_id"],
             endpoint_id=event_payload_snapshot["endpoint_id"],
             provider_id=event_payload_snapshot["provider_id"],
@@ -75,7 +81,7 @@ def _build_event_payload(
     failure_kind: FailureKind | None,
     consecutive_failures: int,
     cooldown_seconds: float,
-    blocked_until_mono: float | None,
+    blocked_until_at: datetime | None,
     model_id: str | None,
     endpoint_id: int | None,
     provider_id: int | None,
@@ -89,7 +95,7 @@ def _build_event_payload(
         "failure_kind": failure_kind,
         "consecutive_failures": consecutive_failures,
         "cooldown_seconds": cooldown_seconds,
-        "blocked_until_mono": blocked_until_mono,
+        "blocked_until_at": blocked_until_at,
         "model_id": model_id,
         "endpoint_id": endpoint_id,
         "provider_id": provider_id,
@@ -124,7 +130,7 @@ def record_probe_eligible_transition(
             failure_kind=state["last_failure_kind"],
             consecutive_failures=state["consecutive_failures"],
             cooldown_seconds=state["last_cooldown_seconds"],
-            blocked_until_mono=None,
+            blocked_until_at=None,
             model_id=model_id,
             endpoint_id=endpoint_id,
             provider_id=provider_id,
@@ -140,7 +146,7 @@ def record_failed_transition(
     failure_kind: FailureKind,
     consecutive_failures: int,
     cooldown_seconds: float,
-    blocked_until_mono: float | None,
+    blocked_until_at: datetime | None,
     model_id: str | None,
     endpoint_id: int | None,
     provider_id: int | None,
@@ -155,14 +161,14 @@ def record_failed_transition(
         )
     else:
         logger.info(
-            "Failover transition event=%s profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d blocked_until_mono=%.2f",
+            "Failover transition event=%s profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d blocked_until_at=%s",
             event_type,
             profile_id,
             connection_id,
             failure_kind,
             cooldown_seconds,
             consecutive_failures,
-            blocked_until_mono,
+            blocked_until_at.isoformat() if blocked_until_at is not None else None,
         )
 
     _record_loadbalance_event(
@@ -173,7 +179,7 @@ def record_failed_transition(
             failure_kind=failure_kind,
             consecutive_failures=consecutive_failures,
             cooldown_seconds=cooldown_seconds,
-            blocked_until_mono=blocked_until_mono,
+            blocked_until_at=blocked_until_at,
             model_id=model_id,
             endpoint_id=endpoint_id,
             provider_id=provider_id,
@@ -206,7 +212,7 @@ def record_recovered_transition(
             failure_kind=state["last_failure_kind"],
             consecutive_failures=state["consecutive_failures"],
             cooldown_seconds=state["last_cooldown_seconds"],
-            blocked_until_mono=None,
+            blocked_until_at=None,
             model_id=model_id,
             endpoint_id=endpoint_id,
             provider_id=provider_id,
@@ -215,6 +221,7 @@ def record_recovered_transition(
 
 
 __all__ = [
+    "describe_loadbalance_event",
     "record_failed_transition",
     "record_probe_eligible_transition",
     "record_recovered_transition",
