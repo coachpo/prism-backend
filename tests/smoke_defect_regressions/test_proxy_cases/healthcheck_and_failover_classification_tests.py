@@ -444,6 +444,11 @@ class TestDEF061_FailoverFailureClassification:
 
         assert _classify_http_failure(429, None) == "transient_http"
 
+    def test_should_failover_treats_422_as_failover_worthy(self):
+        from app.services.proxy_service import should_failover
+
+        assert should_failover(422) is True
+
     def test_classify_failover_failure_for_timeout_exception(self):
         import httpx
         from app.routers.proxy import _classify_failover_failure
