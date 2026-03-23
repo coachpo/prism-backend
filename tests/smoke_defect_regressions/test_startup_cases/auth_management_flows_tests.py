@@ -681,6 +681,7 @@ class TestDEF079_ProxyApiKeyMetadataManagement:
                 created_payload = create_response.json()
                 created_item = created_payload["item"]
                 assert created_payload["key"].startswith("pm-")
+                assert created_item["is_active"] is True
                 assert created_item["key_preview"] == (
                     f"{created_item['key_prefix'][:7]}{'•' * 8}{created_payload['key'][-4:]}"
                 )
@@ -690,11 +691,11 @@ class TestDEF079_ProxyApiKeyMetadataManagement:
                     json={"name": "Renamed key", "notes": "Updated note"},
                 )
                 assert update_response.status_code == 200
-                assert update_response.json()["name"] == "Renamed key"
-                assert update_response.json()["notes"] == "Updated note"
-                assert (
-                    update_response.json()["key_preview"] == created_item["key_preview"]
-                )
+                updated_item = update_response.json()
+                assert updated_item["name"] == "Renamed key"
+                assert updated_item["notes"] == "Updated note"
+                assert updated_item["is_active"] is True
+                assert updated_item["key_preview"] == created_item["key_preview"]
 
                 clear_note_response = await client.patch(
                     f"/api/settings/auth/proxy-keys/{created_item['id']}",
@@ -702,6 +703,89 @@ class TestDEF079_ProxyApiKeyMetadataManagement:
                 )
                 assert clear_note_response.status_code == 200
                 assert clear_note_response.json()["notes"] is None
+                assert clear_note_response.json()["is_active"] is True
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
+    async def test_proxy_api_key_update_route_persists_is_active_false_and_true(self):
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                create_response = await client.post(
+                    "/api/settings/auth/proxy-keys",
+                    json={"name": "Toggle key", "notes": "Toggle note"},
+                )
+                assert create_response.status_code == 201
+                created_payload = create_response.json()
+                raw_key = created_payload["key"]
+                created_item = created_payload["item"]
+
+                disable_response = await client.patch(
+                    f"/api/settings/auth/proxy-keys/{created_item['id']}",
+                    json={
+                        "name": "Toggle key",
+                        "notes": "Toggle note",
+                        "is_active": False,
+                    },
+                )
+                assert disable_response.status_code == 200
+                disabled_item = disable_response.json()
+                assert disabled_item["is_active"] is False
+
+                async with AsyncSessionLocal() as session:
+                    stored_key = await session.get(ProxyApiKey, created_item["id"])
+                    assert stored_key is not None
+                    assert stored_key.is_active is False
+
+                async with AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as proxy_client:
+                    disabled_runtime = await proxy_client.post(
+                        "/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {raw_key}"},
+                        json={"messages": [{"role": "user", "content": "hi"}]},
+                    )
+                    assert disabled_runtime.status_code == 401
+                    assert disabled_runtime.json() == {
+                        "detail": "Invalid proxy API key"
+                    }
+
+                enable_response = await client.patch(
+                    f"/api/settings/auth/proxy-keys/{created_item['id']}",
+                    json={
+                        "name": "Toggle key",
+                        "notes": "Toggle note",
+                        "is_active": True,
+                    },
+                )
+                assert enable_response.status_code == 200
+                enabled_item = enable_response.json()
+                assert enabled_item["is_active"] is True
+
+                async with AsyncSessionLocal() as session:
+                    stored_key = await session.get(ProxyApiKey, created_item["id"])
+                    assert stored_key is not None
+                    assert stored_key.is_active is True
+
+                async with AsyncClient(
+                    transport=transport, base_url="http://testserver"
+                ) as proxy_client:
+                    enabled_runtime = await proxy_client.post(
+                        "/v1/chat/completions",
+                        headers={"Authorization": f"Bearer {raw_key}"},
+                        json={"messages": [{"role": "user", "content": "hi"}]},
+                    )
+                    assert enabled_runtime.status_code == 400
+                    assert enabled_runtime.json()["detail"].startswith(
+                        "Cannot determine model"
+                    )
         finally:
             await _cleanup_auth_state()
 

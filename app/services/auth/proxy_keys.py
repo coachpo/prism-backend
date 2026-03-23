@@ -118,6 +118,7 @@ async def update_proxy_api_key(
     key_id: int,
     name: str,
     notes: str | None,
+    is_active: bool | None = None,
 ) -> ProxyApiKey:
     row = (
         await db.execute(select(ProxyApiKey).where(ProxyApiKey.id == key_id).limit(1))
@@ -127,6 +128,8 @@ async def update_proxy_api_key(
 
     row.name = name
     row.notes = notes
+    if is_active is not None:
+        row.is_active = is_active
     row.updated_at = utc_now()
     await db.flush()
     return row

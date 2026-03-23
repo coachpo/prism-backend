@@ -71,6 +71,7 @@ async def patch_proxy_api_key(
         key_id=key_id,
         name=body.name,
         notes=body.notes,
+        is_active=body.is_active,
     )
     return serialize_proxy_api_key(row)
 

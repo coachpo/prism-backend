@@ -169,6 +169,7 @@ class ProxyApiKeyCreate(BaseModel):
 class ProxyApiKeyUpdate(BaseModel):
     name: str
     notes: str | None = None
+    is_active: bool | None = None
 
     @field_validator("name")
     @classmethod
