@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +42,7 @@ async def list_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -57,6 +58,7 @@ async def list_request_logs(
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=from_time,
         to_time=to_time,
@@ -76,6 +78,7 @@ async def list_operations_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -91,6 +94,7 @@ async def list_operations_request_logs(
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=from_time,
         to_time=to_time,

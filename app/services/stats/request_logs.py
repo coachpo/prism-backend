@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import and_, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,7 @@ def _build_request_log_where(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -29,6 +30,10 @@ def _build_request_log_where(
         filters.append(RequestLog.provider_type == provider_type)
     if status_code is not None:
         filters.append(RequestLog.status_code == status_code)
+    if status_family == "4xx":
+        filters.append(RequestLog.status_code.between(400, 499))
+    elif status_family == "5xx":
+        filters.append(RequestLog.status_code.between(500, 599))
     if success is True:
         filters.append(RequestLog.status_code.between(200, 299))
     elif success is False:
@@ -62,6 +67,7 @@ async def get_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -76,6 +82,7 @@ async def get_request_logs(
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=from_time,
         to_time=to_time,
@@ -103,6 +110,7 @@ async def get_operations_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -117,6 +125,7 @@ async def get_operations_request_logs(
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=from_time,
         to_time=to_time,

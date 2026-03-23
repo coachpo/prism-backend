@@ -10,7 +10,11 @@ from app.models.models import Profile, RequestLog
 
 
 def _request_log(
-    *, profile_id: int, response_time_ms: int, created_at: datetime
+    *,
+    profile_id: int,
+    response_time_ms: int,
+    created_at: datetime,
+    status_code: int = 200,
 ) -> RequestLog:
     return RequestLog(
         profile_id=profile_id,
@@ -19,7 +23,7 @@ def _request_log(
         endpoint_id=None,
         connection_id=None,
         endpoint_base_url="https://api.openai.com/v1",
-        status_code=200,
+        status_code=status_code,
         response_time_ms=response_time_ms,
         is_stream=False,
         request_path="/v1/chat/completions",
@@ -150,3 +154,128 @@ async def test_get_operations_request_logs_uses_stable_id_tiebreaker_for_timesta
         str(RequestLog.created_at.desc()),
         str(RequestLog.id.desc()),
     ]
+
+
+@pytest.mark.asyncio
+async def test_get_request_logs_filters_by_status_family_and_preserves_failure_filter() -> (
+    None
+):
+    from app.services.stats.request_logs import get_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        primary_profile = Profile(
+            name=f"request-log-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        other_profile = Profile(
+            name=f"request-log-other-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add_all([primary_profile, other_profile])
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=primary_profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    status_code=404,
+                ),
+                _request_log(
+                    profile_id=primary_profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    status_code=429,
+                ),
+                _request_log(
+                    profile_id=primary_profile.id,
+                    response_time_ms=120,
+                    created_at=created_at,
+                    status_code=500,
+                ),
+                _request_log(
+                    profile_id=primary_profile.id,
+                    response_time_ms=130,
+                    created_at=created_at,
+                    status_code=200,
+                ),
+                _request_log(
+                    profile_id=other_profile.id,
+                    response_time_ms=140,
+                    created_at=created_at,
+                    status_code=418,
+                ),
+            ]
+        )
+        await db.commit()
+
+        items, total = await get_request_logs(
+            db,
+            profile_id=primary_profile.id,
+            status_family="4xx",
+            success=False,
+            limit=50,
+            offset=0,
+        )
+
+    assert total == 2
+    assert [item.status_code for item in items] == [429, 404]
+
+
+@pytest.mark.asyncio
+async def test_get_operations_request_logs_filters_by_status_family_and_exact_status_code() -> (
+    None
+):
+    from app.services.stats.request_logs import get_operations_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"operations-log-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    status_code=500,
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    status_code=503,
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=120,
+                    created_at=created_at,
+                    status_code=429,
+                ),
+            ]
+        )
+        await db.commit()
+
+        items, total = await get_operations_request_logs(
+            db,
+            profile_id=profile.id,
+            status_family="5xx",
+            status_code=503,
+            limit=200,
+            offset=0,
+        )
+
+    assert total == 1
+    assert [item["status_code"] for item in items] == [503]

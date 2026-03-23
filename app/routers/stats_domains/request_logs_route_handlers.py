@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,7 @@ async def list_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -43,6 +45,7 @@ async def list_request_logs(
         profile_id=profile_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=normalized_from_time,
         to_time=normalized_to_time,
@@ -67,6 +70,7 @@ async def list_operations_request_logs(
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
+    status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
@@ -87,6 +91,7 @@ async def list_operations_request_logs(
         profile_id=profile_id,
         provider_type=provider_type,
         status_code=status_code,
+        status_family=status_family,
         success=success,
         from_time=normalized_from_time,
         to_time=normalized_to_time,

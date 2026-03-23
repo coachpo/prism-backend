@@ -81,6 +81,31 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["request_id"] == 321
 
     @pytest.mark.asyncio
+    async def test_requests_route_passes_status_family_filter_to_service(self):
+        from app.routers.stats import list_request_logs
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_request_logs", new_callable=AsyncMock
+        ) as mock_get_request_logs:
+            mock_get_request_logs.return_value = ([], 0)
+            response = await list_request_logs(
+                db=mock_db,
+                profile_id=7,
+                status_family="4xx",
+                limit=50,
+                offset=0,
+            )
+
+        assert response.total == 0
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_request_logs.await_args_list[0],
+        )
+        assert call_kwargs["status_family"] == "4xx"
+
+    @pytest.mark.asyncio
     async def test_operations_requests_route_returns_lightweight_payload(self):
         from app.routers.stats import list_operations_request_logs
 
@@ -127,6 +152,34 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             mock_get_operations_request_logs.await_args_list[0],
         )
         assert call_kwargs["limit"] == 200
+
+    @pytest.mark.asyncio
+    async def test_operations_requests_route_passes_status_family_filter_to_service(
+        self,
+    ):
+        from app.routers.stats import list_operations_request_logs
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_operations_request_logs",
+            new_callable=AsyncMock,
+        ) as mock_get_operations_request_logs:
+            mock_get_operations_request_logs.return_value = ([], 0)
+            response = await list_operations_request_logs(
+                db=mock_db,
+                profile_id=7,
+                status_family="5xx",
+                limit=200,
+                offset=0,
+            )
+
+        assert response.total == 0
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_operations_request_logs.await_args_list[0],
+        )
+        assert call_kwargs["status_family"] == "5xx"
 
     @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
