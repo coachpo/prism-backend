@@ -25,7 +25,8 @@ models/
 - `WebAuthnChallenge` & `WebAuthnCredential`: Passkey lifecycle and device metadata.
 
 ### ROUTING
-- `ModelConfig`: Per-profile model settings, failover cooldowns, and redirect targets.
+- `ModelConfig`: Per-profile model settings, attached loadbalance strategy selection for native models, and redirect targets.
+- `LoadbalanceStrategy`: Profile-scoped reusable routing strategy metadata for native model attachment.
 - `Endpoint`: Encrypted upstream base URLs and API keys.
 - `PricingTemplate`: Costing rules for input, output, reasoning, and cache tokens.
 - `Connection`: Linkage between model configs, endpoints, and pricing; owns health status.
