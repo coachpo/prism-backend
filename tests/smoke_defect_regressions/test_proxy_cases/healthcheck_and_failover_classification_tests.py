@@ -108,8 +108,8 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 log_url,
             ) = await _probe_connection_health(
                 client=AsyncMock(),
-                connection=cast(Connection, connection),
-                endpoint=cast(Endpoint, endpoint),
+                connection=cast(Connection, cast(object, connection)),
+                endpoint=cast(Endpoint, cast(object, endpoint)),
                 provider_type="openai",
                 model_id="gpt-4o-mini",
                 headers={},
@@ -146,8 +146,8 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 log_url,
             ) = await _probe_connection_health(
                 client=AsyncMock(),
-                connection=cast(Connection, connection),
-                endpoint=cast(Endpoint, endpoint),
+                connection=cast(Connection, cast(object, connection)),
+                endpoint=cast(Endpoint, cast(object, endpoint)),
                 provider_type="openai",
                 model_id="gpt-4o-mini",
                 headers={},
@@ -203,8 +203,8 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 log_url,
             ) = await _probe_connection_health(
                 client=AsyncMock(),
-                connection=cast(Connection, connection),
-                endpoint=cast(Endpoint, endpoint),
+                connection=cast(Connection, cast(object, connection)),
+                endpoint=cast(Endpoint, cast(object, endpoint)),
                 provider_type="openai",
                 model_id="gpt-4o-mini",
                 headers={},
@@ -251,8 +251,8 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 log_url,
             ) = await _probe_connection_health(
                 client=AsyncMock(),
-                connection=cast(Connection, connection),
-                endpoint=cast(Endpoint, endpoint),
+                connection=cast(Connection, cast(object, connection)),
+                endpoint=cast(Endpoint, cast(object, endpoint)),
                 provider_type="anthropic",
                 model_id="claude-sonnet-4",
                 headers={},
@@ -392,10 +392,12 @@ class TestDEF060_ProxyProviderPathValidation:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_connections",
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
-            patch("app.routers.proxy.build_attempt_plan") as attempt_plan_mock,
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan"
+            ) as attempt_plan_mock,
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _handle_proxy(
