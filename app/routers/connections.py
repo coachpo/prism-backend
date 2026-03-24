@@ -17,8 +17,8 @@ from app.schemas.schemas import (
     ConnectionUpdate,
     HealthCheckResponse,
 )
-from app.services.loadbalancer import mark_connection_recovered
-from app.services.loadbalancer import clear_current_state
+from app.services.loadbalancer.recovery import record_connection_recovery
+from app.services.loadbalancer.state import clear_connection_state
 from app.services.proxy_service import (
     build_upstream_headers,
 )
@@ -61,7 +61,7 @@ router = APIRouter(tags=["connections"])
 
 def _crud_deps() -> ConnectionCrudDependencies:
     return ConnectionCrudDependencies(
-        clear_current_state_fn=clear_current_state,
+        clear_connection_state_fn=clear_connection_state,
         create_endpoint_from_inline_fn=_create_endpoint_from_inline,
         ensure_model_config_ids_exist_fn=_ensure_model_config_ids_exist,
         list_ordered_connections_fn=_list_ordered_connections,
@@ -233,7 +233,7 @@ async def health_check_connection(
         profile_id=profile_id,
         build_upstream_headers_fn=build_upstream_headers,
         probe_connection_health_fn=_probe_connection_health,
-        mark_connection_recovered_fn=mark_connection_recovered,
+        record_connection_recovery_fn=record_connection_recovery,
     )
 
 

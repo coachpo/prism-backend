@@ -33,7 +33,7 @@ async def update_connection_record(
         setattr(connection, key, value)
 
     if clear_recovery_state:
-        await deps.clear_current_state_fn(profile_id, connection.id)
+        await deps.clear_connection_state_fn(profile_id, connection.id)
     connection.updated_at = utc_now()
     await db.flush()
 

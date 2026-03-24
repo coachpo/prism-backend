@@ -6,7 +6,7 @@ from app.models.models import Connection, Endpoint, ModelConfig
 
 @dataclass(slots=True)
 class ConnectionCrudDependencies:
-    clear_current_state_fn: Callable[..., Awaitable[bool]]
+    clear_connection_state_fn: Callable[..., Awaitable[bool]]
     create_endpoint_from_inline_fn: Callable[..., Awaitable[Endpoint]]
     ensure_model_config_ids_exist_fn: Callable[..., Awaitable[None]]
     list_ordered_connections_fn: Callable[..., Awaitable[list[Connection]]]

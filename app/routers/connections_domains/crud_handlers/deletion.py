@@ -26,7 +26,7 @@ async def delete_connection_record(
         raise HTTPException(status_code=404, detail="Connection not found")
 
     model_config_id = connection.model_config_id
-    await deps.clear_current_state_fn(profile_id, connection.id)
+    await deps.clear_connection_state_fn(profile_id, connection.id)
     await db.delete(connection)
     await db.flush()
 
