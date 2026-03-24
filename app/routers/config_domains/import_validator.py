@@ -18,43 +18,16 @@ def _normalize_reference_name(*, field: str, value: str | None) -> str | None:
 def _resolve_endpoint_reference_name(
     *,
     context: str,
-    endpoint_id: int | None,
     endpoint_name: str | None,
-    endpoint_id_to_name: dict[int, str],
     endpoint_names_in_file: set[str],
 ) -> str:
-    normalized_endpoint_name = _normalize_reference_name(
+    resolved_endpoint_name = _normalize_reference_name(
         field="endpoint_name", value=endpoint_name
     )
-    if endpoint_id is None and normalized_endpoint_name is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{context} must include endpoint_name or endpoint_id",
-        )
-
-    resolved_endpoint_name = normalized_endpoint_name
-    if endpoint_id is not None:
-        mapped_endpoint_name = endpoint_id_to_name.get(endpoint_id)
-        if mapped_endpoint_name is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{context} references unknown endpoint_id '{endpoint_id}'",
-            )
-        if resolved_endpoint_name is None:
-            resolved_endpoint_name = mapped_endpoint_name
-        elif resolved_endpoint_name != mapped_endpoint_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} endpoint_name '{resolved_endpoint_name}' does not match "
-                    f"endpoint_id '{endpoint_id}'"
-                ),
-            )
-
     if resolved_endpoint_name is None:
         raise HTTPException(
             status_code=400,
-            detail=f"{context} must include endpoint_name or endpoint_id",
+            detail=f"{context} must include endpoint_name",
         )
 
     if resolved_endpoint_name not in endpoint_names_in_file:
@@ -71,59 +44,28 @@ def _resolve_endpoint_reference_name(
 def _resolve_pricing_template_reference_name(
     *,
     context: str,
-    pricing_template_id: int | None,
     pricing_template_name: str | None,
-    pricing_template_id_to_name: dict[int, str],
     pricing_template_names_in_file: set[str],
 ) -> str | None:
     normalized_pricing_template_name = _normalize_reference_name(
         field="pricing_template_name", value=pricing_template_name
     )
-    if pricing_template_id is None and normalized_pricing_template_name is None:
+    if normalized_pricing_template_name is None:
         return None
 
-    resolved_pricing_template_name = normalized_pricing_template_name
-    if pricing_template_id is not None:
-        mapped_pricing_template_name = pricing_template_id_to_name.get(
-            pricing_template_id
-        )
-        if mapped_pricing_template_name is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} references unknown pricing_template_id "
-                    f"'{pricing_template_id}'"
-                ),
-            )
-        if resolved_pricing_template_name is None:
-            resolved_pricing_template_name = mapped_pricing_template_name
-        elif resolved_pricing_template_name != mapped_pricing_template_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} pricing_template_name '{resolved_pricing_template_name}' "
-                    f"does not match pricing_template_id '{pricing_template_id}'"
-                ),
-            )
-
-    if resolved_pricing_template_name is None:
-        return None
-
-    if resolved_pricing_template_name not in pricing_template_names_in_file:
+    if normalized_pricing_template_name not in pricing_template_names_in_file:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"{context} references unknown pricing_template_name "
-                f"'{resolved_pricing_template_name}'"
+                f"'{normalized_pricing_template_name}'"
             ),
         )
 
-    return resolved_pricing_template_name
+    return normalized_pricing_template_name
 
 
 def validate_import_payload(data: ConfigImportRequest) -> None:
-    endpoint_ids_in_file: set[int] = set()
-    endpoint_id_to_name: dict[int, str] = {}
     endpoint_names_in_file: set[str] = set()
     for endpoint in data.endpoints:
         endpoint_name = endpoint.name.strip()
@@ -137,16 +79,6 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 detail=f"Duplicate endpoint name: '{endpoint_name}'",
             )
         endpoint_names_in_file.add(endpoint_name)
-
-        endpoint_import_id = endpoint.endpoint_id
-        if endpoint_import_id is not None:
-            if endpoint_import_id in endpoint_ids_in_file:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Duplicate endpoint_id in import: {endpoint_import_id}",
-                )
-            endpoint_ids_in_file.add(endpoint_import_id)
-            endpoint_id_to_name[endpoint_import_id] = endpoint_name
 
         normalized_url = normalize_base_url(endpoint.base_url)
         url_warnings = validate_base_url(normalized_url)
@@ -163,8 +95,6 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 detail=f"Endpoint '{endpoint_name}' has invalid position '{endpoint_position}'",
             )
 
-    pricing_template_ids_in_file: set[int] = set()
-    pricing_template_id_to_name: dict[int, str] = {}
     pricing_template_names_in_file: set[str] = set()
     for template in data.pricing_templates:
         template_name = template.name.strip()
@@ -180,17 +110,28 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
             )
         pricing_template_names_in_file.add(template_name)
 
-        template_import_id = template.pricing_template_id
-        if template_import_id is not None:
-            if template_import_id in pricing_template_ids_in_file:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Duplicate pricing_template_id in import: {template_import_id}"
-                    ),
-                )
-            pricing_template_ids_in_file.add(template_import_id)
-            pricing_template_id_to_name[template_import_id] = template_name
+    strategy_names_in_file: set[str] = set()
+    for strategy in data.loadbalance_strategies:
+        strategy_name = strategy.name.strip()
+        if not strategy_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Loadbalance strategy name must not be empty",
+            )
+        if strategy_name in strategy_names_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate loadbalance strategy name: '{strategy_name}'",
+            )
+        if strategy.strategy_type == "single" and strategy.failover_recovery_enabled:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Loadbalance strategy '{strategy_name}' must not enable recovery "
+                    "when strategy_type='single'"
+                ),
+            )
+        strategy_names_in_file.add(strategy_name)
 
     seen_model_ids: set[str] = set()
     native_models: dict[str, str] = {}
@@ -220,12 +161,40 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                     status_code=400,
                     detail=f"Native model '{model.model_id}' must not have redirect_to",
                 )
+            strategy_name = _normalize_reference_name(
+                field="loadbalance_strategy_name",
+                value=model.loadbalance_strategy_name,
+            )
+            if strategy_name is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Native model '{model.model_id}' must include "
+                        "loadbalance_strategy_name"
+                    ),
+                )
+            if strategy_name not in strategy_names_in_file:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Native model '{model.model_id}' references unknown "
+                        f"loadbalance strategy '{strategy_name}'"
+                    ),
+                )
             native_models[model.model_id] = model.provider_type
         else:
             if not model.redirect_to:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Proxy model '{model.model_id}' must include redirect_to",
+                )
+            if model.loadbalance_strategy_name is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Proxy model '{model.model_id}' must not include "
+                        "loadbalance_strategy_name"
+                    ),
                 )
             if model.connections:
                 raise HTTPException(
@@ -236,9 +205,7 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
         for connection in model.connections:
             resolved_endpoint_name = _resolve_endpoint_reference_name(
                 context=f"Connection for model '{model.model_id}'",
-                endpoint_id=connection.endpoint_id,
                 endpoint_name=connection.endpoint_name,
-                endpoint_id_to_name=endpoint_id_to_name,
                 endpoint_names_in_file=endpoint_names_in_file,
             )
 
@@ -246,9 +213,7 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
 
             _resolve_pricing_template_reference_name(
                 context=f"Connection for model '{model.model_id}'",
-                pricing_template_id=connection.pricing_template_id,
                 pricing_template_name=connection.pricing_template_name,
-                pricing_template_id_to_name=pricing_template_id_to_name,
                 pricing_template_names_in_file=pricing_template_names_in_file,
             )
 
@@ -277,9 +242,7 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
         for mapping in data.user_settings.endpoint_fx_mappings:
             resolved_endpoint_name = _resolve_endpoint_reference_name(
                 context="FX mapping",
-                endpoint_id=mapping.endpoint_id,
                 endpoint_name=mapping.endpoint_name,
-                endpoint_id_to_name=endpoint_id_to_name,
                 endpoint_names_in_file=endpoint_names_in_file,
             )
             key = (mapping.model_id, resolved_endpoint_name)

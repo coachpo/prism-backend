@@ -16,7 +16,9 @@ class ConfigEndpointExport(BaseModel):
 
 
 class ConfigEndpointImport(ConfigEndpointExport):
-    endpoint_id: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    pass
 
 
 class ConfigPricingTemplateExport(BaseModel):
@@ -36,7 +38,21 @@ class ConfigPricingTemplateExport(BaseModel):
 
 
 class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
-    pricing_template_id: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    pass
+
+
+class ConfigLoadbalanceStrategyExport(BaseModel):
+    name: str
+    strategy_type: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = False
+
+
+class ConfigLoadbalanceStrategyImport(ConfigLoadbalanceStrategyExport):
+    model_config = ConfigDict(extra="forbid")
+
+    pass
 
 
 class ConfigConnectionExport(BaseModel):
@@ -50,10 +66,9 @@ class ConfigConnectionExport(BaseModel):
 
 
 class ConfigConnectionImport(BaseModel):
-    connection_id: int | None = None
-    endpoint_id: int | None = None
-    endpoint_name: str | None = None
-    pricing_template_id: int | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    endpoint_name: str
     pricing_template_name: str | None = None
     is_active: bool = True
     priority: int = Field(default=0, ge=0)
@@ -68,22 +83,20 @@ class ConfigModelExport(BaseModel):
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
     redirect_to: str | None = None
-    lb_strategy: Literal["single", "failover"] = "single"
-    failover_recovery_enabled: bool = True
-    failover_recovery_cooldown_seconds: int = 60
+    loadbalance_strategy_name: str | None = None
     is_enabled: bool = True
     connections: list[ConfigConnectionExport] = Field(default_factory=list)
 
 
 class ConfigModelImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     provider_type: str
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
     redirect_to: str | None = None
-    lb_strategy: Literal["single", "failover"] = "single"
-    failover_recovery_enabled: bool = True
-    failover_recovery_cooldown_seconds: int = 60
+    loadbalance_strategy_name: str | None = None
     is_enabled: bool = True
     connections: list[ConfigConnectionImport] = Field(default_factory=list)
 
@@ -95,9 +108,10 @@ class ConfigEndpointFxRateExport(BaseModel):
 
 
 class ConfigEndpointFxRateImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     model_id: str
-    endpoint_id: int | None = None
-    endpoint_name: str | None = None
+    endpoint_name: str
     fx_rate: str
 
 
@@ -108,16 +122,19 @@ class ConfigUserSettingsExport(BaseModel):
 
 
 class ConfigUserSettingsImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     report_currency_code: str = "USD"
     report_currency_symbol: str = "$"
     endpoint_fx_mappings: list[ConfigEndpointFxRateImport] = Field(default_factory=list)
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[2] = 2
+    version: Literal[3] = 3
     exported_at: datetime
     endpoints: list[ConfigEndpointExport]
     pricing_templates: list[ConfigPricingTemplateExport]
+    loadbalance_strategies: list[ConfigLoadbalanceStrategyExport]
     models: list[ConfigModelExport]
     user_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(
@@ -126,10 +143,13 @@ class ConfigExportResponse(BaseModel):
 
 
 class ConfigImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     version: int
     exported_at: datetime | None = None
     endpoints: list[ConfigEndpointImport]
     pricing_templates: list[ConfigPricingTemplateImport]
+    loadbalance_strategies: list[ConfigLoadbalanceStrategyImport]
     models: list[ConfigModelImport]
     user_settings: ConfigUserSettingsImport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(
@@ -140,6 +160,7 @@ class ConfigImportRequest(BaseModel):
 class ConfigImportResponse(BaseModel):
     endpoints_imported: int
     pricing_templates_imported: int
+    strategies_imported: int
     models_imported: int
     connections_imported: int
 

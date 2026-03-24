@@ -12,6 +12,7 @@ from app.models.models import (
     Endpoint,
     EndpointFxRateSetting,
     HeaderBlocklistRule,
+    LoadbalanceStrategy,
     ModelConfig,
     PricingTemplate,
     Provider,
@@ -40,6 +41,7 @@ async def _lock_import_target_tables(db: AsyncSession) -> None:
             "endpoint_fx_rate_settings, "
             "connections, "
             "endpoints, "
+            "loadbalance_strategies, "
             "model_configs, "
             "pricing_templates, "
             "user_settings, "
@@ -91,40 +93,14 @@ def _normalize_reference_name(value: str | None) -> str | None:
 def _resolve_endpoint_name(
     *,
     context: str,
-    endpoint_id: int | None,
     endpoint_name: str | None,
     endpoint_name_to_id: dict[str, int],
-    endpoint_id_to_name: dict[int, str],
 ) -> str:
     resolved_endpoint_name = _normalize_reference_name(endpoint_name)
-    if resolved_endpoint_name is None and endpoint_id is None:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{context} must include endpoint_name or endpoint_id",
-        )
-
-    if endpoint_id is not None:
-        mapped_endpoint_name = endpoint_id_to_name.get(endpoint_id)
-        if mapped_endpoint_name is None:
-            raise HTTPException(
-                status_code=400,
-                detail=f"{context} references unknown endpoint_id '{endpoint_id}'",
-            )
-        if resolved_endpoint_name is None:
-            resolved_endpoint_name = mapped_endpoint_name
-        elif resolved_endpoint_name != mapped_endpoint_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} endpoint_name '{resolved_endpoint_name}' does not match "
-                    f"endpoint_id '{endpoint_id}'"
-                ),
-            )
-
     if resolved_endpoint_name is None:
         raise HTTPException(
             status_code=400,
-            detail=f"{context} must include endpoint_name or endpoint_id",
+            detail=f"{context} must include endpoint_name",
         )
 
     if resolved_endpoint_name not in endpoint_name_to_id:
@@ -139,38 +115,10 @@ def _resolve_endpoint_name(
 def _resolve_pricing_template_id(
     *,
     context: str,
-    pricing_template_id: int | None,
     pricing_template_name: str | None,
     pricing_template_name_to_id: dict[str, int],
-    pricing_template_id_to_name: dict[int, str],
 ) -> int | None:
     resolved_pricing_template_name = _normalize_reference_name(pricing_template_name)
-    if resolved_pricing_template_name is None and pricing_template_id is None:
-        return None
-
-    if pricing_template_id is not None:
-        mapped_pricing_template_name = pricing_template_id_to_name.get(
-            pricing_template_id
-        )
-        if mapped_pricing_template_name is None:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} references unknown pricing_template_id "
-                    f"'{pricing_template_id}'"
-                ),
-            )
-        if resolved_pricing_template_name is None:
-            resolved_pricing_template_name = mapped_pricing_template_name
-        elif resolved_pricing_template_name != mapped_pricing_template_name:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{context} pricing_template_name '{resolved_pricing_template_name}' "
-                    f"does not match pricing_template_id '{pricing_template_id}'"
-                ),
-            )
-
     if resolved_pricing_template_name is None:
         return None
 
@@ -203,6 +151,9 @@ async def execute_import_payload(
     await db.execute(delete(Connection).where(Connection.profile_id == profile_id))
     await db.execute(delete(Endpoint).where(Endpoint.profile_id == profile_id))
     await db.execute(delete(ModelConfig).where(ModelConfig.profile_id == profile_id))
+    await db.execute(
+        delete(LoadbalanceStrategy).where(LoadbalanceStrategy.profile_id == profile_id)
+    )
     await db.execute(
         delete(PricingTemplate).where(PricingTemplate.profile_id == profile_id)
     )
@@ -243,6 +194,7 @@ async def execute_import_payload(
 
     endpoint_id_allocator = await _build_id_allocator(db, Endpoint)
     template_id_allocator = await _build_id_allocator(db, PricingTemplate)
+    strategy_id_allocator = await _build_id_allocator(db, LoadbalanceStrategy)
     model_config_id_allocator = await _build_id_allocator(db, ModelConfig)
     connection_id_allocator = await _build_id_allocator(db, Connection)
     user_setting_id_allocator = await _build_id_allocator(db, UserSetting)
@@ -250,7 +202,6 @@ async def execute_import_payload(
     header_rule_id_allocator = await _build_id_allocator(db, HeaderBlocklistRule)
 
     endpoint_name_to_id: dict[str, int] = {}
-    endpoint_id_to_name: dict[int, str] = {}
     endpoints_count = 0
     sorted_endpoints = sorted(
         enumerate(data.endpoints),
@@ -274,13 +225,9 @@ async def execute_import_payload(
         await db.flush()
 
         endpoint_name_to_id[endpoint_name] = endpoint.id
-        endpoint_import_id = endpoint_data.endpoint_id
-        if endpoint_import_id is not None:
-            endpoint_id_to_name[endpoint_import_id] = endpoint_name
         endpoints_count += 1
 
     pricing_template_name_to_id: dict[str, int] = {}
-    pricing_template_id_to_name: dict[int, str] = {}
     templates_count = 0
     for template_data in data.pricing_templates:
         template_name = template_data.name.strip()
@@ -306,10 +253,26 @@ async def execute_import_payload(
         await db.flush()
 
         pricing_template_name_to_id[template_name] = template.id
-        template_import_id = template_data.pricing_template_id
-        if template_import_id is not None:
-            pricing_template_id_to_name[template_import_id] = template_name
         templates_count += 1
+
+    strategy_name_to_id: dict[str, int] = {}
+    strategies_count = 0
+    for strategy_data in data.loadbalance_strategies:
+        strategy_name = strategy_data.name.strip()
+        strategy = LoadbalanceStrategy(
+            id=strategy_id_allocator.take(),
+            profile_id=profile_id,
+            name=strategy_name,
+            strategy_type=cast(
+                Literal["single", "failover"], strategy_data.strategy_type
+            ),
+            failover_recovery_enabled=strategy_data.failover_recovery_enabled,
+        )
+        db.add(strategy)
+        await db.flush()
+
+        strategy_name_to_id[strategy_name] = strategy.id
+        strategies_count += 1
 
     connections_count = 0
     imported_connection_pairs: set[tuple[str, str]] = set()
@@ -324,13 +287,11 @@ async def execute_import_payload(
             display_name=model.display_name,
             model_type=cast(Literal["native", "proxy"], model.model_type),
             redirect_to=model.redirect_to if is_proxy else None,
-            lb_strategy="single" if is_proxy else model.lb_strategy,
-            failover_recovery_enabled=True
-            if is_proxy
-            else model.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=60
-            if is_proxy
-            else model.failover_recovery_cooldown_seconds,
+            loadbalance_strategy_id=(
+                None
+                if is_proxy
+                else strategy_name_to_id[cast(str, model.loadbalance_strategy_name)]
+            ),
             is_enabled=model.is_enabled,
         )
         db.add(model_config)
@@ -344,19 +305,15 @@ async def execute_import_payload(
         ):
             resolved_endpoint_name = _resolve_endpoint_name(
                 context=f"Connection for model '{model.model_id}'",
-                endpoint_id=connection_data.endpoint_id,
                 endpoint_name=connection_data.endpoint_name,
                 endpoint_name_to_id=endpoint_name_to_id,
-                endpoint_id_to_name=endpoint_id_to_name,
             )
             mapped_endpoint_id = endpoint_name_to_id[resolved_endpoint_name]
 
             mapped_pricing_template_id = _resolve_pricing_template_id(
                 context=f"Connection for model '{model.model_id}'",
-                pricing_template_id=connection_data.pricing_template_id,
                 pricing_template_name=connection_data.pricing_template_name,
                 pricing_template_name_to_id=pricing_template_name_to_id,
-                pricing_template_id_to_name=pricing_template_id_to_name,
             )
 
             connection = Connection(
@@ -404,10 +361,8 @@ async def execute_import_payload(
         for mapping in data.user_settings.endpoint_fx_mappings:
             resolved_endpoint_name = _resolve_endpoint_name(
                 context=f"FX mapping for model '{mapping.model_id}'",
-                endpoint_id=mapping.endpoint_id,
                 endpoint_name=mapping.endpoint_name,
                 endpoint_name_to_id=endpoint_name_to_id,
-                endpoint_id_to_name=endpoint_id_to_name,
             )
             if (
                 mapping.model_id,
@@ -449,6 +404,7 @@ async def execute_import_payload(
     for model in (
         Endpoint,
         PricingTemplate,
+        LoadbalanceStrategy,
         ModelConfig,
         Connection,
         UserSetting,
@@ -461,6 +417,7 @@ async def execute_import_payload(
         endpoints_imported=endpoints_count,
         models_imported=len(data.models),
         pricing_templates_imported=templates_count,
+        strategies_imported=strategies_count,
         connections_imported=connections_count,
     )
 

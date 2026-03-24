@@ -12,6 +12,7 @@ from app.models.models import (
     Endpoint,
     EndpointFxRateSetting,
     HeaderBlocklistRule,
+    LoadbalanceStrategy,
     ModelConfig,
     PricingTemplate,
     Provider,
@@ -22,6 +23,7 @@ from app.schemas.schemas import (
     ConfigEndpointExport,
     ConfigEndpointFxRateExport,
     ConfigExportResponse,
+    ConfigLoadbalanceStrategyExport,
     ConfigModelExport,
     ConfigPricingTemplateExport,
     ConfigUserSettingsExport,
@@ -69,6 +71,7 @@ async def build_export_payload(
             await db.execute(
                 select(ModelConfig)
                 .options(
+                    selectinload(ModelConfig.loadbalance_strategy),
                     selectinload(ModelConfig.connections).selectinload(
                         Connection.endpoint_rel
                     ),
@@ -78,6 +81,17 @@ async def build_export_payload(
                 )
                 .where(ModelConfig.profile_id == profile_id)
                 .order_by(ModelConfig.id.asc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    loadbalance_strategies = (
+        (
+            await db.execute(
+                select(LoadbalanceStrategy)
+                .where(LoadbalanceStrategy.profile_id == profile_id)
+                .order_by(LoadbalanceStrategy.name.asc(), LoadbalanceStrategy.id.asc())
             )
         )
         .scalars()
@@ -139,6 +153,18 @@ async def build_export_payload(
         for template in pricing_templates
     ]
 
+    exported_loadbalance_strategies = [
+        ConfigLoadbalanceStrategyExport(
+            name=strategy.name,
+            strategy_type=cast(
+                Literal["single", "failover"],
+                strategy.strategy_type,
+            ),
+            failover_recovery_enabled=strategy.failover_recovery_enabled,
+        )
+        for strategy in loadbalance_strategies
+    ]
+
     pricing_template_name_by_id = {
         template.id: template.name for template in pricing_templates
     }
@@ -196,9 +222,12 @@ async def build_export_payload(
                 display_name=model.display_name,
                 model_type=cast(Literal["native", "proxy"], model.model_type),
                 redirect_to=model.redirect_to,
-                lb_strategy="failover" if model.lb_strategy == "failover" else "single",
-                failover_recovery_enabled=model.failover_recovery_enabled,
-                failover_recovery_cooldown_seconds=model.failover_recovery_cooldown_seconds,
+                loadbalance_strategy_name=(
+                    model.loadbalance_strategy.name
+                    if model.model_type == "native"
+                    and model.loadbalance_strategy is not None
+                    else None
+                ),
                 is_enabled=model.is_enabled,
                 connections=exported_connections,
             )
@@ -247,10 +276,11 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=2,
+        version=3,
         exported_at=utc_now(),
         endpoints=exported_endpoints,
         pricing_templates=exported_pricing_templates,
+        loadbalance_strategies=exported_loadbalance_strategies,
         models=exported_models,
         user_settings=ConfigUserSettingsExport(
             report_currency_code=(
