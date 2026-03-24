@@ -36,7 +36,7 @@ backend/
 │   │   ├── models_domains/          # Model CRUD/query helpers
 │   │   ├── pricing_templates_domains/ # Pricing template CRUD + usage helpers
 │   │   ├── profiles_domains/        # Profile lifecycle and activation helpers
-│   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and logging helpers
+│   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and outcome-reporting helpers
 │   │   ├── shared/                  # Router-layer shared helpers for profile rows and ordering
 │   │   ├── stats_domains/           # Request log, metrics, spending, and throughput handlers
 │   │   ├── providers.py             # Provider CRUD
@@ -51,14 +51,13 @@ backend/
 │   │   └── proxy.py                 # Thin /v1/* and /v1beta/* proxy router
 │   └── services/
 │       ├── auth/                    # Split auth, email, session, and proxy-key services
-│       ├── loadbalancer_support/    # Recovery state, attempts, event helpers
+│       ├── loadbalancer/            # Split planner, state, recovery, events, and admin seams
 │       ├── proxy_support/           # URL/header/body/transport helpers
 │       ├── realtime/                # WebSocket connection manager helpers
 │       ├── stats/                   # Telemetry query and logging helpers
 │       ├── webauthn/                # Passkey registration/authentication internals
 │       ├── auth_service.py          # Auth public re-export boundary
 │       ├── background_tasks.py      # Lifespan-managed async worker queue
-│       ├── loadbalancer.py          # Model resolution + connection selection
 │       ├── proxy_service.py         # Upstream request forwarding
 │       ├── stats_service.py         # Stats public re-export boundary
 │       ├── audit_service.py         # Audit log writing with header redaction
@@ -179,6 +178,12 @@ docker compose up -d postgres
 
 - `GET /api/audit/logs` - Audit logs with filters
 - `GET /api/audit/logs/{id}` - Audit log detail
+
+- `GET /api/loadbalance/current-state` - List persisted current-state rows for a model
+- `POST /api/loadbalance/current-state/{connection_id}/reset` - Reset persisted current-state for one connection
+- `GET /api/loadbalance/events` - List loadbalance transition events for a model
+- `GET /api/loadbalance/events/{id}` - Get loadbalance event detail
+- `DELETE /api/loadbalance/events` - Batch-delete loadbalance events
 
 - `GET /api/config/export` - Export full configuration
 - `POST /api/config/import` - Import configuration
