@@ -1,7 +1,7 @@
 # BACKEND SMOKE DEFECT REGRESSIONS KNOWLEDGE BASE
 
 ## OVERVIEW
-`smoke_defect_regressions/` is the named-defect regression corpus. It groups DEF cases by concern, then re-exports them through `../test_smoke_defect_regressions.py`. The current top-level range reaches DEF078.
+`smoke_defect_regressions/` is the named-defect regression corpus. It groups DEF cases by concern, then re-exports them through `../test_smoke_defect_regressions.py`. The current top-level range reaches DEF079.
 
 ## STRUCTURE
 ```
@@ -23,7 +23,7 @@ smoke_defect_regressions/
 
 ## WHERE TO LOOK
 
-- Top-level export surface and full DEF list through DEF078: `../test_smoke_defect_regressions.py`
+- Top-level export surface and full DEF list through DEF079: `../test_smoke_defect_regressions.py`
 - Proxy-domain aggregators and leaf cases: `test_proxy.py`, `test_proxy_cases/`
 - Config-domain aggregators and leaf cases: `test_config.py`, `test_config_cases/`
 - Costing-domain aggregators and leaf cases: `test_costing.py`, `test_costing_cases/`
@@ -34,7 +34,7 @@ smoke_defect_regressions/
 
 ## DEF FACTS
 
-- The current top-level smoke aggregator exports DEF cases through `TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence`.
+- The current top-level smoke aggregator exports DEF cases through `TestDEF079_ProxyApiKeyMetadataManagement`.
 - Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
 - The grouped folders already provide the parent structure for their leaf files. Don't add extra AGENTS docs under `test_proxy_cases/`, `test_config_cases/`, `test_costing_cases/`, or `test_startup_cases/` for the current layout.
 

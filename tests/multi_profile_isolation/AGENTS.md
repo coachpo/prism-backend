@@ -17,7 +17,7 @@ multi_profile_isolation/
 
 ## WHERE TO LOOK
 
-- Top-level isolation export surface: `../test_multi_profile_isolation.py`
+- Top-level isolation export surface for the aggregator-backed subset: `../test_multi_profile_isolation.py`
 - Lifecycle and CRUD limits: `test_lifecycle.py`
 - Effective-profile management scoping and leakage prevention: `test_scoping.py`
 - Runtime model resolution and failover recovery-state isolation: `test_runtime.py`
@@ -27,7 +27,8 @@ multi_profile_isolation/
 
 ## ISOLATION FACTS
 
-- `../test_multi_profile_isolation.py` is the top-level aggregator for this subtree.
+- `../test_multi_profile_isolation.py` aggregates lifecycle, scoping, runtime, observability, and config export or import isolation for this subtree.
+- `test_connection_priority_isolation.py` currently lives here as a direct subtree leaf and is not re-exported by `../test_multi_profile_isolation.py`.
 - The suite explicitly includes profile-scoped config export or import isolation, not just general config validation.
 - Parent coverage for `test_config_import_export_cases/` lives here. Don't add another AGENTS doc under that folder for the current structure.
 

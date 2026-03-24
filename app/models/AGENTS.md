@@ -1,13 +1,13 @@
 # BACKEND MODELS KNOWLEDGE BASE
 
 ## OVERVIEW
-ORM models for Prism, split into identity, routing, and observability domains. All models inherit from a shared `Base` and use SQLAlchemy 2.0 style mapped columns.
+ORM models for Prism, split into identity, routing, and observability domains. `models.py` is the supported re-export boundary that routers, services, and migrations should read from when they need the full ORM surface.
 
 ## STRUCTURE
 ```
 models/
 ├── domains/
-│   ├── identity.py       # Profiles, providers, operator auth, refresh tokens, proxy keys, WebAuthn
+│   ├── identity.py       # Profiles, providers, operator auth, password reset, refresh tokens, proxy keys, WebAuthn
 │   ├── routing.py        # Model configs, endpoints, pricing templates, connections
 │   └── observability.py  # Request logs, user settings, FX rates, blocklist rules, audit logs, loadbalance current state, loadbalance events
 └── models.py             # Re-export boundary for all domain models
@@ -19,6 +19,7 @@ models/
 - `Profile`: Multi-profile scope container; owns `is_active` and `is_default` flags.
 - `Provider`: Global seed rows for `openai`, `anthropic`, `gemini`.
 - `AppAuthSettings`: Singleton operator auth state, username/email, and token version.
+- `PasswordResetChallenge`: One-time password reset challenge rows, expiry, consumption, and attempt tracking.
 - `RefreshToken`: Session persistence with rotation and revocation.
 - `ProxyApiKey`: Runtime data-plane credentials with prefix/hash storage.
 - `WebAuthnChallenge` & `WebAuthnCredential`: Passkey lifecycle and device metadata.
@@ -44,3 +45,8 @@ models/
 - Use `observability.py` for telemetry, logs, settings, and persisted loadbalance current-state or event persistence.
 - Keep business logic out of models; use properties for simple derivations like secret masking.
 - Ensure all new models are re-exported in `models/models.py` to maintain the public ORM boundary.
+
+## ANTI-PATTERNS
+- Do not add an ORM class to a domain file and forget to expose it from `models.py`.
+- Do not move password-reset, session, or passkey persistence into the routing or observability domains just because those flows touch routers or logs.
+- Do not treat observability tables as optional sidecars. Request logs, audit logs, and load-balance state are part of the backend runtime contract.

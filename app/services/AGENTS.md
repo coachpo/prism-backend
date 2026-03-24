@@ -1,7 +1,7 @@
 # BACKEND SERVICES ROOT KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load balancing, and WebAuthn.
+`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load balancing, and WebAuthn. It also owns small root-level helpers such as `loadbalance_event_summary.py` that shape backend-facing reporting payloads without justifying a deeper package.
 
 ## STRUCTURE
 ```
@@ -16,6 +16,7 @@ services/
 ├── background_tasks.py                 # Shared BackgroundTaskManager implementation
 ├── background_cleanup.py               # Request and audit retention cleanup helpers
 ├── loadbalance_cleanup.py              # Loadbalance-event retention cleanup helpers
+├── loadbalance_event_summary.py        # UI-facing labels for loadbalance event detail payloads
 ├── profile_invariants.py               # Active or default profile enforcement
 ├── user_settings.py                    # Per-profile settings bootstrap and access helpers
 ├── auth/AGENTS.md                      # Session, email, password reset, proxy-key internals
@@ -32,7 +33,8 @@ services/
 - Public auth boundary: `auth_service.py`, `auth/AGENTS.md`
 - Public passkey boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
 - Runtime routing, attempt planning, and upstream forwarding: `loadbalancer/AGENTS.md`, `proxy_service.py`, `proxy_support/AGENTS.md`
-- Observability, request logging, and dashboard payload shaping: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
+- Observability, request logging, dashboard payload shaping, and batch model or connection metrics: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
+- Load-balance event detail wording and cooldown summaries: `loadbalance_event_summary.py`, `loadbalancer/AGENTS.md`
 - Realtime room-state ownership: `realtime/AGENTS.md`, `realtime/connection_manager.py`
 - Startup-enforced defaults and retention cleanup: `profile_invariants.py`, `user_settings.py`, `background_cleanup.py`, `loadbalance_cleanup.py`
 
@@ -41,6 +43,7 @@ services/
 - `background_tasks.py` defines `BackgroundTaskManager`, queue and worker lifecycle, retry handling, enqueue rejection tracking, and metrics snapshots.
 - FastAPI lifespan in `../main.py` configures `background_task_manager` with the settings-derived worker count, starts it, stores it on `app.state`, and shuts it down during teardown.
 - `auth_service.py`, `stats_service.py`, and `webauthn_service.py` are intended public import surfaces over deeper packages.
+- `loadbalance_event_summary.py` is the root helper for human-readable load-balance event labels, reasons, and cooldown text used by load-balance detail responses.
 - Realtime route handlers depend on `services/realtime/connection_manager.py` for connection tracking and room membership instead of owning that state themselves.
 
 ## CONVENTIONS
@@ -49,9 +52,11 @@ services/
 - Treat the shared background task manager as app-owned infrastructure. Start and stop it in lifespan, then consume it from feature code.
 - Keep passkey logic separate from the auth package. The public boundary is `webauthn_service.py` plus `services/webauthn/`.
 - Keep cleanup helpers explicit and separate from request-serving code so retention work stays testable.
+- Keep one-off reporting helpers at the service root only when they don't warrant a new package. `loadbalance_event_summary.py` is that kind of module.
 
 ## ANTI-PATTERNS
 
 - Do not import deep package internals when a service-root facade already exists.
 - Do not spawn ad hoc worker pools or background queues from feature code when `background_tasks.py` already owns the shared worker model.
+- Do not hide load-balance event presentation logic inside routers when `loadbalance_event_summary.py` already defines the supported summary payload.
 - Do not push routing, auth, or observability logic back into route handlers once an established service boundary already owns it.
