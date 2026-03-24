@@ -125,9 +125,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "display_name",
             "model_type",
             "redirect_to",
-            "lb_strategy",
-            "failover_recovery_enabled",
-            "failover_recovery_cooldown_seconds",
+            "loadbalance_strategy_name",
             "is_enabled",
             "connections",
         }
@@ -183,6 +181,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ConfigEndpointExport,
             ConfigExportResponse,
             ConfigImportRequest,
+            ConfigLoadbalanceStrategyExport,
             ConfigModelExport,
         )
         from datetime import datetime, timezone
@@ -198,16 +197,21 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 )
             ],
             pricing_templates=[],
+            loadbalance_strategies=[
+                ConfigLoadbalanceStrategyExport(
+                    name="failover-primary",
+                    strategy_type="failover",
+                    failover_recovery_enabled=True,
+                )
+            ],
             models=[
                 ConfigModelExport(
                     provider_type="openai",
                     model_id="gpt-4o",
                     display_name="GPT-4o",
                     model_type="native",
-                    lb_strategy="failover",
+                    loadbalance_strategy_name="failover-primary",
                     is_enabled=True,
-                    failover_recovery_enabled=True,
-                    failover_recovery_cooldown_seconds=60,
                     connections=[
                         ConfigConnectionExport(
                             endpoint_name="openai-main",
@@ -227,9 +231,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert len(reimported.models) == 1
         m = reimported.models[0]
         assert m.model_id == "gpt-4o"
-        assert m.lb_strategy == "failover"
-        assert m.failover_recovery_enabled is True
-        assert m.failover_recovery_cooldown_seconds == 60
+        assert m.loadbalance_strategy_name == "failover-primary"
         assert len(m.connections) == 1
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}
@@ -239,75 +241,91 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
 
 class TestDEF023_ConfigImportReferenceValidation:
-    def test_validate_import_accepts_numeric_ids(self):
+    def test_validate_import_rejects_legacy_numeric_ids(self):
         from app.schemas.schemas import ConfigImportRequest
-        from app.routers.config import _validate_import
+        from pydantic import ValidationError
 
-        data = ConfigImportRequest.model_validate(
-            {
-                "version": 2,
-                "endpoints": [
-                    {
-                        "endpoint_id": 1,
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
-                        "api_key": "sk-test",
-                        "position": 0,
-                    }
-                ],
-                "pricing_templates": [],
-                "models": [
-                    {
-                        "provider_type": "openai",
-                        "model_id": "gpt-4o",
-                        "model_type": "native",
-                        "connections": [
-                            {
-                                "connection_id": 1,
-                                "endpoint_id": 1,
-                            }
-                        ],
-                    }
-                ],
-                "user_settings": {
-                    "endpoint_fx_mappings": [
+        with pytest.raises(ValidationError) as exc_info:
+            ConfigImportRequest.model_validate(
+                {
+                    "version": 3,
+                    "endpoints": [
                         {
-                            "model_id": "gpt-4o",
                             "endpoint_id": 1,
-                            "fx_rate": "1",
+                            "name": "openai-main",
+                            "base_url": "https://api.openai.com/v1",
+                            "api_key": "sk-test",
+                            "position": 0,
                         }
-                    ]
-                },
-            }
-        )
+                    ],
+                    "pricing_templates": [],
+                    "loadbalance_strategies": [
+                        {
+                            "name": "single-primary",
+                            "strategy_type": "single",
+                            "failover_recovery_enabled": False,
+                        }
+                    ],
+                    "models": [
+                        {
+                            "provider_type": "openai",
+                            "model_id": "gpt-4o",
+                            "model_type": "native",
+                            "loadbalance_strategy_name": "single-primary",
+                            "connections": [
+                                {
+                                    "connection_id": 1,
+                                    "endpoint_name": "openai-main",
+                                }
+                            ],
+                        }
+                    ],
+                    "user_settings": {
+                        "endpoint_fx_mappings": [
+                            {
+                                "model_id": "gpt-4o",
+                                "endpoint_id": 1,
+                                "endpoint_name": "openai-main",
+                                "fx_rate": "1",
+                            }
+                        ]
+                    },
+                }
+            )
 
-        _validate_import(data)
+        assert "Extra inputs are not permitted" in str(exc_info.value)
 
-    def test_validate_import_accepts_duplicate_connection_ids(self):
+    def test_validate_import_accepts_duplicate_connection_names_across_models(self):
         from app.routers.config import _validate_import
         from app.schemas.schemas import ConfigImportRequest
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 1,
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
                     }
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 1,
-                                "endpoint_id": 1,
+                                "endpoint_name": "openai-main",
                             }
                         ],
                     },
@@ -315,10 +333,10 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "provider_type": "openai",
                         "model_id": "gpt-4.1",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 1,
-                                "endpoint_id": 1,
+                                "endpoint_name": "openai-main",
                             }
                         ],
                     },
@@ -334,7 +352,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -343,11 +361,19 @@ class TestDEF023_ConfigImportReferenceValidation:
                     }
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
                                 "endpoint_name": "openai-main",

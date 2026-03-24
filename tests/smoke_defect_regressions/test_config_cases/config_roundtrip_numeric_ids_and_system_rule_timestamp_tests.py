@@ -38,25 +38,31 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 9001,
                         "name": endpoint_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
                     }
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": model_id,
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 7001,
-                                "endpoint_id": 9001,
+                                "endpoint_name": endpoint_name,
                                 "name": connection_name,
                             }
                         ],
@@ -68,7 +74,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     "endpoint_fx_mappings": [
                         {
                             "model_id": model_id,
-                            "endpoint_id": 9001,
+                            "endpoint_name": endpoint_name,
                             "fx_rate": "1.25",
                         }
                     ],
@@ -185,7 +191,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         assert created_endpoint.id > endpoint.id
 
     @pytest.mark.asyncio
-    async def test_import_allocates_unique_connection_ids_when_payload_ids_repeat(self):
+    async def test_import_allocates_unique_connection_ids_with_name_based_payload(self):
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
@@ -203,36 +209,40 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 9001,
                         "name": endpoint_a_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test-a",
                     },
                     {
-                        "endpoint_id": 9002,
                         "name": endpoint_b_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test-b",
                     },
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": model_id,
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 7001,
-                                "endpoint_id": 9001,
+                                "endpoint_name": endpoint_a_name,
                                 "name": connection_a_name,
                             },
                             {
-                                "connection_id": 7001,
-                                "endpoint_id": 9002,
+                                "endpoint_name": endpoint_b_name,
                                 "name": connection_b_name,
                             },
                         ],
@@ -346,10 +356,11 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 2,
+                    "version": 3,
                     "endpoints": [],
                     "models": [],
                     "pricing_templates": [],
+                    "loadbalance_strategies": [],
                     "user_settings": {
                         "report_currency_code": "USD",
                         "report_currency_symbol": "$",
