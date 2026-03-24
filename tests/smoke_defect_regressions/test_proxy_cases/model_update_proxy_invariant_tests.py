@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 from fastapi import HTTPException
 
 from app.services.proxy_service import (
@@ -13,6 +15,7 @@ from app.services.proxy_service import (
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
+
 
 class TestDEF032_ProxyModelUpdateInvariants:
     @pytest.mark.asyncio
@@ -63,9 +66,10 @@ class TestDEF032_ProxyModelUpdateInvariants:
                 model_id=native_model_id,
                 model_type="native",
                 redirect_to=None,
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             proxy_model = ModelConfig(
@@ -74,9 +78,6 @@ class TestDEF032_ProxyModelUpdateInvariants:
                 model_id=proxy_model_id,
                 model_type="proxy",
                 redirect_to=native_model_id,
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
                 is_enabled=True,
             )
             db.add_all([native_model, proxy_model])
@@ -95,11 +96,19 @@ class TestDEF032_ProxyModelUpdateInvariants:
             assert proxy_model.redirect_to == renamed_native_model_id
 
     @pytest.mark.asyncio
-    async def test_update_model_rejects_converting_connected_native_model_to_proxy(self):
+    async def test_update_model_rejects_converting_connected_native_model_to_proxy(
+        self,
+    ):
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import Connection, Endpoint, ModelConfig, Profile, Provider
+        from app.models.models import (
+            Connection,
+            Endpoint,
+            ModelConfig,
+            Profile,
+            Provider,
+        )
         from app.routers.models import update_model
         from app.schemas.schemas import ModelConfigUpdate
 
@@ -141,9 +150,10 @@ class TestDEF032_ProxyModelUpdateInvariants:
                 model_id=source_model_id,
                 model_type="native",
                 redirect_to=None,
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             target_model = ModelConfig(
@@ -152,9 +162,10 @@ class TestDEF032_ProxyModelUpdateInvariants:
                 model_id=target_model_id,
                 model_type="native",
                 redirect_to=None,
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             db.add_all([source_model, target_model])
@@ -241,9 +252,10 @@ class TestDEF032_ProxyModelUpdateInvariants:
                 model_id=model_id,
                 model_type="native",
                 redirect_to=None,
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             db.add(source_model)
@@ -262,4 +274,3 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             assert exc_info.value.status_code == 400
             assert exc_info.value.detail == "Proxy model cannot redirect to itself"
-

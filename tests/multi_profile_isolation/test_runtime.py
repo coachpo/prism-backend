@@ -14,6 +14,8 @@ Tests comprehensive profile isolation across all functional requirements:
 """
 
 import pytest
+
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -164,7 +166,10 @@ class TestFailoverRecoveryStateIsolation:
                 model_id=f"iso-model-one-{suffix}",
                 display_name="Isolation Model One",
                 model_type="native",
-                lb_strategy="failover",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile=profile_one,
+                    strategy_type="failover",
+                ),
                 is_enabled=True,
             )
             model_two = ModelConfig(
@@ -173,7 +178,10 @@ class TestFailoverRecoveryStateIsolation:
                 model_id=f"iso-model-two-{suffix}",
                 display_name="Isolation Model Two",
                 model_type="native",
-                lb_strategy="failover",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile=profile_two,
+                    strategy_type="failover",
+                ),
                 is_enabled=True,
             )
             endpoint_one = Endpoint(

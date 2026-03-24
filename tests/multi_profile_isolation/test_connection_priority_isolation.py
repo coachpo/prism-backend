@@ -5,6 +5,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+
 
 def _unique_suffix() -> str:
     return f"{int(asyncio.get_running_loop().time() * 1_000_000)}-{uuid4().hex[:8]}"
@@ -72,9 +74,10 @@ async def test_connection_priority_move_respects_profile_and_model_ownership():
             provider_id=provider.id,
             model_id=f"def069-model-a-{suffix}",
             model_type="native",
-            lb_strategy="single",
-            failover_recovery_enabled=True,
-            failover_recovery_cooldown_seconds=60,
+            loadbalance_strategy=make_loadbalance_strategy(
+                profile_id=profile_a.id,
+                strategy_type="single",
+            ),
             is_enabled=True,
         )
         model_b = ModelConfig(
@@ -82,9 +85,10 @@ async def test_connection_priority_move_respects_profile_and_model_ownership():
             provider_id=provider.id,
             model_id=f"def069-model-b-{suffix}",
             model_type="native",
-            lb_strategy="single",
-            failover_recovery_enabled=True,
-            failover_recovery_cooldown_seconds=60,
+            loadbalance_strategy=make_loadbalance_strategy(
+                profile_id=profile_b.id,
+                strategy_type="single",
+            ),
             is_enabled=True,
         )
         db.add_all([model_a, model_b])

@@ -57,6 +57,7 @@ from app.services.stats_service import (
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
 class TestConfigExportImportIsolation:
@@ -86,9 +87,13 @@ class TestConfigExportImportIsolation:
             display_name=None,
             model_type="native",
             redirect_to=None,
-            lb_strategy="single",
-            failover_recovery_enabled=True,
-            failover_recovery_cooldown_seconds=60,
+            loadbalance_strategy_id=11,
+            loadbalance_strategy=SimpleNamespace(
+                id=11,
+                name="single-primary",
+                strategy_type="single",
+                failover_recovery_enabled=False,
+            ),
             is_enabled=True,
             connections=[],
             created_at=now,
@@ -105,6 +110,11 @@ class TestConfigExportImportIsolation:
         pricing_templates_result = MagicMock()
         pricing_templates_result.scalars.return_value.all.return_value = []
 
+        strategies_result = MagicMock()
+        strategies_result.scalars.return_value.all.return_value = [
+            model.loadbalance_strategy
+        ]
+
         user_settings_result = MagicMock()
         user_settings_result.scalar_one_or_none.return_value = None
 
@@ -120,6 +130,7 @@ class TestConfigExportImportIsolation:
         mock_db.execute.side_effect = [
             endpoint_result,
             model_result,
+            strategies_result,
             pricing_templates_result,
             providers_result,
             user_settings_result,
@@ -128,7 +139,7 @@ class TestConfigExportImportIsolation:
         ]
 
         config = await export_config(db=mock_db, profile_id=1)
-        payload = json.loads(config.body.decode("utf-8"))
+        payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
         assert len(payload["endpoints"]) == 1
@@ -223,9 +234,10 @@ class TestConfigExportImportIsolation:
                 provider_id=provider.id,
                 model_id=old_target_model_id,
                 model_type="native",
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=target_profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             other_model = ModelConfig(
@@ -233,9 +245,10 @@ class TestConfigExportImportIsolation:
                 provider_id=provider.id,
                 model_id=other_model_id,
                 model_type="native",
-                lb_strategy="single",
-                failover_recovery_enabled=True,
-                failover_recovery_cooldown_seconds=60,
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=other_profile.id,
+                    strategy_type="single",
+                ),
                 is_enabled=True,
             )
             db.add_all([target_model, other_model])
@@ -306,29 +319,34 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": new_endpoint_id,
                         "name": new_endpoint_name,
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-target-new",
                     }
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": new_model_id,
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": new_connection_id,
-                                "endpoint_id": new_endpoint_id,
+                                "endpoint_name": new_endpoint_name,
                                 "name": new_connection_name,
                                 "priority": 0,
                                 "is_active": True,
-                                "position": 0,
                             }
                         ],
                     }
@@ -339,7 +357,7 @@ class TestConfigExportImportIsolation:
                     "endpoint_fx_mappings": [
                         {
                             "model_id": new_model_id,
-                            "endpoint_id": new_endpoint_id,
+                            "endpoint_name": new_endpoint_name,
                             "fx_rate": "1.25",
                         }
                     ],
@@ -363,6 +381,7 @@ class TestConfigExportImportIsolation:
             )
             await db.commit()
 
+            assert response.strategies_imported == 1
             assert response.endpoints_imported == 1
             assert response.models_imported == 1
             assert response.connections_imported == 1

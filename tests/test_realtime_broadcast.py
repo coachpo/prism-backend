@@ -1249,8 +1249,10 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
             object,
             SimpleNamespace(
                 connections=[connection],
-                lb_strategy="failover",
-                failover_recovery_enabled=True,
+                loadbalance_strategy=SimpleNamespace(
+                    strategy_type="failover",
+                    failover_recovery_enabled=True,
+                ),
                 model_id="gpt-4o-mini",
                 provider_id=1,
             ),

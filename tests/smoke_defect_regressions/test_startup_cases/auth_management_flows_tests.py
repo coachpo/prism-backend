@@ -6,6 +6,8 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
+
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 from fastapi import HTTPException
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
@@ -958,9 +960,10 @@ class TestDEF072_SecretSanitization:
                     provider_id=provider.id,
                     model_id=f"def072-model-{suffix}",
                     model_type="native",
-                    lb_strategy="single",
-                    failover_recovery_enabled=True,
-                    failover_recovery_cooldown_seconds=60,
+                    loadbalance_strategy=make_loadbalance_strategy(
+                        profile_id=profile_id,
+                        strategy_type="single",
+                    ),
                     is_enabled=True,
                 )
                 session.add(model)

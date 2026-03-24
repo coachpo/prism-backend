@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -9,6 +10,7 @@ import pytest
 
 from app.services.background_tasks import BackgroundTaskManager
 from app.services.loadbalancer.types import AttemptPlan
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
 def _attempt_plan(*connections):
@@ -92,9 +94,10 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config = MagicMock()
         model_config.provider = provider
         model_config.model_id = "gpt-4o-mini"
-        model_config.lb_strategy = "failover"
-        model_config.failover_recovery_enabled = True
-        model_config.failover_recovery_cooldown_seconds = 60
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+        )
 
         mock_rules_result = MagicMock()
         mock_rules_result.scalars.return_value.all.return_value = []
@@ -253,9 +256,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     model_id="gpt-4o-mini-def012",
                     display_name="GPT-4o Mini DEF012",
                     model_type="native",
-                    lb_strategy="failover",
-                    failover_recovery_enabled=True,
-                    failover_recovery_cooldown_seconds=60,
+                    loadbalance_strategy=make_loadbalance_strategy(
+                        profile=profile,
+                        strategy_type="failover",
+                    ),
                     is_enabled=True,
                 )
                 primary_endpoint = Endpoint(
@@ -465,9 +469,10 @@ class TestDEF021_StreamingCancellationResilience:
         model_config = MagicMock()
         model_config.provider = provider
         model_config.model_id = "gpt-4o-mini"
-        model_config.lb_strategy = "single"
-        model_config.failover_recovery_enabled = False
-        model_config.failover_recovery_cooldown_seconds = 60
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="single",
+            failover_recovery_enabled=False,
+        )
 
         return model_config, connection
 
