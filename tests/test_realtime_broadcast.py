@@ -10,13 +10,13 @@ from fastapi import WebSocket
 
 import app.services.stats.logging as stats_logging
 from app.models.models import ModelConfig
-from app.routers.proxy_domains.attempt_logging import _record_attempt_audit
+from app.routers.proxy_domains.attempt_outcome_reporting import record_attempt_audit
 from app.routers.realtime import SUPPORTED_REALTIME_CHANNELS, websocket_endpoint
-from app.services.loadbalancer_support.attempts import build_attempt_plan
-from app.services.loadbalancer_support.events import record_failed_transition
-from app.services.loadbalancer_support.recovery import (
-    mark_connection_failed,
-    mark_connection_recovered,
+from app.services.loadbalancer.events import record_failed_transition
+from app.services.loadbalancer.planner import build_attempt_plan
+from app.services.loadbalancer.recovery import (
+    record_connection_failure,
+    record_connection_recovery,
 )
 from app.services.audit_service import (
     AUDIT_LOG_MAX_RETRIES,
@@ -1001,7 +1001,7 @@ async def test_record_attempt_audit_skips_when_request_log_id_missing() -> None:
     target.headers = {"authorization": "Bearer sk-test"}
     target.endpoint_body = b'{"model":"gpt-4o-mini"}'
 
-    await _record_attempt_audit(
+    await record_attempt_audit(
         deps=deps,
         request_log_id=None,
         state=state,
@@ -1065,7 +1065,7 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
             return_value=make_session_context(persist_session),
         ),
         patch(
-            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=capture_enqueue),
         ) as enqueue,
     ):
@@ -1098,6 +1098,11 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
     assert event_entry.profile_id == 6
     assert event_entry.connection_id == 13
     assert event_entry.event_type == "opened"
+    assert event_entry.failure_kind == "timeout"
+    assert float(event_entry.cooldown_seconds) == 30.0
+    assert event_entry.model_id == "gpt-4o-mini"
+    assert event_entry.endpoint_id == 12
+    assert event_entry.provider_id == 1
 
 
 @pytest.mark.asyncio
@@ -1114,9 +1119,7 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
             "app.core.database.AsyncSessionLocal",
             return_value=make_session_context(persist_session),
         ),
-        patch(
-            "app.services.loadbalancer_support.events.background_task_manager", manager
-        ),
+        patch("app.services.loadbalancer.events.background_task_manager", manager),
     ):
         record_failed_transition(
             event_type="opened",
@@ -1140,7 +1143,7 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
 
 
 @pytest.mark.asyncio
-async def test_mark_connection_failed_preserves_state_when_loadbalance_enqueue_fails() -> (
+async def test_record_connection_failure_preserves_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
     from app.models.models import LoadbalanceCurrentState
@@ -1161,15 +1164,15 @@ async def test_mark_connection_failed_preserves_state_when_loadbalance_enqueue_f
 
     with (
         patch(
-            "app.services.loadbalancer_support.recovery.AsyncSessionLocal",
+            "app.services.loadbalancer.recovery.AsyncSessionLocal",
             return_value=make_session_context(mock_session),
         ),
         patch(
-            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=RuntimeError("queue unavailable")),
         ),
     ):
-        await mark_connection_failed(
+        await record_connection_failure(
             profile_id=4,
             connection_id=9,
             base_cooldown_seconds=30.0,
@@ -1186,7 +1189,7 @@ async def test_mark_connection_failed_preserves_state_when_loadbalance_enqueue_f
 
 
 @pytest.mark.asyncio
-async def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_fails() -> (
+async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
     current_state = SimpleNamespace(
@@ -1206,15 +1209,15 @@ async def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_f
 
     with (
         patch(
-            "app.services.loadbalancer_support.recovery.AsyncSessionLocal",
+            "app.services.loadbalancer.recovery.AsyncSessionLocal",
             return_value=make_session_context(mock_session),
         ),
         patch(
-            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=RuntimeError("queue unavailable")),
         ),
     ):
-        await mark_connection_recovered(
+        await record_connection_recovery(
             profile_id=4,
             connection_id=9,
             model_id="gpt-4o-mini",
@@ -1230,6 +1233,8 @@ async def test_mark_connection_recovered_clears_state_when_loadbalance_enqueue_f
 async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalance_enqueue_fails() -> (
     None
 ):
+    from datetime import datetime, timezone
+
     connection = SimpleNamespace(
         id=7,
         priority=0,
@@ -1257,13 +1262,31 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
         probe_eligible_logged=False,
     )
 
+    with patch(
+        "app.services.loadbalancer.planner.get_current_states_for_connections",
+        AsyncMock(return_value={7: current_state}),
+    ):
+        attempt_plan = await build_attempt_plan(
+            db=AsyncMock(),
+            profile_id=5,
+            model_config=model_config,
+            now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
+        )
+
+    assert attempt_plan.connections == [connection]
+    assert attempt_plan.blocked_connection_ids == []
+    assert attempt_plan.probe_eligible_connection_ids == [7]
+
+
+@pytest.mark.asyncio
+async def test_claim_probe_eligible_stays_off_path_when_loadbalance_enqueue_fails() -> (
+    None
+):
+    from app.services.loadbalancer.recovery import claim_probe_eligible
+
     with (
         patch(
-            "app.services.loadbalancer_support.attempts.get_current_states_for_connections",
-            AsyncMock(return_value={7: current_state}),
-        ),
-        patch(
-            "app.services.loadbalancer_support.attempts.mark_probe_eligible_logged",
+            "app.services.loadbalancer.recovery.mark_probe_eligible_logged",
             AsyncMock(
                 return_value={
                     "consecutive_failures": 2,
@@ -1275,18 +1298,19 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
             ),
         ) as mock_mark_probe_eligible_logged,
         patch(
-            "app.services.loadbalancer_support.events.background_task_manager.enqueue",
+            "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=RuntimeError("queue unavailable")),
         ),
     ):
-        attempt_plan = await build_attempt_plan(
-            db=AsyncMock(),
+        await claim_probe_eligible(
             profile_id=5,
-            model_config=model_config,
+            connection_id=7,
+            model_id="gpt-4o-mini",
+            endpoint_id=12,
+            provider_id=1,
             now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         )
 
-    assert attempt_plan == [connection]
     mock_mark_probe_eligible_logged.assert_awaited_once_with(
         profile_id=5,
         connection_id=7,
