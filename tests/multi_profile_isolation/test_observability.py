@@ -50,7 +50,7 @@ from app.schemas.schemas import (
     ProfileUpdate,
     ProfileActivateRequest,
 )
-from app.services.loadbalancer import get_model_config_with_connections
+from app.services.loadbalancer.planner import get_model_config_with_connections
 from app.services.stats_service import (
     log_request,
     get_request_logs,

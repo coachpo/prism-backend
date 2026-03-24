@@ -192,7 +192,7 @@ def test_connection_priority_validation_and_loadbalancer_tie_break():
         ConnectionCreate,
         ConnectionUpdate,
     )
-    from app.services.loadbalancer import get_active_connections
+    from app.services.loadbalancer.planner import get_active_connections
 
     with pytest.raises(ValidationError):
         ConnectionCreate.model_validate(

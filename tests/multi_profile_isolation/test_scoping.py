@@ -50,13 +50,14 @@ from app.schemas.schemas import (
     ProfileUpdate,
     ProfileActivateRequest,
 )
-from app.services.loadbalancer import get_model_config_with_connections
+from app.services.loadbalancer.planner import get_model_config_with_connections
 from app.services.stats_service import (
     log_request,
     get_request_logs,
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+
 
 class TestProfileScopedDataIsolation:
     """FR-002: Scoped Data Model"""
@@ -188,6 +189,7 @@ class TestProfileScopedDataIsolation:
         # Both can coexist, but only one per profile
         assert setting1.profile_id != setting2.profile_id
 
+
 class TestCrossProfileLeakagePrevention:
     """Verify no cross-profile data leakage in queries."""
 
@@ -272,4 +274,3 @@ class TestCrossProfileLeakagePrevention:
         assert report["summary"]["successful_request_count"] == 2
         assert report["summary"]["total_cost_micros"] == 3000000
         assert report["report_currency_code"] == "USD"
-
