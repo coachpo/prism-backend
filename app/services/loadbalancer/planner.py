@@ -16,6 +16,7 @@ logger = logging.getLogger("app.services.loadbalancer")
 MODEL_CONFIG_WITH_CONNECTION_OPTIONS = (
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
+    selectinload(ModelConfig.loadbalance_strategy),
     selectinload(ModelConfig.provider),
 )
 
@@ -102,6 +103,12 @@ async def build_attempt_plan(
     model_config: ModelConfig,
     now_at: datetime | None = None,
 ) -> AttemptPlan:
+    strategy = model_config.loadbalance_strategy
+    if strategy is None:
+        raise ValueError(
+            f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
+        )
+
     active = get_active_connections(model_config)
     if not active:
         logger.warning(
@@ -115,7 +122,7 @@ async def build_attempt_plan(
             probe_eligible_connection_ids=[],
         )
 
-    if model_config.lb_strategy == "single":
+    if strategy.strategy_type == "single":
         logger.debug(
             "build_attempt_plan: single strategy profile_id=%d using connection %d",
             profile_id,
@@ -129,7 +136,7 @@ async def build_attempt_plan(
 
     ordered_active = sorted(active, key=_failover_sort_key)
 
-    if not model_config.failover_recovery_enabled:
+    if not strategy.failover_recovery_enabled:
         logger.debug(
             "build_attempt_plan: failover without recovery profile_id=%d trying %d connections",
             profile_id,

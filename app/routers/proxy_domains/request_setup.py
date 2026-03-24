@@ -171,9 +171,14 @@ async def prepare_proxy_request(
             settings=costing_settings,
         )
 
+    strategy = model_config.loadbalance_strategy
+    if strategy is None:
+        raise ValueError(
+            f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
+        )
+
     recovery_active = (
-        model_config.lb_strategy == "failover"
-        and model_config.failover_recovery_enabled
+        strategy.strategy_type == "failover" and strategy.failover_recovery_enabled
     )
 
     return ProxyRequestSetup(

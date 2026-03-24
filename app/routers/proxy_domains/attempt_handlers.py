@@ -5,6 +5,7 @@ import time
 import httpx
 from fastapi.responses import Response, StreamingResponse
 
+from app.core.config import get_settings
 from app.services.stats_service import extract_token_usage
 
 from .attempt_outcome_reporting import log_and_audit_attempt, response_error_detail
@@ -91,7 +92,7 @@ async def _record_connection_failure_if_needed(
     await deps.record_connection_failure_fn(
         state.profile_id,
         target.connection.id,
-        state.setup.model_config.failover_recovery_cooldown_seconds,
+        get_settings().failover_cooldown_seconds,
         failure_kind,
         state.setup.model_id,
         target.connection.endpoint_id,
