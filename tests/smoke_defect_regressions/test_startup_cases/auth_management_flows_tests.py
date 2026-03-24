@@ -501,7 +501,9 @@ class TestDEF069_AuthSessionLifecycle:
             websocket = _FakeWebSocket(cookies={custom_cookie_name: access_token})
 
             async with AsyncSessionLocal() as session:
-                await websocket_endpoint(cast(WebSocket, websocket), session)
+                await websocket_endpoint(
+                    cast(WebSocket, cast(object, websocket)), session
+                )
 
             assert websocket.accepted is True
             assert websocket.close_code is None
