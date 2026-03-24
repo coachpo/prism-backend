@@ -9,6 +9,9 @@ from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
     LoadbalanceCurrentStateListResponse,
     LoadbalanceCurrentStateResetResponse,
+    LoadbalanceStrategyCreate,
+    LoadbalanceStrategyResponse,
+    LoadbalanceStrategyUpdate,
     LoadbalanceEventDeleteResponse,
     LoadbalanceEventDetail,
     LoadbalanceEventListResponse,
@@ -20,8 +23,77 @@ from app.services.loadbalancer.admin import (
     list_model_events,
     reset_connection_current_state,
 )
+from app.services.loadbalancer.strategies import (
+    create_loadbalance_strategy,
+    delete_loadbalance_strategy,
+    get_loadbalance_strategy,
+    list_loadbalance_strategies,
+    update_loadbalance_strategy,
+)
 
 router = APIRouter(prefix="/api/loadbalance", tags=["loadbalance"])
+
+
+@router.get("/strategies", response_model=list[LoadbalanceStrategyResponse])
+async def list_strategies(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await list_loadbalance_strategies(db, profile_id=profile_id)
+
+
+@router.post("/strategies", response_model=LoadbalanceStrategyResponse, status_code=201)
+async def create_strategy(
+    body: LoadbalanceStrategyCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await create_loadbalance_strategy(
+        db,
+        profile_id=profile_id,
+        body=body,
+    )
+
+
+@router.get("/strategies/{strategy_id}", response_model=LoadbalanceStrategyResponse)
+async def get_strategy(
+    strategy_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await get_loadbalance_strategy(
+        db,
+        profile_id=profile_id,
+        strategy_id=strategy_id,
+    )
+
+
+@router.put("/strategies/{strategy_id}", response_model=LoadbalanceStrategyResponse)
+async def update_strategy(
+    strategy_id: int,
+    body: LoadbalanceStrategyUpdate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await update_loadbalance_strategy(
+        db,
+        profile_id=profile_id,
+        strategy_id=strategy_id,
+        body=body,
+    )
+
+
+@router.delete("/strategies/{strategy_id}")
+async def delete_strategy(
+    strategy_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await delete_loadbalance_strategy(
+        db,
+        profile_id=profile_id,
+        strategy_id=strategy_id,
+    )
 
 
 @router.get("/current-state", response_model=LoadbalanceCurrentStateListResponse)

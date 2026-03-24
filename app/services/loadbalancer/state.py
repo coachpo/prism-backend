@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
-from app.models.models import Connection, LoadbalanceCurrentState
+from app.models.models import Connection, LoadbalanceCurrentState, ModelConfig
 
 from .types import FailureKind, RecoveryStateEntry
 
@@ -126,6 +126,37 @@ async def clear_model_state(profile_id: int, model_config_id: int) -> int:
         return int(getattr(result, "rowcount", 0) or 0)
 
 
+async def clear_strategy_state(profile_id: int, strategy_id: int) -> int:
+    async with AsyncSessionLocal() as session:
+        connection_ids = list(
+            (
+                await session.execute(
+                    select(Connection.id)
+                    .join(ModelConfig, ModelConfig.id == Connection.model_config_id)
+                    .where(
+                        Connection.profile_id == profile_id,
+                        ModelConfig.profile_id == profile_id,
+                        ModelConfig.loadbalance_strategy_id == strategy_id,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not connection_ids:
+            await session.rollback()
+            return 0
+
+        result = await session.execute(
+            delete(LoadbalanceCurrentState).where(
+                LoadbalanceCurrentState.profile_id == profile_id,
+                LoadbalanceCurrentState.connection_id.in_(connection_ids),
+            )
+        )
+        await session.commit()
+        return int(getattr(result, "rowcount", 0) or 0)
+
+
 async def clear_profile_state(profile_id: int) -> int:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -141,6 +172,7 @@ __all__ = [
     "clear_connection_state",
     "clear_connection_states",
     "clear_model_state",
+    "clear_strategy_state",
     "clear_profile_state",
     "FailureKind",
     "LOGGER_NAME",
