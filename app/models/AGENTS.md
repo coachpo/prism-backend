@@ -9,7 +9,7 @@ models/
 ├── domains/
 │   ├── identity.py       # Profiles, providers, operator auth, refresh tokens, proxy keys, WebAuthn
 │   ├── routing.py        # Model configs, endpoints, pricing templates, connections
-│   └── observability.py  # Request logs, user settings, FX rates, blocklist rules, audit logs, loadbalance events
+│   └── observability.py  # Request logs, user settings, FX rates, blocklist rules, audit logs, loadbalance current state, loadbalance events
 └── models.py             # Re-export boundary for all domain models
 ```
 
@@ -35,11 +35,12 @@ models/
 - `EndpointFxRateSetting`: Custom FX rates for specific model/endpoint pairs.
 - `HeaderBlocklistRule`: System and profile-scoped rules for stripping sensitive headers.
 - `AuditLog`: Detailed request/response capture for audited providers.
+- `LoadbalanceCurrentState`: Persisted per-connection failover cooldown and probe state scoped by profile.
 - `LoadbalanceEvent`: Persistent record of failover, recovery, and health transitions.
 
 ## CONVENTIONS
 - Use `identity.py` for anything related to auth subjects, credentials, or profile containers.
 - Use `routing.py` for the structural graph of models, endpoints, and their connections.
-- Use `observability.py` for telemetry, logs, settings, and runtime event persistence.
+- Use `observability.py` for telemetry, logs, settings, and persisted loadbalance current-state or event persistence.
 - Keep business logic out of models; use properties for simple derivations like secret masking.
 - Ensure all new models are re-exported in `models/models.py` to maintain the public ORM boundary.

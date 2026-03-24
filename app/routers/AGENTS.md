@@ -18,7 +18,7 @@ routers/
 ├── proxy.py + proxy_domains/                     # Runtime `/v1*` and `/v1beta*` proxy execution
 ├── shared/                                       # Router-layer helpers reused across management routes
 ├── audit.py                                      # Audit log queries and retention delete responses
-├── loadbalance.py                                # Persistent loadbalance event queries and deletes
+├── loadbalance.py                                # Current-state reset/list plus loadbalance event queries and deletes
 ├── providers.py                                  # Provider audit-setting management
 └── realtime.py                                   # Websocket auth and profile-channel subscription flow
 ```
@@ -31,7 +31,7 @@ routers/
 - Model, pricing template, and profile management: `models.py`, `models_domains/`, `pricing_templates.py`, `pricing_templates_domains/`, `profiles.py`, `profiles_domains/`
 - Settings composition router and subdomains: `settings.py`, `settings_domains/`
 - Stats request-log, throughput, summary, and metrics batch handlers: `stats.py`, `stats_domains/`
-- Runtime proxy path handling, attempts, streaming, and logging: `proxy.py`, `proxy_domains/`
+- Runtime proxy path handling, attempts, streaming, and outcome reporting: `proxy.py`, `proxy_domains/`
 - Websocket auth, subscribe or unsubscribe flow, and channel validation: `realtime.py`
 - Shared room-state ownership behind realtime: `../services/realtime/connection_manager.py`
 

@@ -15,7 +15,7 @@ schemas/
     ├── core.py            # Profiles, providers, endpoints, connections, models, pricing templates
     ├── endpoint_pricing.py
     ├── profile_provider.py
-    └── stats.py           # Request logs, spending, throughput, metrics batch, loadbalance payloads
+    └── stats.py           # Request logs, spending, throughput, metrics batch, loadbalance current-state and event payloads
 ```
 
 ## WHERE TO LOOK
@@ -25,7 +25,7 @@ schemas/
 - Auth and passkey contracts: `domains/auth.py`
 - Core management contracts for profiles, providers, endpoints, connections, models, and pricing templates: `domains/core.py`
 - Shared helpers and split support modules behind the public surface: `domains/common.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_provider.py`
-- Stats and observability contracts for request logs, spending, throughput, metrics batches, and loadbalance events: `domains/stats.py`
+- Stats and observability contracts for request logs, spending, throughput, metrics batches, and loadbalance current-state or event payloads: `domains/stats.py`
 
 ## SCHEMA FACTS
 
