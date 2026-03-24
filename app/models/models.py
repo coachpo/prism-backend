@@ -20,6 +20,7 @@ from app.models.domains.observability import (
 from app.models.domains.routing import (
     Connection,
     Endpoint,
+    LoadbalanceStrategy,
     ModelConfig,
     PricingTemplate,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "Endpoint",
     "EndpointFxRateSetting",
     "HeaderBlocklistRule",
+    "LoadbalanceStrategy",
     "LoadbalanceCurrentState",
     "LoadbalanceEvent",
     "ModelConfig",

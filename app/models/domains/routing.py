@@ -2,11 +2,14 @@ from __future__ import annotations
 
 # ruff: noqa: F821,F401
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -19,8 +22,59 @@ from app.core.crypto import decrypt_secret, mask_secret
 from app.core.database import Base
 from app.core.time import utc_now
 
+if TYPE_CHECKING:
+    from app.models.domains.identity import Profile, Provider
+
 
 _UNREADABLE_SECRET_MASK = "********"
+
+
+class LoadbalanceStrategy(Base):
+    __tablename__ = "loadbalance_strategies"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "name",
+            name="uq_loadbalance_strategies_profile_name",
+        ),
+        UniqueConstraint(
+            "profile_id",
+            "id",
+            name="uq_loadbalance_strategies_profile_id_id",
+        ),
+        CheckConstraint(
+            "strategy_type IN ('single', 'failover')",
+            name="chk_loadbalance_strategies_type",
+        ),
+        CheckConstraint(
+            "strategy_type = 'failover' OR failover_recovery_enabled = false",
+            name="chk_loadbalance_strategies_recovery",
+        ),
+        Index("idx_loadbalance_strategies_profile_id", "profile_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    strategy_type: Mapped[str] = mapped_column(
+        String(20), default="single", nullable=False
+    )
+    failover_recovery_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+    profile: Mapped["Profile"] = relationship()
+    model_configs: Mapped[list["ModelConfig"]] = relationship(
+        back_populates="loadbalance_strategy", overlaps="model_configs,profile"
+    )
 
 
 class ModelConfig(Base):
@@ -37,6 +91,18 @@ class ModelConfig(Base):
             "model_id",
             "is_enabled",
         ),
+        Index("idx_model_configs_loadbalance_strategy_id", "loadbalance_strategy_id"),
+        ForeignKeyConstraint(
+            ["profile_id", "loadbalance_strategy_id"],
+            ["loadbalance_strategies.profile_id", "loadbalance_strategies.id"],
+            name="fk_model_configs_profile_loadbalance_strategy",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(model_type = 'native' AND loadbalance_strategy_id IS NOT NULL) OR "
+            + "(model_type = 'proxy' AND loadbalance_strategy_id IS NULL)",
+            name="chk_model_configs_strategy_attachment",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -52,14 +118,9 @@ class ModelConfig(Base):
     redirect_to: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )  # target model_id for redirect models
-    lb_strategy: Mapped[str] = mapped_column(
-        String(50), default="single", nullable=False
-    )  # single, failover
-    failover_recovery_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=True, nullable=False
-    )
-    failover_recovery_cooldown_seconds: Mapped[int] = mapped_column(
-        Integer, default=60, nullable=False
+    loadbalance_strategy_id: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
     is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -69,8 +130,13 @@ class ModelConfig(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="model_configs")
+    profile: Mapped["Profile"] = relationship(
+        back_populates="model_configs", overlaps="model_configs"
+    )
     provider: Mapped["Provider"] = relationship(back_populates="model_configs")
+    loadbalance_strategy: Mapped["LoadbalanceStrategy | None"] = relationship(
+        back_populates="model_configs", overlaps="model_configs,profile"
+    )
     connections: Mapped[list["Connection"]] = relationship(
         back_populates="model_config_rel", cascade="all, delete-orphan"
     )

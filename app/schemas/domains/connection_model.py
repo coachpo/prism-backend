@@ -91,7 +91,9 @@ class ConnectionResponse(BaseModel):
 
     @field_validator("custom_headers", mode="before")
     @classmethod
-    def parse_custom_headers(cls, v: str | dict | None) -> dict[str, str] | None:
+    def parse_custom_headers(
+        cls, v: str | dict[str, str] | None
+    ) -> dict[str, str] | None:
         if v is None:
             return None
         if isinstance(v, dict):
@@ -148,24 +150,83 @@ class ModelConnectionsBatchResponse(BaseModel):
     items: list[ModelConnectionsBatchItem]
 
 
+class LoadbalanceStrategyBase(BaseModel):
+    name: str
+    strategy_type: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_strategy_behavior(self):
+        if self.strategy_type == "single" and self.failover_recovery_enabled:
+            raise ValueError("single strategies must not enable failover recovery")
+        return self
+
+
+class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
+    pass
+
+
+class LoadbalanceStrategyUpdate(BaseModel):
+    name: str | None = None
+    strategy_type: Literal["single", "failover"] | None = None
+    failover_recovery_enabled: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be empty")
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_strategy_behavior(self):
+        if self.strategy_type == "single" and self.failover_recovery_enabled:
+            raise ValueError("single strategies must not enable failover recovery")
+        return self
+
+
+class LoadbalanceStrategySummary(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    strategy_type: Literal["single", "failover"]
+    failover_recovery_enabled: bool
+
+
+class LoadbalanceStrategyResponse(LoadbalanceStrategySummary):
+    profile_id: int
+    attached_model_count: int
+    created_at: datetime
+    updated_at: datetime
+
+
 class ModelConfigBase(BaseModel):
     provider_id: int
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
     redirect_to: str | None = None
-    lb_strategy: Literal["single", "failover"] = "single"
-    failover_recovery_enabled: bool = True
-    failover_recovery_cooldown_seconds: int = 60
+    loadbalance_strategy_id: int | None = None
 
-    @field_validator("failover_recovery_cooldown_seconds")
-    @classmethod
-    def validate_cooldown(cls, v: int) -> int:
-        if v < 1 or v > 3600:
-            raise ValueError(
-                "failover_recovery_cooldown_seconds must be between 1 and 3600"
-            )
-        return v
+    @model_validator(mode="after")
+    def validate_strategy_attachment(self):
+        if self.model_type == "native" and self.loadbalance_strategy_id is None:
+            raise ValueError("loadbalance_strategy_id is required for native models")
+        if self.model_type == "proxy" and self.loadbalance_strategy_id is not None:
+            raise ValueError("loadbalance_strategy_id must be null for proxy models")
+        return self
 
     is_enabled: bool = True
 
@@ -180,9 +241,7 @@ class ModelConfigUpdate(BaseModel):
     display_name: str | None = None
     model_type: Literal["native", "proxy"] | None = None
     redirect_to: str | None = None
-    lb_strategy: Literal["single", "failover"] | None = None
-    failover_recovery_enabled: bool | None = None
-    failover_recovery_cooldown_seconds: int | None = None
+    loadbalance_strategy_id: int | None = None
     is_enabled: bool | None = None
 
 
@@ -197,9 +256,8 @@ class ModelConfigResponse(BaseModel):
     display_name: str | None
     model_type: Literal["native", "proxy"]
     redirect_to: str | None
-    lb_strategy: Literal["single", "failover"]
-    failover_recovery_enabled: bool
-    failover_recovery_cooldown_seconds: int
+    loadbalance_strategy_id: int | None
+    loadbalance_strategy: LoadbalanceStrategySummary | None = None
     is_enabled: bool
     connections: list[ConnectionResponse]
     created_at: datetime
@@ -217,9 +275,8 @@ class ModelConfigListResponse(BaseModel):
     display_name: str | None
     model_type: Literal["native", "proxy"]
     redirect_to: str | None
-    lb_strategy: Literal["single", "failover"]
-    failover_recovery_enabled: bool
-    failover_recovery_cooldown_seconds: int
+    loadbalance_strategy_id: int | None
+    loadbalance_strategy: LoadbalanceStrategySummary | None = None
     is_enabled: bool
     connection_count: int
     active_connection_count: int
@@ -261,6 +318,10 @@ __all__ = [
     "EndpointModelsBatchRequest",
     "EndpointModelsBatchResponse",
     "HealthCheckResponse",
+    "LoadbalanceStrategyCreate",
+    "LoadbalanceStrategyResponse",
+    "LoadbalanceStrategySummary",
+    "LoadbalanceStrategyUpdate",
     "ModelConnectionsBatchItem",
     "ModelConnectionsBatchRequest",
     "ModelConnectionsBatchResponse",
