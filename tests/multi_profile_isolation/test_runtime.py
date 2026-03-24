@@ -53,7 +53,7 @@ from app.schemas.schemas import (
     ProfileUpdate,
     ProfileActivateRequest,
 )
-from app.services.loadbalancer import get_model_config_with_connections
+from app.services.loadbalancer.planner import get_model_config_with_connections
 from app.services.stats_service import (
     log_request,
     get_request_logs,
@@ -139,7 +139,7 @@ class TestProxyRuntimeIsolation:
 class TestFailoverRecoveryStateIsolation:
     @pytest.mark.asyncio
     async def test_current_state_reads_are_profile_scoped(self):
-        from app.services.loadbalancer_support.state import (
+        from app.services.loadbalancer.state import (
             get_current_states_for_connections,
         )
 
@@ -253,6 +253,7 @@ class TestFailoverRecoveryStateIsolation:
                 connection_ids=[connection_one.id, connection_two.id],
             )
 
-        assert list(rows) == [connection_one.id]
+        assert set(rows) == {connection_one.id}
+        assert connection_two.id not in rows
         assert float(rows[connection_one.id].last_cooldown_seconds) == 60.0
         assert rows[connection_one.id].last_failure_kind == "transient_http"
