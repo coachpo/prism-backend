@@ -14,7 +14,7 @@ backend/
 ├── app/schemas/AGENTS.md                        # Pydantic contract ownership
 ├── app/services/AGENTS.md                       # Service-root boundaries and worker infra
 ├── app/services/auth/AGENTS.md                  # Session, email, reset, proxy-key internals
-├── app/services/loadbalancer_support/AGENTS.md
+├── app/services/loadbalancer/AGENTS.md
 ├── app/services/proxy_support/AGENTS.md
 ├── app/services/realtime/AGENTS.md
 ├── app/services/stats/AGENTS.md
@@ -50,7 +50,7 @@ backend/
 - Startup sequencing and auth bifurcation: `app/bootstrap/startup.py`, `app/bootstrap/auth_middleware.py`
 - Scope resolution: `app/dependencies.py`
 - Auth, proxy keys, and passkeys: `app/routers/auth.py`, `app/routers/settings.py`, `app/services/auth_service.py`, `app/services/webauthn_service.py`
-- Runtime routing and failover: `app/routers/proxy.py`, `app/routers/proxy_domains/`, `app/services/loadbalancer.py`, `app/services/proxy_service.py`
+- Runtime routing and failover: `app/routers/proxy.py`, `app/routers/proxy_domains/`, `app/services/loadbalancer/AGENTS.md`, `app/services/proxy_service.py`
 - Realtime transport and broadcasts: `app/routers/realtime.py`, `app/services/realtime/connection_manager.py`
 - Packaging and local launcher behavior: `pyproject.toml`, `uv.lock`, `../start.sh`, `Dockerfile`, `docker-compose.yml`
 

@@ -15,7 +15,7 @@ app/
 ├── schemas/AGENTS.md                         # Contract domains plus `schemas.py` export surface
 ├── services/AGENTS.md                        # Public service facades, worker infrastructure, cleanup helpers
 ├── services/auth/AGENTS.md                   # Session, email, password reset, proxy-key internals
-├── services/loadbalancer_support/AGENTS.md   # Recovery state, attempts, event helpers
+├── services/loadbalancer/AGENTS.md           # Split planner, state, recovery, events, and admin seams
 ├── services/proxy_support/AGENTS.md          # Upstream URL, header, body, transport helpers
 ├── services/realtime/AGENTS.md               # Connection manager room state and broadcasts
 ├── services/stats/AGENTS.md                  # Telemetry, spending, throughput, dashboard payload queries
@@ -40,7 +40,7 @@ app/
 - `routers/AGENTS.md`: 14 router shells, current domain folders, and scope conventions.
 - `schemas/AGENTS.md`: contract ownership and the `schemas.py` re-export boundary.
 - `services/AGENTS.md`: public service facades, background task infrastructure, and cleanup helpers.
-- `services/auth/AGENTS.md`, `services/loadbalancer_support/AGENTS.md`, `services/proxy_support/AGENTS.md`, `services/realtime/AGENTS.md`, `services/stats/AGENTS.md`, `services/webauthn/AGENTS.md`: use these for deeper service package detail.
+- `services/auth/AGENTS.md`, `services/loadbalancer/AGENTS.md`, `services/proxy_support/AGENTS.md`, `services/realtime/AGENTS.md`, `services/stats/AGENTS.md`, `services/webauthn/AGENTS.md`: use these for deeper service package detail.
 
 ## APP FACTS
 

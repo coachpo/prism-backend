@@ -1,7 +1,7 @@
 # BACKEND SERVICES ROOT KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load-balancing support, and WebAuthn.
+`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load balancing, and WebAuthn.
 
 ## STRUCTURE
 ```
@@ -10,7 +10,7 @@ services/
 ├── webauthn_service.py                 # Public passkey re-export surface
 ├── stats_service.py                    # Public stats and observability re-export surface
 ├── proxy_service.py                    # Upstream forwarding boundary
-├── loadbalancer.py                     # Runtime model resolution and connection selection
+├── loadbalancer/                       # Split planner, state, recovery, events, and admin seams
 ├── audit_service.py                    # Audit persistence and redaction
 ├── costing_service.py                  # Pricing and FX helpers
 ├── background_tasks.py                 # Shared BackgroundTaskManager implementation
@@ -19,7 +19,7 @@ services/
 ├── profile_invariants.py               # Active or default profile enforcement
 ├── user_settings.py                    # Per-profile settings bootstrap and access helpers
 ├── auth/AGENTS.md                      # Session, email, password reset, proxy-key internals
-├── loadbalancer_support/AGENTS.md      # Recovery state, attempts, event helpers
+├── loadbalancer/AGENTS.md              # Split planner, state, recovery, events, and admin seams
 ├── proxy_support/AGENTS.md             # Upstream URL, header, body, transport helpers
 ├── realtime/AGENTS.md                  # Connection manager room state and broadcasts
 ├── stats/AGENTS.md                     # Telemetry, spending, throughput, dashboard helpers
@@ -31,7 +31,7 @@ services/
 - Shared worker lifecycle and metrics snapshots: `background_tasks.py`, `../main.py`
 - Public auth boundary: `auth_service.py`, `auth/AGENTS.md`
 - Public passkey boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
-- Runtime routing, attempt planning, and upstream forwarding: `loadbalancer.py`, `proxy_service.py`, `loadbalancer_support/AGENTS.md`, `proxy_support/AGENTS.md`
+- Runtime routing, attempt planning, and upstream forwarding: `loadbalancer/AGENTS.md`, `proxy_service.py`, `proxy_support/AGENTS.md`
 - Observability, request logging, and dashboard payload shaping: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
 - Realtime room-state ownership: `realtime/AGENTS.md`, `realtime/connection_manager.py`
 - Startup-enforced defaults and retention cleanup: `profile_invariants.py`, `user_settings.py`, `background_cleanup.py`, `loadbalance_cleanup.py`
