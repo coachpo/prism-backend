@@ -12,6 +12,7 @@ from app.schemas.schemas import (
 from .mutation_helpers import (
     apply_model_type_update_defaults,
     build_model_create_values,
+    ensure_loadbalance_strategy_exists,
     ensure_provider_exists,
     ensure_proxy_update_preconditions,
     ensure_valid_model_type,
@@ -35,6 +36,12 @@ async def create_model_config_record(
     profile_id: int,
 ) -> ModelConfig:
     await ensure_provider_exists(db, body.provider_id)
+    if body.model_type == "native" and body.loadbalance_strategy_id is not None:
+        await ensure_loadbalance_strategy_exists(
+            db,
+            profile_id=profile_id,
+            strategy_id=body.loadbalance_strategy_id,
+        )
     await ensure_model_id_available(
         db,
         profile_id=profile_id,
@@ -58,9 +65,7 @@ async def create_model_config_record(
             display_name=body.display_name,
             model_type=model_type,
             redirect_to=body.redirect_to,
-            lb_strategy=body.lb_strategy,
-            failover_recovery_enabled=body.failover_recovery_enabled,
-            failover_recovery_cooldown_seconds=body.failover_recovery_cooldown_seconds,
+            loadbalance_strategy_id=body.loadbalance_strategy_id,
             is_enabled=body.is_enabled,
         )
     )
@@ -107,6 +112,9 @@ async def update_model_config_record(
     new_redirect_to = update_data.get("redirect_to", config.redirect_to)
     new_provider_id = update_data.get("provider_id", config.provider_id)
     new_model_id = update_data.get("model_id", config.model_id)
+    new_loadbalance_strategy_id = update_data.get(
+        "loadbalance_strategy_id", config.loadbalance_strategy_id
+    )
 
     await validate_native_model_update(
         db,
@@ -130,17 +138,37 @@ async def update_model_config_record(
         provider_id=new_provider_id,
         exclude_model_id=config.model_id,
     )
+
+    if new_model_type == "native":
+        if new_loadbalance_strategy_id is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(
+                status_code=400,
+                detail="loadbalance_strategy_id is required for native models",
+            )
+        await ensure_loadbalance_strategy_exists(
+            db,
+            profile_id=profile_id,
+            strategy_id=new_loadbalance_strategy_id,
+        )
+    elif update_data.get("loadbalance_strategy_id") is not None:
+        from fastapi import HTTPException
+
+        raise HTTPException(
+            status_code=400,
+            detail="loadbalance_strategy_id must be null for proxy models",
+        )
+
     apply_model_type_update_defaults(update_data, model_type=new_model_type)
 
     clear_model_current_state = any(
         (
             "is_enabled" in update_data
             and update_data["is_enabled"] != config.is_enabled,
-            "lb_strategy" in update_data
-            and update_data["lb_strategy"] != config.lb_strategy,
-            "failover_recovery_enabled" in update_data
-            and update_data["failover_recovery_enabled"]
-            != config.failover_recovery_enabled,
+            "loadbalance_strategy_id" in update_data
+            and update_data["loadbalance_strategy_id"]
+            != config.loadbalance_strategy_id,
             "model_type" in update_data and new_model_type != config.model_type,
             "provider_id" in update_data and new_provider_id != config.provider_id,
         )

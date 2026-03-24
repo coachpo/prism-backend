@@ -6,10 +6,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.models import Connection, ModelConfig
-from app.schemas.schemas import ModelConfigListResponse, ProviderResponse
+from app.schemas.schemas import (
+    LoadbalanceStrategySummary,
+    ModelConfigListResponse,
+    ProviderResponse,
+)
 
 MODEL_CONFIG_DETAIL_OPTIONS = (
     selectinload(ModelConfig.provider),
+    selectinload(ModelConfig.loadbalance_strategy),
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
 )
@@ -37,19 +42,19 @@ def build_model_list_response(
         provider=ProviderResponse.model_validate(config.provider),
         model_id=config.model_id,
         display_name=config.display_name,
-        model_type=config.model_type,
+        model_type=cast(Literal["native", "proxy"], config.model_type),
         redirect_to=config.redirect_to,
-        lb_strategy=cast(
-            Literal["single", "failover"],
-            "failover" if config.lb_strategy == "failover" else "single",
+        loadbalance_strategy_id=config.loadbalance_strategy_id,
+        loadbalance_strategy=(
+            LoadbalanceStrategySummary.model_validate(config.loadbalance_strategy)
+            if config.loadbalance_strategy is not None
+            else None
         ),
-        failover_recovery_enabled=config.failover_recovery_enabled,
-        failover_recovery_cooldown_seconds=config.failover_recovery_cooldown_seconds,
         is_enabled=config.is_enabled,
         connection_count=resolved_connection_count,
         active_connection_count=resolved_active_connection_count,
-        health_success_rate=stats.get("health_success_rate"),
-        health_total_requests=stats.get("health_total_requests", 0),
+        health_success_rate=cast(float | None, stats.get("health_success_rate")),
+        health_total_requests=cast(int, stats.get("health_total_requests", 0)),
         created_at=config.created_at,
         updated_at=config.updated_at,
     )

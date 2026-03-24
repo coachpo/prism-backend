@@ -18,6 +18,7 @@ async def list_models_for_profile(
         select(ModelConfig)
         .options(
             selectinload(ModelConfig.provider),
+            selectinload(ModelConfig.loadbalance_strategy),
             selectinload(ModelConfig.connections),
         )
         .where(ModelConfig.profile_id == profile_id)
@@ -61,6 +62,9 @@ async def get_models_by_endpoint_for_profile(
         .options(
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.provider
+            ),
+            selectinload(Connection.model_config_rel).selectinload(
+                ModelConfig.loadbalance_strategy
             ),
             selectinload(Connection.pricing_template_rel),
         )
@@ -113,6 +117,9 @@ async def get_models_by_endpoints_for_profile(
         .options(
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.provider
+            ),
+            selectinload(Connection.model_config_rel).selectinload(
+                ModelConfig.loadbalance_strategy
             ),
             selectinload(Connection.pricing_template_rel),
         )

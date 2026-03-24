@@ -2,14 +2,34 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.models import EndpointFxRateSetting, ModelConfig, Provider
+from app.models.models import (
+    EndpointFxRateSetting,
+    LoadbalanceStrategy,
+    ModelConfig,
+    Provider,
+)
 
 from .query_helpers import list_proxy_referrers
 
 VALID_MODEL_TYPES = ("native", "proxy")
-PROXY_LB_STRATEGY = "single"
-PROXY_RECOVERY_ENABLED = True
-PROXY_RECOVERY_COOLDOWN_SECONDS = 60
+
+
+async def ensure_loadbalance_strategy_exists(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    strategy_id: int,
+) -> LoadbalanceStrategy:
+    result = await db.execute(
+        select(LoadbalanceStrategy).where(
+            LoadbalanceStrategy.profile_id == profile_id,
+            LoadbalanceStrategy.id == strategy_id,
+        )
+    )
+    strategy = result.scalar_one_or_none()
+    if strategy is None:
+        raise HTTPException(status_code=400, detail="Loadbalance strategy not found")
+    return strategy
 
 
 async def ensure_provider_exists(db: AsyncSession, provider_id: int) -> None:
@@ -100,9 +120,7 @@ def build_model_create_values(
     display_name: str | None,
     model_type: str,
     redirect_to: str | None,
-    lb_strategy: str,
-    failover_recovery_enabled: bool,
-    failover_recovery_cooldown_seconds: int,
+    loadbalance_strategy_id: int | None,
     is_enabled: bool,
 ) -> dict[str, object]:
     return {
@@ -112,16 +130,8 @@ def build_model_create_values(
         "display_name": display_name,
         "model_type": model_type,
         "redirect_to": redirect_to if model_type == "proxy" else None,
-        "lb_strategy": PROXY_LB_STRATEGY if model_type == "proxy" else lb_strategy,
-        "failover_recovery_enabled": (
-            PROXY_RECOVERY_ENABLED
-            if model_type == "proxy"
-            else failover_recovery_enabled
-        ),
-        "failover_recovery_cooldown_seconds": (
-            PROXY_RECOVERY_COOLDOWN_SECONDS
-            if model_type == "proxy"
-            else failover_recovery_cooldown_seconds
+        "loadbalance_strategy_id": (
+            None if model_type == "proxy" else loadbalance_strategy_id
         ),
         "is_enabled": is_enabled,
     }
@@ -136,9 +146,7 @@ def apply_model_type_update_defaults(
         update_data["redirect_to"] = None
         return
 
-    update_data["lb_strategy"] = PROXY_LB_STRATEGY
-    update_data["failover_recovery_enabled"] = PROXY_RECOVERY_ENABLED
-    update_data["failover_recovery_cooldown_seconds"] = PROXY_RECOVERY_COOLDOWN_SECONDS
+    update_data["loadbalance_strategy_id"] = None
 
 
 async def sync_renamed_model_references(
@@ -191,11 +199,9 @@ async def load_model_config_or_404(
 
 
 __all__ = [
-    "PROXY_LB_STRATEGY",
-    "PROXY_RECOVERY_COOLDOWN_SECONDS",
-    "PROXY_RECOVERY_ENABLED",
     "apply_model_type_update_defaults",
     "build_model_create_values",
+    "ensure_loadbalance_strategy_exists",
     "ensure_provider_exists",
     "ensure_proxy_update_preconditions",
     "ensure_valid_model_type",
