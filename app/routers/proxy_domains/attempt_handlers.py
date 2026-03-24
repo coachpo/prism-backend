@@ -1,4 +1,5 @@
 import logging
+import re
 import time
 
 import httpx
@@ -6,12 +7,7 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.services.stats_service import extract_token_usage
 
-from .attempt_logging import (
-    _log_and_audit_attempt,
-    _mark_connection_failed_if_needed,
-    _mark_connection_recovered_if_needed,
-    _response_error_detail,
-)
+from .attempt_outcome_reporting import log_and_audit_attempt, response_error_detail
 from .attempt_streaming import build_streaming_response
 from .attempt_types import (
     ProxyAttemptTarget,
@@ -20,6 +16,88 @@ from .attempt_types import (
 )
 
 logger = logging.getLogger(__name__)
+
+_AUTH_LIKE_ERROR_RE = re.compile(
+    r"(auth|authoriz|forbidden|permission|api[\s_-]?key|token|credential|access denied)",
+    re.IGNORECASE,
+)
+
+
+def _extract_error_text(raw_body: bytes | None) -> str:
+    if not raw_body:
+        return ""
+    return raw_body.decode("utf-8", errors="replace")
+
+
+def _classify_failover_failure(
+    *,
+    status_code: int | None = None,
+    raw_body: bytes | None = None,
+    exception: Exception | None = None,
+) -> str:
+    if exception is not None:
+        return (
+            "timeout"
+            if isinstance(exception, httpx.TimeoutException)
+            else "connect_error"
+        )
+    if status_code is None or status_code != 403:
+        return "transient_http"
+    return (
+        "auth_like"
+        if _AUTH_LIKE_ERROR_RE.search(_extract_error_text(raw_body))
+        else "transient_http"
+    )
+
+
+def _is_recovery_success_status(status_code: int) -> bool:
+    return 200 <= status_code < 400
+
+
+async def _record_connection_recovery_if_needed(
+    *,
+    deps: ProxyRuntimeDependencies,
+    state: ProxyRequestState,
+    target: ProxyAttemptTarget,
+    status_code: int,
+) -> None:
+    if not state.setup.recovery_active or not _is_recovery_success_status(status_code):
+        return
+    await deps.record_connection_recovery_fn(
+        state.profile_id,
+        target.connection.id,
+        state.setup.model_id,
+        target.connection.endpoint_id,
+        state.setup.provider_id,
+    )
+
+
+async def _record_connection_failure_if_needed(
+    *,
+    deps: ProxyRuntimeDependencies,
+    state: ProxyRequestState,
+    target: ProxyAttemptTarget,
+    status_code: int | None = None,
+    raw_body: bytes | None = None,
+    exception: Exception | None = None,
+) -> None:
+    if not state.setup.recovery_active:
+        return
+    failure_kind = _classify_failover_failure(
+        status_code=status_code,
+        raw_body=raw_body,
+        exception=exception,
+    )
+    await deps.record_connection_failure_fn(
+        state.profile_id,
+        target.connection.id,
+        state.setup.model_config.failover_recovery_cooldown_seconds,
+        failure_kind,
+        state.setup.model_id,
+        target.connection.endpoint_id,
+        state.setup.provider_id,
+        now_at=None,
+    )
 
 
 async def handle_streaming_attempt(
@@ -54,7 +132,7 @@ async def handle_streaming_attempt(
     if upstream_resp.status_code >= 400:
         response_body = await upstream_resp.aread()
         await upstream_resp.aclose()
-        error_detail = _response_error_detail(response_body)
+        error_detail = response_error_detail(response_body)
 
         if deps.should_failover_fn(upstream_resp.status_code):
             last_error = f"Upstream returned {upstream_resp.status_code}"
@@ -63,7 +141,7 @@ async def handle_streaming_attempt(
                 target.connection.id,
                 upstream_resp.status_code,
             )
-            await _log_and_audit_attempt(
+            _ = await log_and_audit_attempt(
                 deps=deps,
                 state=state,
                 target=target,
@@ -74,7 +152,7 @@ async def handle_streaming_attempt(
                 elapsed_ms=elapsed_ms,
                 error_detail=error_detail,
             )
-            await _mark_connection_failed_if_needed(
+            await _record_connection_failure_if_needed(
                 deps=deps,
                 state=state,
                 target=target,
@@ -84,7 +162,7 @@ async def handle_streaming_attempt(
             return None, last_error
 
         tokens = extract_token_usage(response_body)
-        await _log_and_audit_attempt(
+        _ = await log_and_audit_attempt(
             deps=deps,
             state=state,
             target=target,
@@ -96,7 +174,7 @@ async def handle_streaming_attempt(
             error_detail=error_detail,
             tokens=tokens,
         )
-        await _mark_connection_recovered_if_needed(
+        await _record_connection_recovery_if_needed(
             deps=deps,
             state=state,
             target=target,
@@ -111,7 +189,7 @@ async def handle_streaming_attempt(
             None,
         )
 
-    await _mark_connection_recovered_if_needed(
+    await _record_connection_recovery_if_needed(
         deps=deps,
         state=state,
         target=target,
@@ -158,7 +236,7 @@ async def handle_buffered_attempt(
             target.connection.id,
             response.status_code,
         )
-        await _log_and_audit_attempt(
+        _ = await log_and_audit_attempt(
             deps=deps,
             state=state,
             target=target,
@@ -167,9 +245,9 @@ async def handle_buffered_attempt(
             response_body=response.content,
             is_stream=False,
             elapsed_ms=elapsed_ms,
-            error_detail=_response_error_detail(response.content),
+            error_detail=response_error_detail(response.content),
         )
-        await _mark_connection_failed_if_needed(
+        await _record_connection_failure_if_needed(
             deps=deps,
             state=state,
             target=target,
@@ -181,9 +259,9 @@ async def handle_buffered_attempt(
     tokens = extract_token_usage(response.content)
     error_detail = None
     if response.status_code >= 400:
-        error_detail = _response_error_detail(response.content)
+        error_detail = response_error_detail(response.content)
 
-    await _log_and_audit_attempt(
+    _ = await log_and_audit_attempt(
         deps=deps,
         state=state,
         target=target,
@@ -195,7 +273,7 @@ async def handle_buffered_attempt(
         error_detail=error_detail,
         tokens=tokens,
     )
-    await _mark_connection_recovered_if_needed(
+    await _record_connection_recovery_if_needed(
         deps=deps,
         state=state,
         target=target,
@@ -227,7 +305,7 @@ async def handle_transport_exception(
         last_error = f"Timeout: {exc}"
         logger.warning("Endpoint %d timed out: %s", target.connection.id, exc)
 
-    await _log_and_audit_attempt(
+    _ = await log_and_audit_attempt(
         deps=deps,
         state=state,
         target=target,
@@ -238,7 +316,7 @@ async def handle_transport_exception(
         elapsed_ms=elapsed_ms,
         error_detail=str(exc)[:500],
     )
-    await _mark_connection_failed_if_needed(
+    await _record_connection_failure_if_needed(
         deps=deps,
         state=state,
         target=target,

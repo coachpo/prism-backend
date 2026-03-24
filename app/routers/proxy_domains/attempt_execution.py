@@ -82,7 +82,7 @@ async def execute_proxy_attempts(
             continue
 
         if not await endpoint_is_active_now_fn(db, connection.id):
-            await deps.clear_current_state_fn(
+            await deps.clear_connection_state_fn(
                 profile_id,
                 connection.id,
             )
@@ -91,6 +91,16 @@ async def execute_proxy_attempts(
                 connection.id,
             )
             continue
+
+        if connection.id in setup.probe_eligible_connection_ids:
+            await deps.claim_probe_eligible_fn(
+                profile_id=profile_id,
+                connection_id=connection.id,
+                model_id=setup.model_id,
+                endpoint_id=connection.endpoint_id,
+                provider_id=setup.provider_id,
+                now_at=None,
+            )
 
         attempted_any_endpoint = True
         target = _build_attempt_target(

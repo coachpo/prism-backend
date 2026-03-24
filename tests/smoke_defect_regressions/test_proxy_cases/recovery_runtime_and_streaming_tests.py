@@ -8,6 +8,15 @@ from uuid import uuid4
 import pytest
 
 from app.services.background_tasks import BackgroundTaskManager
+from app.services.loadbalancer.types import AttemptPlan
+
+
+def _attempt_plan(*connections):
+    return AttemptPlan(
+        connections=list(connections),
+        blocked_connection_ids=[],
+        probe_eligible_connection_ids=[],
+    )
 
 
 class TestDEF062_NonFailover4xxRecoveryState:
@@ -94,29 +103,32 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_connections",
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
             patch(
-                "app.routers.proxy.build_attempt_plan",
-                AsyncMock(return_value=[connection]),
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
             ),
             patch(
                 "app.routers.proxy._endpoint_is_active_now",
                 AsyncMock(return_value=True),
             ),
             patch(
-                "app.routers.proxy.load_costing_settings",
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
                 AsyncMock(return_value=MagicMock()),
             ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
             patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
             patch("app.routers.proxy.record_audit_log", AsyncMock()),
             patch(
-                "app.routers.proxy.mark_connection_failed", AsyncMock()
+                "app.routers.proxy.record_connection_failure", AsyncMock()
             ) as mark_failed,
             patch(
-                "app.routers.proxy.mark_connection_recovered", AsyncMock()
+                "app.routers.proxy.record_connection_recovery", AsyncMock()
             ) as mark_recovered,
         ):
             response = await _handle_proxy(
@@ -128,6 +140,10 @@ class TestDEF062_NonFailover4xxRecoveryState:
             )
 
         assert response.status_code == 404
+        assert response.headers["content-type"] == "application/json"
+        assert json.loads(bytes(response.body)) == {
+            "error": {"message": "not found", "type": "invalid_request"}
+        }
         mark_failed.assert_not_awaited()
         mark_recovered.assert_not_awaited()
 
@@ -181,7 +197,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
             Provider,
         )
         from app.routers.proxy import _handle_proxy
-        from app.services.loadbalancer import (
+        from app.services.loadbalancer.planner import (
             build_attempt_plan as real_build_attempt_plan,
         )
 
@@ -331,7 +347,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                         model_config,
                         now_at,
                     )
-                    assert [ep.id for ep in plan] == [primary_id, secondary_id]
+                    assert [ep.id for ep in plan.connections] == [
+                        primary_id,
+                        secondary_id,
+                    ]
                     return plan
 
                 async def runtime_active_check(current_db, endpoint_id):
@@ -354,7 +373,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
                 with (
                     patch(
-                        "app.routers.proxy.build_attempt_plan",
+                        "app.routers.proxy_domains.request_setup.build_attempt_plan",
                         side_effect=build_plan_with_assert,
                     ),
                     patch(
@@ -545,26 +564,32 @@ class TestDEF021_StreamingCancellationResilience:
 
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
                 patch(
                     "app.routers.proxy.log_request",
                     AsyncMock(side_effect=delayed_log_request),
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
@@ -677,26 +702,32 @@ class TestDEF021_StreamingCancellationResilience:
         try:
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
                 patch(
                     "app.routers.proxy.log_request",
                     AsyncMock(side_effect=delayed_log_request),
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
@@ -814,25 +845,31 @@ class TestDEF021_StreamingCancellationResilience:
         try:
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
                 patch(
                     "app.routers.proxy.log_request", AsyncMock(return_value=888)
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
@@ -948,25 +985,31 @@ class TestDEF021_StreamingCancellationResilience:
 
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
                 patch(
                     "app.routers.proxy.log_request", AsyncMock(return_value=890)
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
@@ -1088,20 +1131,23 @@ class TestDEF021_StreamingCancellationResilience:
 
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
                 patch(
-                    "app.routers.proxy.compute_cost_fields",
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
                     side_effect=build_cost_fields_for_multi_event_assertion,
                 ),
                 patch(
@@ -1109,7 +1155,7 @@ class TestDEF021_StreamingCancellationResilience:
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
@@ -1224,25 +1270,31 @@ class TestDEF021_StreamingCancellationResilience:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_connections",
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
-            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                return_value=_attempt_plan(endpoint),
+            ),
             patch(
                 "app.routers.proxy._endpoint_is_active_now",
                 AsyncMock(return_value=True),
             ),
             patch(
-                "app.routers.proxy.load_costing_settings",
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
                 AsyncMock(return_value=MagicMock()),
             ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
             patch(
                 "app.routers.proxy.log_request", AsyncMock(return_value=889)
             ) as log_mock,
             patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
             patch(
-                "app.routers.proxy_domains.attempt_streaming.background_task_manager.enqueue",
+                "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager.enqueue",
                 MagicMock(side_effect=RuntimeError("queue unavailable")),
             ),
         ):
@@ -1321,19 +1373,25 @@ class TestDEF021_StreamingCancellationResilience:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_connections",
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
-            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                return_value=_attempt_plan(endpoint),
+            ),
             patch(
                 "app.routers.proxy._endpoint_is_active_now",
                 AsyncMock(return_value=True),
             ),
             patch(
-                "app.routers.proxy.load_costing_settings",
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
                 AsyncMock(return_value=MagicMock()),
             ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
             patch("app.routers.proxy.log_request", AsyncMock(return_value=444)),
             patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
         ):
@@ -1420,19 +1478,25 @@ class TestDEF021_StreamingCancellationResilience:
 
         with (
             patch(
-                "app.routers.proxy.get_model_config_with_connections",
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                 AsyncMock(return_value=model_config),
             ),
-            patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                return_value=_attempt_plan(endpoint),
+            ),
             patch(
                 "app.routers.proxy._endpoint_is_active_now",
                 AsyncMock(return_value=True),
             ),
             patch(
-                "app.routers.proxy.load_costing_settings",
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
                 AsyncMock(return_value=MagicMock()),
             ),
-            patch("app.routers.proxy.compute_cost_fields", return_value={}),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
             patch("app.routers.proxy.log_request", AsyncMock(return_value=445)),
             patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
         ):
@@ -1527,26 +1591,32 @@ class TestDEF021_StreamingCancellationResilience:
         try:
             with (
                 patch(
-                    "app.routers.proxy.get_model_config_with_connections",
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
                     AsyncMock(return_value=model_config),
                 ),
-                patch("app.routers.proxy.build_attempt_plan", return_value=[endpoint]),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
                 patch(
                     "app.routers.proxy._endpoint_is_active_now",
                     AsyncMock(return_value=True),
                 ),
                 patch(
-                    "app.routers.proxy.load_costing_settings",
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
                     AsyncMock(return_value=MagicMock()),
                 ),
-                patch("app.routers.proxy.compute_cost_fields", return_value={}),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
                 patch(
                     "app.routers.proxy.log_request",
                     AsyncMock(side_effect=delayed_log_request),
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
                 patch(
-                    "app.routers.proxy_domains.attempt_streaming.background_task_manager",
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
                     manager,
                 ),
             ):
