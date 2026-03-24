@@ -13,7 +13,7 @@ from app.schemas.schemas import (
     EndpointResponse,
     EndpointUpdate,
 )
-from app.services.loadbalancer import clear_current_state
+from app.services.loadbalancer.state import clear_connection_states
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 from .helpers import (
@@ -182,8 +182,7 @@ async def update_endpoint_record(
             profile_id=profile_id,
             endpoint_id=endpoint.id,
         )
-        for connection_id in dependent_connection_ids:
-            await clear_current_state(profile_id, connection_id)
+        await clear_connection_states(profile_id, dependent_connection_ids)
 
     endpoint.updated_at = utc_now()
     await db.flush()

@@ -19,7 +19,7 @@ from app.models.models import (
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
-from app.services.loadbalancer import clear_current_state_for_profile
+from app.services.loadbalancer.state import clear_profile_state
 from app.services.proxy_service import normalize_base_url
 
 
@@ -192,7 +192,7 @@ def _resolve_pricing_template_id(
 async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
 ) -> ConfigImportResponse:
-    await clear_current_state_for_profile(profile_id)
+    await clear_profile_state(profile_id)
     await lock_profile_row(db, profile_id=profile_id)
     await _lock_import_target_tables(db)
     await db.execute(

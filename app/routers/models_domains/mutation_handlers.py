@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import utc_now
 from app.models.models import ModelConfig
-from app.services.loadbalancer import clear_current_state_for_model
+from app.services.loadbalancer.state import clear_model_state
 from app.schemas.schemas import (
     ModelConfigCreate,
     ModelConfigUpdate,
@@ -160,7 +160,7 @@ async def update_model_config_record(
         )
 
     if clear_model_current_state and config.model_type == "native":
-        await clear_current_state_for_model(profile_id, config.id)
+        await clear_model_state(profile_id, config.id)
 
     config.updated_at = utc_now()
     await db.flush()
@@ -200,7 +200,7 @@ async def delete_model_config_record(
                 detail=f"Cannot delete: proxy models [{ids}] point to this model",
             )
 
-    await clear_current_state_for_model(profile_id, config.id)
+    await clear_model_state(profile_id, config.id)
     await db.delete(config)
     await db.flush()
     return {"deleted": True}

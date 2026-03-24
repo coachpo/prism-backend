@@ -50,13 +50,14 @@ from app.schemas.schemas import (
     ProfileUpdate,
     ProfileActivateRequest,
 )
-from app.services.loadbalancer import get_model_config_with_connections
+from app.services.loadbalancer.planner import get_model_config_with_connections
 from app.services.stats_service import (
     log_request,
     get_request_logs,
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+
 
 class TestConfigExportImportIsolation:
     """FR-007: Config Export/Import Isolation"""
@@ -167,7 +168,8 @@ class TestConfigExportImportIsolation:
         async with AsyncSessionLocal() as db:
             provider = (
                 await db.execute(
-                    select(Provider).where(Provider.provider_type == "openai")
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
                     .order_by(Provider.id.asc())
                     .limit(1)
                 )
@@ -378,7 +380,9 @@ class TestConfigExportImportIsolation:
             target_models = (
                 (
                     await db.execute(
-                        select(ModelConfig).where(ModelConfig.profile_id == target_profile_id)
+                        select(ModelConfig).where(
+                            ModelConfig.profile_id == target_profile_id
+                        )
                     )
                 )
                 .scalars()
@@ -387,7 +391,9 @@ class TestConfigExportImportIsolation:
             target_connections = (
                 (
                     await db.execute(
-                        select(Connection).where(Connection.profile_id == target_profile_id)
+                        select(Connection).where(
+                            Connection.profile_id == target_profile_id
+                        )
                     )
                 )
                 .scalars()
@@ -418,7 +424,9 @@ class TestConfigExportImportIsolation:
             )
             target_settings = (
                 await db.execute(
-                    select(UserSetting).where(UserSetting.profile_id == target_profile_id)
+                    select(UserSetting).where(
+                        UserSetting.profile_id == target_profile_id
+                    )
                 )
             ).scalar_one()
 
@@ -434,7 +442,9 @@ class TestConfigExportImportIsolation:
             other_models = (
                 (
                     await db.execute(
-                        select(ModelConfig).where(ModelConfig.profile_id == other_profile_id)
+                        select(ModelConfig).where(
+                            ModelConfig.profile_id == other_profile_id
+                        )
                     )
                 )
                 .scalars()
@@ -443,7 +453,9 @@ class TestConfigExportImportIsolation:
             other_connections = (
                 (
                     await db.execute(
-                        select(Connection).where(Connection.profile_id == other_profile_id)
+                        select(Connection).where(
+                            Connection.profile_id == other_profile_id
+                        )
                     )
                 )
                 .scalars()
@@ -474,7 +486,9 @@ class TestConfigExportImportIsolation:
             )
             other_settings = (
                 await db.execute(
-                    select(UserSetting).where(UserSetting.profile_id == other_profile_id)
+                    select(UserSetting).where(
+                        UserSetting.profile_id == other_profile_id
+                    )
                 )
             ).scalar_one()
 
@@ -517,4 +531,3 @@ class TestConfigExportImportIsolation:
 
         assert other_settings.report_currency_code == "EUR"
         assert other_settings.report_currency_symbol == "EUR"
-
