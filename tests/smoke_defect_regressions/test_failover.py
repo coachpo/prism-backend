@@ -14,11 +14,8 @@ from app.services.proxy_service import (
 from app.services.stats_service import log_request
 
 
-class TestFailoverRecoveryFieldValidation:
-    """Validate failover recovery field validation and config version 2."""
-
-    def test_recovery_cooldown_validates_lower_bound(self):
-        """Recovery cooldown must be >= 1."""
+class TestLoadbalanceStrategyFieldValidation:
+    def test_native_model_requires_strategy_id(self):
         from app.schemas.schemas import ModelConfigBase
         from pydantic import ValidationError
 
@@ -28,169 +25,95 @@ class TestFailoverRecoveryFieldValidation:
                 model_id="gpt-4",
                 display_name="GPT-4",
                 model_type="native",
-                lb_strategy="failover",
-                failover_recovery_cooldown_seconds=0,
             )
-        assert "must be between 1 and 3600" in str(exc_info.value)
+        assert "loadbalance_strategy_id is required for native models" in str(
+            exc_info.value
+        )
 
-    def test_recovery_cooldown_validates_upper_bound(self):
-        """Recovery cooldown must be <= 3600."""
+    def test_proxy_model_rejects_strategy_id(self):
         from app.schemas.schemas import ModelConfigBase
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
             ModelConfigBase(
                 provider_id=1,
-                model_id="gpt-4",
-                display_name="GPT-4",
-                model_type="native",
-                lb_strategy="failover",
-                failover_recovery_cooldown_seconds=3601,
+                model_id="gpt-4-proxy",
+                model_type="proxy",
+                redirect_to="gpt-4",
+                loadbalance_strategy_id=7,
             )
-        assert "must be between 1 and 3600" in str(exc_info.value)
-
-    def test_recovery_cooldown_accepts_valid_values(self):
-        """Recovery cooldown accepts values in range [1, 3600]."""
-        from app.schemas.schemas import ModelConfigBase
-
-        # Lower bound
-        config = ModelConfigBase(
-            provider_id=1,
-            model_id="gpt-4",
-            display_name="GPT-4",
-            model_type="native",
-            lb_strategy="failover",
-            failover_recovery_cooldown_seconds=1,
+        assert "loadbalance_strategy_id must be null for proxy models" in str(
+            exc_info.value
         )
-        assert config.failover_recovery_cooldown_seconds == 1
 
-        # Upper bound
-        config = ModelConfigBase(
-            provider_id=1,
-            model_id="gpt-4",
-            display_name="GPT-4",
-            model_type="native",
-            lb_strategy="failover",
-            failover_recovery_cooldown_seconds=3600,
-        )
-        assert config.failover_recovery_cooldown_seconds == 3600
-
-        # Mid-range
-        config = ModelConfigBase(
-            provider_id=1,
-            model_id="gpt-4",
-            display_name="GPT-4",
-            model_type="native",
-            lb_strategy="failover",
-            failover_recovery_cooldown_seconds=120,
-        )
-        assert config.failover_recovery_cooldown_seconds == 120
-
-    def test_lb_strategy_rejects_round_robin(self):
-        """lb_strategy field rejects round_robin value."""
-        from app.schemas.schemas import ModelConfigBase
+    def test_single_strategy_rejects_recovery_enabled(self):
+        from app.schemas.schemas import LoadbalanceStrategyCreate
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            ModelConfigBase.model_validate(
-                {
-                    "provider_id": 1,
-                    "model_id": "gpt-4",
-                    "display_name": "GPT-4",
-                    "model_type": "native",
-                    "lb_strategy": "round_robin",
-                }
+            LoadbalanceStrategyCreate(
+                name="single-with-recovery",
+                strategy_type="single",
+                failover_recovery_enabled=True,
             )
-        assert "Input should be 'single' or 'failover'" in str(exc_info.value)
+        assert "single strategies must not enable failover recovery" in str(
+            exc_info.value
+        )
 
-    def test_config_export_includes_recovery_fields(self):
-        """ConfigModelExport includes recovery fields."""
-        from app.schemas.schemas import ConfigConnectionExport, ConfigModelExport
+    def test_config_export_includes_strategy_reference(self):
+        from app.schemas.schemas import (
+            ConfigConnectionExport,
+            ConfigLoadbalanceStrategyExport,
+            ConfigModelExport,
+        )
 
+        strategy = ConfigLoadbalanceStrategyExport(
+            name="failover-primary",
+            strategy_type="failover",
+            failover_recovery_enabled=False,
+        )
         model = ConfigModelExport(
             provider_type="openai",
             model_id="gpt-4",
             display_name="GPT-4",
             model_type="native",
-            lb_strategy="failover",
+            loadbalance_strategy_name="failover-primary",
             is_enabled=True,
-            failover_recovery_enabled=False,
-            failover_recovery_cooldown_seconds=300,
             connections=[
                 ConfigConnectionExport(
                     endpoint_name="openai-main",
                 )
             ],
         )
+        assert strategy.failover_recovery_enabled is False
         exported = model.model_dump(mode="json")
-        assert exported["failover_recovery_enabled"] is False
-        assert exported["failover_recovery_cooldown_seconds"] == 300
+        assert exported["loadbalance_strategy_name"] == "failover-primary"
 
     def test_config_import_accepts_minimal_payload(self):
-        """ConfigImportRequest accepts minimal strict payload."""
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [],
                 "pricing_templates": [],
+                "loadbalance_strategies": [],
                 "models": [],
             }
         )
         assert validation.endpoints == []
+        assert validation.loadbalance_strategies == []
         assert validation.models == []
 
-    def test_config_import_rejects_round_robin_in_models(self):
-        """ConfigImportRequest rejects models with lb_strategy=round_robin."""
-        from app.schemas.schemas import ConfigImportRequest
-        from pydantic import ValidationError
-
-        with pytest.raises(ValidationError) as exc_info:
-            ConfigImportRequest.model_validate(
-                {
-                    "version": 2,
-                    "endpoints": [
-                        {
-                            "endpoint_id": 1,
-                            "name": "openai-main",
-                            "base_url": "https://api.openai.com/v1",
-                            "api_key": "sk-test",
-                            "position": 0,
-                        }
-                    ],
-                    "pricing_templates": [],
-                    "models": [
-                        {
-                            "provider_type": "openai",
-                            "model_id": "gpt-4",
-                            "display_name": "GPT-4",
-                            "model_type": "native",
-                            "lb_strategy": "round_robin",
-                            "is_enabled": True,
-                            "connections": [
-                                {
-                                    "connection_id": 1,
-                                    "endpoint_id": 1,
-                                }
-                            ],
-                        }
-                    ],
-                }
-            )
-        assert "Input should be 'single' or 'failover'" in str(exc_info.value)
-
-    def test_config_import_accepts_duplicate_connection_id(self):
-        """Config import validation ignores duplicate connection IDs."""
+    def test_config_import_rejects_native_model_missing_strategy_name(self):
         from app.routers.config import _validate_import
         from app.schemas.schemas import ConfigImportRequest
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 1,
                         "name": "openai-main",
                         "base_url": "https://api.openai.com/v1",
                         "api_key": "sk-test",
@@ -198,15 +121,62 @@ class TestFailoverRecoveryFieldValidation:
                     }
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4",
+                        "display_name": "GPT-4",
+                        "model_type": "native",
+                        "is_enabled": True,
+                        "connections": [
+                            {
+                                "endpoint_name": "openai-main",
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_import(data)
+        assert exc_info.value.detail == (
+            "Native model 'gpt-4' must include loadbalance_strategy_name"
+        )
+
+    def test_config_import_accepts_duplicate_connection_endpoints(self):
+        from app.routers.config import _validate_import
+        from app.schemas.schemas import ConfigImportRequest
+
+        data = ConfigImportRequest.model_validate(
+            {
+                "version": 3,
+                "endpoints": [
+                    {
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                        "position": 0,
+                    }
+                ],
+                "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 1,
-                                "endpoint_id": 1,
+                                "endpoint_name": "openai-main",
                             }
                         ],
                     },
@@ -214,10 +184,10 @@ class TestFailoverRecoveryFieldValidation:
                         "provider_type": "openai",
                         "model_id": "gpt-4.1",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
                         "connections": [
                             {
-                                "connection_id": 1,
-                                "endpoint_id": 1,
+                                "endpoint_name": "openai-main",
                             }
                         ],
                     },
@@ -228,12 +198,12 @@ class TestFailoverRecoveryFieldValidation:
         _validate_import(data)
 
     def test_config_roundtrip(self):
-        """Config export/import roundtrip with strict schema and recovery fields."""
         from app.schemas.schemas import (
             ConfigConnectionExport,
             ConfigEndpointExport,
             ConfigExportResponse,
             ConfigImportRequest,
+            ConfigLoadbalanceStrategyExport,
             ConfigModelExport,
         )
         from datetime import datetime, timezone
@@ -249,16 +219,21 @@ class TestFailoverRecoveryFieldValidation:
                 )
             ],
             pricing_templates=[],
+            loadbalance_strategies=[
+                ConfigLoadbalanceStrategyExport(
+                    name="failover-primary",
+                    strategy_type="failover",
+                    failover_recovery_enabled=False,
+                )
+            ],
             models=[
                 ConfigModelExport(
                     provider_type="openai",
                     model_id="gpt-4o",
                     display_name="GPT-4o",
                     model_type="native",
-                    lb_strategy="failover",
+                    loadbalance_strategy_name="failover-primary",
                     is_enabled=True,
-                    failover_recovery_enabled=False,
-                    failover_recovery_cooldown_seconds=180,
                     connections=[
                         ConfigConnectionExport(
                             endpoint_name="openai-main",
@@ -272,11 +247,13 @@ class TestFailoverRecoveryFieldValidation:
         exported = config.model_dump(mode="json")
         reimported = ConfigImportRequest(**exported)
 
+        assert len(reimported.loadbalance_strategies) == 1
         assert len(reimported.models) == 1
-        m = reimported.models[0]
-        assert m.lb_strategy == "failover"
-        assert m.failover_recovery_enabled is False
-        assert m.failover_recovery_cooldown_seconds == 180
+        strategy = reimported.loadbalance_strategies[0]
+        assert strategy.name == "failover-primary"
+        assert strategy.failover_recovery_enabled is False
+        model = reimported.models[0]
+        assert model.loadbalance_strategy_name == "failover-primary"
 
 
 class TestDEF010_EndpointToggleClearsRecoveryState:

@@ -29,7 +29,7 @@ from tests.smoke_defect_regressions.test_costing import (
     TestDEF074_PricingTemplateUpdateCAS,
 )
 from tests.smoke_defect_regressions.test_failover import (
-    TestFailoverRecoveryFieldValidation,
+    TestLoadbalanceStrategyFieldValidation,
     TestDEF010_EndpointToggleClearsRecoveryState,
 )
 from tests.smoke_defect_regressions.test_headers import TestHeaderBlocklist
@@ -106,6 +106,6 @@ __all__ = [
     "TestDEF077_ThroughputRPMContract",
     "TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence",
     "TestEndpointOwnerRoute",
-    "TestFailoverRecoveryFieldValidation",
+    "TestLoadbalanceStrategyFieldValidation",
     "TestHeaderBlocklist",
 ]

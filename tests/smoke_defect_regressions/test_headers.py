@@ -234,6 +234,7 @@ class TestHeaderBlocklist:
             endpoints=[],
             models=[],
             pricing_templates=[],
+            loadbalance_strategies=[],
             header_blocklist_rules=[
                 HeaderBlocklistRuleExport(
                     name="Block Custom",
@@ -304,9 +305,7 @@ class TestHeaderBlocklist:
             }
         )
 
-        filtered = filter_response_headers(
-            raw_headers, was_requested_compressed=False
-        )
+        filtered = filter_response_headers(raw_headers, was_requested_compressed=False)
 
         assert "content-type" in filtered
         assert "x-custom" in filtered
@@ -329,9 +328,7 @@ class TestHeaderBlocklist:
             }
         )
 
-        filtered = filter_response_headers(
-            raw_headers, was_requested_compressed=False
-        )
+        filtered = filter_response_headers(raw_headers, was_requested_compressed=False)
 
         assert "content-type" in filtered
         assert "x-custom" in filtered

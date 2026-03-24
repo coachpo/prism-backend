@@ -5,6 +5,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -73,9 +75,10 @@ async def test_connection_priority_crud_flow():
             provider_id=provider.id,
             model_id=f"def067-model-{suffix}",
             model_type="native",
-            lb_strategy="failover",
-            failover_recovery_enabled=True,
-            failover_recovery_cooldown_seconds=60,
+            loadbalance_strategy=make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="failover",
+            ),
             is_enabled=True,
         )
         db.add(model)
@@ -256,9 +259,10 @@ def test_connection_priority_validation_and_loadbalancer_tie_break():
         provider_id=1,
         model_id="def067-model",
         model_type="native",
-        lb_strategy="failover",
-        failover_recovery_enabled=True,
-        failover_recovery_cooldown_seconds=60,
+        loadbalance_strategy=make_loadbalance_strategy(
+            profile_id=1,
+            strategy_type="failover",
+        ),
         is_enabled=True,
         connections=[later_priority, higher_id, lower_id],
     )
@@ -293,51 +297,53 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 2000,
                         "name": f"DEF068 E0 {suffix}",
                         "base_url": f"https://def068-e0.{suffix}.example.com",
                         "api_key": "sk-def068-e0",
                     },
                     {
-                        "endpoint_id": 2001,
                         "name": f"DEF068 E1 {suffix}",
                         "base_url": f"https://def068-e1.{suffix}.example.com",
                         "api_key": "sk-def068-e1",
                     },
                     {
-                        "endpoint_id": 2002,
                         "name": f"DEF068 E2 {suffix}",
                         "base_url": f"https://def068-e2.{suffix}.example.com",
                         "api_key": "sk-def068-e2",
                     },
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "failover-primary",
+                        "strategy_type": "failover",
+                        "failover_recovery_enabled": True,
+                    }
+                ],
                 "models": [
                     {
                         "provider_type": "openai",
                         "model_id": f"def068-model-{suffix}",
                         "model_type": "native",
+                        "loadbalance_strategy_name": "failover-primary",
                         "connections": [
                             {
-                                "connection_id": 9002,
-                                "endpoint_id": 2001,
+                                "endpoint_name": f"DEF068 E1 {suffix}",
                                 "priority": 5,
                                 "name": "Second in payload",
                                 "is_active": True,
                             },
                             {
-                                "connection_id": 9001,
-                                "endpoint_id": 2000,
+                                "endpoint_name": f"DEF068 E0 {suffix}",
                                 "priority": 5,
                                 "name": "First in payload",
                                 "is_active": True,
                             },
                             {
-                                "connection_id": 9003,
-                                "endpoint_id": 2002,
+                                "endpoint_name": f"DEF068 E2 {suffix}",
                                 "priority": 9,
                                 "name": "Third in payload",
                                 "is_active": True,
@@ -405,9 +411,10 @@ async def test_connection_priority_migration_normalizes_existing_rows(
             provider_id=provider.id,
             model_id=f"def069-model-{suffix}",
             model_type="native",
-            lb_strategy="failover",
-            failover_recovery_enabled=True,
-            failover_recovery_cooldown_seconds=60,
+            loadbalance_strategy=make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="failover",
+            ),
             is_enabled=True,
         )
         db.add(model)

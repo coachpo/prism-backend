@@ -223,17 +223,15 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         ordered_import = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 2001,
                         "name": f"DEF063 Import Later {suffix}",
                         "base_url": f"https://def063-import-later.{suffix}.example.com",
                         "api_key": "sk-import-later",
                         "position": 1,
                     },
                     {
-                        "endpoint_id": 2000,
                         "name": f"DEF063 Import First {suffix}",
                         "base_url": f"https://def063-import-first.{suffix}.example.com",
                         "api_key": "sk-import-first",
@@ -241,6 +239,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
                     },
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [],
                 "models": [],
             }
         )
@@ -259,22 +258,21 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         legacy_import = ConfigImportRequest.model_validate(
             {
-                "version": 2,
+                "version": 3,
                 "endpoints": [
                     {
-                        "endpoint_id": 3000,
                         "name": f"DEF063 Legacy One {suffix}",
                         "base_url": f"https://def063-legacy-one.{suffix}.example.com",
                         "api_key": "sk-legacy-one",
                     },
                     {
-                        "endpoint_id": 3001,
                         "name": f"DEF063 Legacy Two {suffix}",
                         "base_url": f"https://def063-legacy-two.{suffix}.example.com",
                         "api_key": "sk-legacy-two",
                     },
                 ],
                 "pricing_templates": [],
+                "loadbalance_strategies": [],
                 "models": [],
             }
         )
