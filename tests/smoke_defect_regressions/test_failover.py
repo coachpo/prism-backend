@@ -308,7 +308,7 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         mock_db.flush = AsyncMock()
 
         with patch(
-            "app.routers.connections.clear_current_state", AsyncMock()
+            "app.routers.connections.clear_connection_state", AsyncMock()
         ) as clear_state:
             await update_connection(
                 connection_id=connection.id,
@@ -335,7 +335,7 @@ class TestDEF010_EndpointToggleClearsRecoveryState:
         mock_db.delete = AsyncMock()
 
         with patch(
-            "app.routers.connections.clear_current_state", AsyncMock()
+            "app.routers.connections.clear_connection_state", AsyncMock()
         ) as clear_state:
             await delete_connection(
                 connection_id=connection.id, db=mock_db, profile_id=1
@@ -349,9 +349,12 @@ class TestLoadbalanceCurrentStateContracts:
     @pytest.mark.asyncio
     async def test_current_state_list_returns_derived_states(self):
         from datetime import datetime, timezone
-        from types import SimpleNamespace
 
         from app.routers.loadbalance import list_loadbalance_current_state
+        from app.schemas.schemas import (
+            LoadbalanceCurrentStateItem,
+            LoadbalanceCurrentStateListResponse,
+        )
 
         blocked_until = datetime(2099, 1, 1, tzinfo=timezone.utc)
         probe_eligible = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -359,70 +362,110 @@ class TestLoadbalanceCurrentStateContracts:
         updated_at = datetime(2025, 1, 2, tzinfo=timezone.utc)
 
         mock_db = AsyncMock()
-        mock_db.scalar = AsyncMock(return_value=11)
-
-        rows = [
-            SimpleNamespace(
-                connection_id=1,
-                consecutive_failures=1,
-                last_failure_kind="timeout",
-                last_cooldown_seconds=0,
-                blocked_until_at=None,
-                probe_eligible_logged=False,
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-            SimpleNamespace(
-                connection_id=2,
-                consecutive_failures=3,
-                last_failure_kind="transient_http",
-                last_cooldown_seconds=30,
-                blocked_until_at=blocked_until,
-                probe_eligible_logged=False,
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-            SimpleNamespace(
-                connection_id=3,
-                consecutive_failures=4,
-                last_failure_kind="timeout",
-                last_cooldown_seconds=45,
-                blocked_until_at=probe_eligible,
-                probe_eligible_logged=True,
-                created_at=created_at,
-                updated_at=updated_at,
-            ),
-        ]
+        current_state_response = LoadbalanceCurrentStateListResponse(
+            items=[
+                LoadbalanceCurrentStateItem(
+                    connection_id=1,
+                    consecutive_failures=1,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=0,
+                    blocked_until_at=None,
+                    probe_eligible_logged=False,
+                    state="counting",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                ),
+                LoadbalanceCurrentStateItem(
+                    connection_id=2,
+                    consecutive_failures=3,
+                    last_failure_kind="transient_http",
+                    last_cooldown_seconds=30,
+                    blocked_until_at=blocked_until,
+                    probe_eligible_logged=False,
+                    state="blocked",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                ),
+                LoadbalanceCurrentStateItem(
+                    connection_id=3,
+                    consecutive_failures=4,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=45,
+                    blocked_until_at=probe_eligible,
+                    probe_eligible_logged=True,
+                    state="probe_eligible",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                ),
+            ]
+        )
 
         with patch(
-            "app.routers.loadbalance.list_current_states_for_model",
-            AsyncMock(return_value=rows),
-        ):
+            "app.routers.loadbalance.list_model_current_state",
+            AsyncMock(return_value=current_state_response),
+        ) as list_model_current_state:
             response = await list_loadbalance_current_state(
                 db=mock_db,
                 profile_id=5,
                 model_config_id=11,
             )
 
+        list_model_current_state.assert_awaited_once_with(
+            db=mock_db,
+            profile_id=5,
+            model_config_id=11,
+        )
         assert [item.state for item in response.items] == [
             "counting",
             "blocked",
             "probe_eligible",
         ]
+        assert [item.connection_id for item in response.items] == [1, 2, 3]
+        assert response.items[0].probe_eligible_logged is False
+        assert response.items[1].last_failure_kind == "transient_http"
+        assert response.items[2].probe_eligible_logged is True
+
+    @pytest.mark.asyncio
+    async def test_current_state_list_returns_404_for_model_outside_profile(self):
+        from fastapi import HTTPException
+
+        from app.routers.loadbalance import list_loadbalance_current_state
+
+        mock_db = AsyncMock()
+        mock_db.scalar = AsyncMock(return_value=None)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await list_loadbalance_current_state(
+                db=mock_db,
+                profile_id=5,
+                model_config_id=11,
+            )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Model not found"
 
     @pytest.mark.asyncio
     async def test_current_state_reset_is_idempotent(self):
         from app.routers.loadbalance import reset_loadbalance_current_state
+        from app.schemas.schemas import LoadbalanceCurrentStateResetResponse
+
+        reset_response = LoadbalanceCurrentStateResetResponse(
+            connection_id=44,
+            cleared=False,
+        )
 
         with patch(
-            "app.routers.loadbalance.clear_current_state",
-            AsyncMock(return_value=False),
-        ) as clear_current_state:
+            "app.routers.loadbalance.reset_connection_current_state",
+            AsyncMock(return_value=reset_response),
+        ) as reset_connection_current_state:
             response = await reset_loadbalance_current_state(
                 connection_id=44,
                 profile_id=8,
             )
 
-        clear_current_state.assert_awaited_once_with(8, 44)
+        reset_connection_current_state.assert_awaited_once_with(
+            profile_id=8,
+            connection_id=44,
+        )
         assert response.connection_id == 44
         assert response.cleared is False
