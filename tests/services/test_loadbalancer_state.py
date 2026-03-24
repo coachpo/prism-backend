@@ -11,6 +11,7 @@ from app.models.models import (
     Profile,
     Provider,
 )
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
 class TestLoadbalancerState:
@@ -55,7 +56,10 @@ class TestLoadbalancerState:
                 profile=profile_one,
                 model_id=f"model-one-{suffix}",
                 model_type="native",
-                lb_strategy="failover",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile=profile_one,
+                    strategy_type="failover",
+                ),
                 is_enabled=True,
             )
             model_two = ModelConfig(
@@ -63,7 +67,10 @@ class TestLoadbalancerState:
                 profile=profile_two,
                 model_id=f"model-two-{suffix}",
                 model_type="native",
-                lb_strategy="failover",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile=profile_two,
+                    strategy_type="failover",
+                ),
                 is_enabled=True,
             )
             endpoint_one = Endpoint(

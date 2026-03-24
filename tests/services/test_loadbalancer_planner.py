@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+
 
 class TestLoadbalancerPlanner:
     def test_get_active_connections_sorts_active_connections_by_priority_then_id(self):
@@ -60,7 +62,10 @@ class TestLoadbalancerPlanner:
             provider_id=1,
             model_id="gpt-test",
             model_type="native",
-            lb_strategy="failover",
+            loadbalance_strategy=make_loadbalance_strategy(
+                profile_id=1,
+                strategy_type="failover",
+            ),
             is_enabled=True,
             connections=[later_priority, inactive, high_id, low_id],
         )
@@ -124,8 +129,10 @@ class TestLoadbalancerPlanner:
                 object,
                 SimpleNamespace(
                     connections=[connection],
-                    lb_strategy="failover",
-                    failover_recovery_enabled=True,
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="failover",
+                        failover_recovery_enabled=True,
+                    ),
                     model_id="gpt-4o-mini",
                     provider_id=1,
                 ),
@@ -174,8 +181,10 @@ class TestLoadbalancerPlanner:
                 object,
                 SimpleNamespace(
                     connections=[connection],
-                    lb_strategy="failover",
-                    failover_recovery_enabled=True,
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="failover",
+                        failover_recovery_enabled=True,
+                    ),
                     model_id="gpt-4o-mini",
                     provider_id=1,
                 ),
