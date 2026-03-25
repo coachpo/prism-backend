@@ -58,7 +58,7 @@ async def test_get_stats_summary_reads_p95_from_sql_aggregate_query() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_stats_summary_preserves_existing_p95_rank_semantics() -> None:
+async def test_get_stats_summary_uses_postgresql_percentile_cont_semantics() -> None:
     from app.services.stats.summary import get_stats_summary
 
     created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -99,7 +99,7 @@ async def test_get_stats_summary_preserves_existing_p95_rank_semantics() -> None
         summary = await get_stats_summary(db, profile_id=primary_profile.id)
 
     assert summary["total_requests"] == 20
-    assert summary["p95_response_time_ms"] == 20
+    assert summary["p95_response_time_ms"] == 19
 
 
 @pytest.mark.asyncio

@@ -39,32 +39,14 @@ async def get_stats_summary(
         else_=0,
     )
 
-    p95_source = (
-        select(
-            RequestLog.response_time_ms.label("response_time_ms"),
-            func.row_number()
-            .over(order_by=RequestLog.response_time_ms.asc())
-            .label("response_time_rank"),
-            func.count().over().label("response_time_count"),
-        )
-        .where(time_filter)
-        .subquery()
-    )
-    p95_subquery = (
-        select(p95_source.c.response_time_ms)
-        .where(
-            p95_source.c.response_time_rank > p95_source.c.response_time_count * 0.95
-        )
-        .order_by(p95_source.c.response_time_rank.asc())
-        .limit(1)
-        .scalar_subquery()
-    )
-
     agg_q = select(
         func.count().label("total_requests"),
         func.sum(success_case).label("success_count"),
         func.avg(RequestLog.response_time_ms).label("avg_response_time_ms"),
-        func.coalesce(p95_subquery, 0).label("p95_response_time_ms"),
+        func.coalesce(
+            func.percentile_cont(0.95).within_group(RequestLog.response_time_ms.asc()),
+            0,
+        ).label("p95_response_time_ms"),
         func.coalesce(func.sum(RequestLog.input_tokens), 0).label("total_input_tokens"),
         func.coalesce(func.sum(RequestLog.output_tokens), 0).label(
             "total_output_tokens"
