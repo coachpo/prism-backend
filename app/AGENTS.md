@@ -1,12 +1,12 @@
 # BACKEND APP KNOWLEDGE BASE
 
 ## OVERVIEW
-`app/` is the live Prism backend runtime. It owns FastAPI app assembly, the lifespan-managed startup and teardown path, middleware auth splitting, profile-scope dependencies, 14 mounted routers, schema export boundaries, and the shared `httpx.AsyncClient` plus shared `BackgroundTaskManager`.
+`app/` is the live Prism backend runtime. It owns FastAPI app assembly, lifespan startup and teardown, middleware auth splitting, profile-scope dependencies, router mounts, schema export boundaries, and the shared `httpx.AsyncClient` plus shared `BackgroundTaskManager`.
 
 ## STRUCTURE
 ```
 app/
-├── main.py                                   # App assembly, 14 router mounts, lifespan wiring
+├── main.py                                   # App assembly, router mounts, lifespan wiring
 ├── bootstrap/AGENTS.md                       # Startup sequence, seeds, middleware auth split
 ├── dependencies.py                           # Effective-profile and active-profile boundary
 ├── core/AGENTS.md                            # Settings, database, auth helpers, crypto, migrations
@@ -27,27 +27,27 @@ app/
 - `bootstrap/AGENTS.md`: startup sequence, seeds, middleware auth split, and shared client creation.
 - `core/AGENTS.md`: settings, engine and session factories, crypto, auth helpers, and migrations.
 - `models/AGENTS.md`: ORM model ownership and domain splits.
-- `routers/AGENTS.md`: 14 router shells, current domain folders, and scope conventions.
-- `schemas/AGENTS.md`: contract ownership and the `schemas.py` re-export boundary.
-- `services/AGENTS.md`: public service facades, shared worker infrastructure, cleanup helpers, and newer reporting surfaces.
-- `services/auth/AGENTS.md`, `services/loadbalancer/AGENTS.md`, `services/proxy_support/AGENTS.md`, `services/realtime/AGENTS.md`, `services/stats/AGENTS.md`, `services/webauthn/AGENTS.md`: use these for deeper package detail.
+- `routers/AGENTS.md`: router shells, domain folders, and scope conventions.
+- `schemas/AGENTS.md`: contract ownership and the `schemas.py` boundary.
+- `services/AGENTS.md`: service facades, shared worker infrastructure, cleanup helpers, and reporting surfaces.
+- `services/auth/AGENTS.md`, `services/loadbalancer/AGENTS.md`, `services/proxy_support/AGENTS.md`, `services/realtime/AGENTS.md`, `services/stats/AGENTS.md`, `services/webauthn/AGENTS.md`: deeper package detail.
 
 ## APP FACTS
 
-- `main.py` mounts 14 routers: auth, profiles, providers, models, endpoints, connections, stats, audit, loadbalance, config, settings, pricing templates, realtime, and proxy.
+- `main.py` mounts the backend routers, builds shared app state, and exposes `/health`.
 - FastAPI lifespan runs `bootstrap.run_startup_sequence()`, builds the shared `httpx` client, configures `background_task_manager` from `background_task_worker_count`, starts it, and tears it down during shutdown.
 - Lifespan shutdown also stops dashboard-update lifecycle helpers, closes the shared HTTP client, and disposes the SQLAlchemy engine.
 - Middleware auth stays split by plane: `/api/*` uses operator session rules, while `/v1/*` and `/v1beta/*` use proxy-key rules.
 - Routers stay intentionally thin. Dense logic belongs in the existing `*_domains/` folders and service modules.
-- `routers/proxy_domains/` is now a dense runtime package with eight Python files. Parent docs should acknowledge it and point readers to `routers/AGENTS.md` instead of duplicating its leaf details here.
-- Service-level reporting now includes helpers such as `services/loadbalance_event_summary.py` and `services/stats/model_metrics.py`, with deeper ownership documented in `services/AGENTS.md` and `services/stats/AGENTS.md`.
+- `routers/proxy_domains/` is a dense runtime package, so parent docs should point there instead of repeating leaf details.
+- Service-level reporting includes helpers such as `services/loadbalance_event_summary.py` and `services/stats/model_metrics.py`, with deeper ownership documented in `services/AGENTS.md` and `services/stats/AGENTS.md`.
 
 ## WHERE TO LOOK
 
-- App assembly, router mount list, lifespan startup, and shared infra ownership: `main.py`
-- Startup sequence and seed ordering: `bootstrap/startup.py`, `bootstrap/AGENTS.md`
+- App assembly, router mounts, lifespan startup, and shared infra ownership: `main.py`
+- Startup sequence and seed ordering: `bootstrap/startup.py`
 - Management profile overrides versus runtime active-profile routing: `dependencies.py`
-- Router surface and dense domain packages, especially `proxy_domains/`: `routers/AGENTS.md`, `routers/`
+- Router surface and dense domain packages, especially `proxy_domains/` and `connections_domains/`: `routers/AGENTS.md`, `routers/`
 - Contract exports and schema ownership: `schemas/AGENTS.md`, `schemas/schemas.py`
 - Shared worker lifecycle and service public boundaries: `services/AGENTS.md`, `services/background_tasks.py`
 - Reporting helpers for load-balance events and model metrics: `services/loadbalance_event_summary.py`, `services/stats/model_metrics.py`

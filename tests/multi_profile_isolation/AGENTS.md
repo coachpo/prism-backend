@@ -32,6 +32,11 @@ multi_profile_isolation/
 - The suite explicitly includes profile-scoped config export or import isolation, not just general config validation.
 - Parent coverage for `test_config_import_export_cases/` lives here. Don't add another AGENTS doc under that folder for the current structure.
 
+## BOUNDARY NOTES
+
+- Keep PostgreSQL grounding explicit here, because the isolation cases depend on the same testcontainer-backed database behavior as the rest of `tests/`.
+- Keep this tree for cross-profile containment, not service-level concerns or broad backend behavior. Focused auth cache, background task, crypto, loadbalancer, stats, streaming, throughput, and WebAuthn tests belong in `../services/AGENTS.md`.
+
 ## CONVENTIONS
 
 - Keep tests framed around cross-profile containment, not single-profile CRUD behavior.

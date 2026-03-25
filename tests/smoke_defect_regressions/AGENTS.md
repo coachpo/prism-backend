@@ -38,6 +38,11 @@ smoke_defect_regressions/
 - Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
 - The grouped folders already provide the parent structure for their leaf files. Don't add extra AGENTS docs under `test_proxy_cases/`, `test_config_cases/`, `test_costing_cases/`, or `test_startup_cases/` for the current layout.
 
+## BOUNDARY NOTES
+
+- Keep PostgreSQL grounding explicit here, because these DEF regressions exercise the same testcontainer-backed database semantics as the rest of `tests/`.
+- Keep smoke coverage focused on named defects and the re-export surface. Move auth cache, background task, crypto, loadbalancer, stats, streaming, throughput, and WebAuthn service cases to `../services/AGENTS.md` instead of growing this tree.
+
 ## CONVENTIONS
 
 - Keep new DEF classes uniquely numbered with `TestDEF###_*` naming.

@@ -1,7 +1,7 @@
 # BACKEND TEST SUITE KNOWLEDGE BASE
 
 ## OVERVIEW
-`tests/` is the backend regression suite. It runs against PostgreSQL through the testcontainer setup in `conftest.py`, centers its top-level shape on the smoke and multi-profile aggregators, and keeps focused coverage for realtime and service boundaries outside those trees.
+`tests/` is the backend regression suite. It runs against PostgreSQL through the testcontainer setup in `conftest.py` and centers its top-level shape on the smoke and multi-profile aggregators, with focused service coverage kept in `services/`.
 
 ## STRUCTURE
 ```
@@ -10,7 +10,8 @@ tests/
 ├── test_smoke_defect_regressions.py      # Top-level DEF aggregator, currently through DEF079
 ├── test_multi_profile_isolation.py       # Top-level selected-vs-active profile isolation aggregator for the core subtree
 ├── test_realtime_broadcast.py            # Websocket channel fanout and dashboard update coverage
-├── services/                             # Focused service coverage outside the main hierarchies
+├── services/
+│   └── AGENTS.md                         # Focused service coverage outside smoke and isolation trees
 ├── smoke_defect_regressions/
 │   └── AGENTS.md                         # DEF-domain map and aggregator expectations
 └── multi_profile_isolation/
@@ -20,7 +21,8 @@ tests/
 ## CHILD DOCS
 
 - `smoke_defect_regressions/AGENTS.md`: DEF hierarchy map, leaf ownership, and aggregator expectations.
-- `multi_profile_isolation/AGENTS.md`: profile-isolation hierarchy map and cross-profile containment expectations.
+- `multi_profile_isolation/AGENTS.md`: profile-isolation hierarchy map, cross-profile containment expectations, and the non-re-exported `test_connection_priority_isolation.py` leaf.
+- `services/AGENTS.md`: focused service-test handoff for auth cache, background tasks, crypto, loadbalancer, stats, streaming, throughput, and WebAuthn coverage.
 
 ## WHERE TO LOOK
 
@@ -29,7 +31,7 @@ tests/
 - Multi-profile export surface: `test_multi_profile_isolation.py`
 - Multi-profile leaf that is currently not re-exported by the top-level aggregator: `multi_profile_isolation/test_connection_priority_isolation.py`
 - Realtime websocket and `dashboard.update` behavior: `test_realtime_broadcast.py`
-- Focused service coverage outside the two main trees: `services/test_background_tasks.py`, `services/test_webauthn_service.py`, `services/test_stats_summary_request_logs.py`, `services/test_throughput_service.py`, `services/test_crypto.py`, `services/test_auth_hot_path_cache.py`
+- Focused service coverage outside the two main trees: `services/`
 
 ## TEST FACTS
 
@@ -45,6 +47,7 @@ tests/
 - Keep top-level aggregators current when adding smoke leaves, and update the multi-profile top-level aggregator when a subtree leaf is meant to participate in that re-export surface.
 - Put defect-numbered regressions under `smoke_defect_regressions/` and cross-profile guarantees under `multi_profile_isolation/`.
 - Keep service or realtime tests outside those hierarchies when they do not map cleanly to a DEF or profile-isolation concern.
+- Send focused service tests to `services/AGENTS.md` so the leaf docs stay separate from smoke and isolation coverage.
 
 ## ANTI-PATTERNS
 

@@ -1,7 +1,7 @@
 # BACKEND SCHEMAS KNOWLEDGE BASE
 
 ## OVERVIEW
-`schemas/` is the backend contract boundary. The domain modules hold the Pydantic models, while `schemas.py` is the large explicit re-export surface that route handlers and other callers should import from.
+`schemas/` is the backend contract boundary. The domain modules hold the Pydantic models, while `schemas.py` is the explicit re-export surface that route handlers and other callers should import from.
 
 ## STRUCTURE
 ```

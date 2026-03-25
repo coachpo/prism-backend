@@ -1,7 +1,7 @@
 # BACKEND CORE KNOWLEDGE BASE
 
 ## OVERVIEW
-`core/` owns shared backend infrastructure: settings, SQLAlchemy engine/session factories, auth and proxy-key helpers, crypto primitives, Alembic execution, and UTC/time normalization.
+`core/` owns shared backend infrastructure: settings, SQLAlchemy engine and session factories, auth and proxy-key helpers, crypto primitives, Alembic execution, and UTC/time normalization.
 
 ## STRUCTURE
 ```

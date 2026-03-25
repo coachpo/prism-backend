@@ -37,4 +37,4 @@ loadbalancer/
 
 - Do not reintroduce a flat `services/loadbalancer.py` barrel.
 - Do not move probe-eligible claiming back into planner or request setup.
-- Do not mix request logging/audit helpers with recovery mutation helpers.
+- Do not mix request logging or audit helpers with recovery mutation helpers.

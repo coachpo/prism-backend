@@ -1,7 +1,7 @@
 # BACKEND SERVICES ROOT KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, and split child packages for auth, proxy support, realtime, stats, load balancing, and WebAuthn. It also owns small root-level helpers such as `loadbalance_event_summary.py` that shape backend-facing reporting payloads without justifying a deeper package.
+`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, split child packages for auth, proxy support, realtime, stats, load balancing, and WebAuthn, and small root-level helpers such as `loadbalance_event_summary.py`.
 
 ## STRUCTURE
 ```

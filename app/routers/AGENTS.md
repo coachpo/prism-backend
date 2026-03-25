@@ -1,14 +1,14 @@
 # BACKEND ROUTERS KNOWLEDGE BASE
 
 ## OVERVIEW
-`routers/` is the backend API surface. `main.py` mounts 14 top-level routers here, and most management areas stay thin by handing dense request logic to existing `*_domains/` folders. The main exceptions are the small standalone routers such as `audit.py`, `loadbalance.py`, `providers.py`, and the websocket-focused `realtime.py`. `proxy_domains/` is now a documented runtime leaf because it has become its own dense proxy-execution cluster.
+`routers/` is the backend API surface. `main.py` mounts the top-level routers here, and most management areas stay thin by handing dense request logic to existing `*_domains/` folders. The main exceptions are the small standalone routers such as `audit.py`, `loadbalance.py`, `providers.py`, and the websocket-focused `realtime.py`. `proxy_domains/` is a documented runtime leaf, and `connections_domains/` now has its own leaf map because it is large enough to justify one.
 
 ## STRUCTURE
 ```
 routers/
 ├── auth.py + auth_domains/                       # Session, password reset, passkey, cookie auth flows
 ├── config.py + config_domains/                   # Config export or import and header blocklist flows
-├── connections.py + connections_domains/         # Connection CRUD, pricing linkage, health checks, ordering
+├── connections.py + connections_domains/         # Connection CRUD, health checks, ordering, owner helpers
 ├── endpoints.py + endpoints_domains/             # Endpoint CRUD, duplication, dropdown and ordering flows
 ├── models.py + models_domains/                   # Model CRUD, proxy-model invariants, batch lookups
 ├── pricing_templates.py + pricing_templates_domains/ # Pricing template CRUD and usage lookups
@@ -42,7 +42,7 @@ routers/
 - `proxy.py` is the runtime entrypoint and is not an `/api` management router.
 - `realtime.py` owns websocket authentication, supported-channel validation, profile existence checks, and subscribe or unsubscribe messages.
 - `realtime.py` delegates connection tracking and room membership to `services/realtime/connection_manager.py`.
-- Parent coverage still applies to `auth_domains/`, `config_domains/`, `connections_domains/`, `endpoints_domains/`, `models_domains/`, `pricing_templates_domains/`, `profiles_domains/`, `settings_domains/`, and `stats_domains/`. `proxy_domains/` now has its own leaf AGENTS doc because its runtime package surface is large enough to justify one.
+- Parent coverage still applies to `auth_domains/`, `config_domains/`, `connections_domains/`, `endpoints_domains/`, `models_domains/`, `pricing_templates_domains/`, `profiles_domains/`, `settings_domains/`, and `stats_domains/`. `proxy_domains/` and `connections_domains/` both have leaf AGENTS docs because their package surfaces are large enough to justify them.
 
 ## CONVENTIONS
 
