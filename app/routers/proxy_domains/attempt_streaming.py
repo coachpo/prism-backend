@@ -32,6 +32,8 @@ TOKEN_USAGE_FIELDS = (
     "reasoning_tokens",
 )
 
+STREAMING_FINALIZATION_BUFFER_MAX_BYTES = 64 * 1024
+
 
 def _as_int(value: object) -> int | None:
     if isinstance(value, bool) or value is None:
@@ -250,8 +252,12 @@ def _parse_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
 @dataclass(slots=True)
 class _StreamingFinalizationBuffer:
     keep_payload: bool
+    parse_sse_tokens: bool = True
+    max_bytes: int = STREAMING_FINALIZATION_BUFFER_MAX_BYTES
     _payload: bytearray = field(default_factory=bytearray)
     _partial_line: bytearray = field(default_factory=bytearray)
+    _discard_until_newline: bool = False
+    _payload_overflowed: bool = False
     _tokens: TokenUsage | None = None
     _usage_seen: bool = False
 
@@ -260,22 +266,26 @@ class _StreamingFinalizationBuffer:
             return
 
         if self.keep_payload:
-            self._payload.extend(chunk)
-            return
+            self._append_payload(chunk)
 
-        self._partial_line.extend(chunk)
-        self._consume_complete_lines()
+        if self.parse_sse_tokens:
+            self._append_sse_chunk(chunk)
 
     def finalize(self) -> tuple[bytes | None, TokenUsage | None]:
-        if self.keep_payload:
-            return bytes(self._payload), None
-
-        if self._partial_line:
+        if (
+            self.parse_sse_tokens
+            and self._partial_line
+            and not self._discard_until_newline
+        ):
             self._consume_line(bytes(self._partial_line))
             self._partial_line.clear()
 
+        payload = None
+        if self.keep_payload and not self._payload_overflowed:
+            payload = bytes(self._payload)
+
         if self._tokens is None:
-            return None, None
+            return payload, None
 
         finalized_tokens = dict(self._tokens)
         if finalized_tokens["total_tokens"] is None and (
@@ -295,7 +305,38 @@ class _StreamingFinalizationBuffer:
                 if finalized_tokens[field_name] is None:
                     finalized_tokens[field_name] = 0
 
-        return None, finalized_tokens
+        return payload, finalized_tokens
+
+    def _append_payload(self, chunk: bytes) -> None:
+        if self._payload_overflowed:
+            return
+
+        if len(self._payload) + len(chunk) > self.max_bytes:
+            self._payload.clear()
+            self._payload_overflowed = True
+            return
+
+        self._payload.extend(chunk)
+
+    def _append_sse_chunk(self, chunk: bytes) -> None:
+        remaining_chunk = chunk
+
+        if self._discard_until_newline:
+            newline_index = remaining_chunk.find(b"\n")
+            if newline_index == -1:
+                return
+            remaining_chunk = remaining_chunk[newline_index + 1 :]
+            self._discard_until_newline = False
+
+        if not remaining_chunk:
+            return
+
+        self._partial_line.extend(remaining_chunk)
+        self._consume_complete_lines()
+
+        if len(self._partial_line) > self.max_bytes:
+            self._partial_line.clear()
+            self._discard_until_newline = True
 
     def _consume_complete_lines(self) -> None:
         lines = bytes(self._partial_line).split(b"\n")
@@ -345,15 +386,17 @@ async def build_streaming_response(
     elapsed_ms: int,
 ) -> StreamingResponse:
     async def _iter_and_log(resp: httpx.Response):
+        is_sse_stream = _is_sse_stream(
+            resp.headers.get("content-type")
+            if isinstance(resp.headers.get("content-type"), str)
+            else None
+        )
         finalization_buffer = _StreamingFinalizationBuffer(
             keep_payload=(
-                not _is_sse_stream(
-                    resp.headers.get("content-type")
-                    if isinstance(resp.headers.get("content-type"), str)
-                    else None
-                )
+                not is_sse_stream
                 or (state.setup.audit_enabled and state.setup.audit_capture_bodies)
-            )
+            ),
+            parse_sse_tokens=is_sse_stream,
         )
         stream_cancelled = False
         try:
