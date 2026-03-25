@@ -29,6 +29,7 @@ from app.schemas.schemas import (
     ConfigUserSettingsExport,
     HeaderBlocklistRuleExport,
 )
+from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
 
 
 def _normalize_custom_headers_for_export(
@@ -153,17 +154,22 @@ async def build_export_payload(
         for template in pricing_templates
     ]
 
-    exported_loadbalance_strategies = [
-        ConfigLoadbalanceStrategyExport(
-            name=strategy.name,
-            strategy_type=cast(
-                Literal["single", "failover"],
-                strategy.strategy_type,
-            ),
-            failover_recovery_enabled=strategy.failover_recovery_enabled,
+    exported_loadbalance_strategies = []
+    for strategy in loadbalance_strategies:
+        policy = resolve_effective_loadbalance_policy(strategy)
+        exported_loadbalance_strategies.append(
+            ConfigLoadbalanceStrategyExport(
+                name=strategy.name,
+                strategy_type=policy.strategy_type,
+                failover_recovery_enabled=policy.failover_recovery_enabled,
+                failover_cooldown_seconds=int(policy.failover_cooldown_seconds),
+                failover_failure_threshold=policy.failover_failure_threshold,
+                failover_backoff_multiplier=policy.failover_backoff_multiplier,
+                failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
+                failover_jitter_ratio=policy.failover_jitter_ratio,
+                failover_auth_error_cooldown_seconds=policy.failover_auth_error_cooldown_seconds,
+            )
         )
-        for strategy in loadbalance_strategies
-    ]
 
     pricing_template_name_by_id = {
         template.id: template.name for template in pricing_templates

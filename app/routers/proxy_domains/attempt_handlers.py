@@ -5,7 +5,6 @@ import time
 import httpx
 from fastapi.responses import Response, StreamingResponse
 
-from app.core.config import get_settings
 from app.services.stats_service import extract_token_usage
 
 from .attempt_outcome_reporting import log_and_audit_attempt, response_error_detail
@@ -62,11 +61,15 @@ async def _record_connection_recovery_if_needed(
     target: ProxyAttemptTarget,
     status_code: int,
 ) -> None:
-    if not state.setup.recovery_active or not _is_recovery_success_status(status_code):
+    if (
+        not state.setup.failover_policy.failover_recovery_enabled
+        or not _is_recovery_success_status(status_code)
+    ):
         return
     await deps.record_connection_recovery_fn(
         state.profile_id,
         target.connection.id,
+        state.setup.failover_policy,
         state.setup.model_id,
         target.connection.endpoint_id,
         state.setup.provider_id,
@@ -82,7 +85,7 @@ async def _record_connection_failure_if_needed(
     raw_body: bytes | None = None,
     exception: Exception | None = None,
 ) -> None:
-    if not state.setup.recovery_active:
+    if not state.setup.failover_policy.failover_recovery_enabled:
         return
     failure_kind = _classify_failover_failure(
         status_code=status_code,
@@ -92,8 +95,9 @@ async def _record_connection_failure_if_needed(
     await deps.record_connection_failure_fn(
         state.profile_id,
         target.connection.id,
-        get_settings().failover_cooldown_seconds,
+        state.setup.failover_policy.failover_cooldown_seconds,
         failure_kind,
+        state.setup.failover_policy,
         state.setup.model_id,
         target.connection.endpoint_id,
         state.setup.provider_id,

@@ -6,6 +6,20 @@ from app.services.proxy_service import normalize_base_url, validate_base_url
 VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
 
 
+def _validate_optional_strategy_policy_fields(*, strategy_name: str, strategy) -> None:
+    if (
+        strategy.failover_cooldown_seconds is not None
+        and strategy.failover_cooldown_seconds < 0
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Loadbalance strategy '{strategy_name}' has invalid "
+                "failover_cooldown_seconds"
+            ),
+        )
+
+
 def _normalize_reference_name(*, field: str, value: str | None) -> str | None:
     if value is None:
         return None
@@ -131,6 +145,10 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                     "when strategy_type='single'"
                 ),
             )
+        _validate_optional_strategy_policy_fields(
+            strategy_name=strategy_name,
+            strategy=strategy,
+        )
         strategy_names_in_file.add(strategy_name)
 
     seen_model_ids: set[str] = set()

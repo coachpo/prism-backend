@@ -5,7 +5,7 @@ from typing import TypedDict
 from app.services.background_tasks import background_task_manager
 from app.services.loadbalance_event_summary import describe_loadbalance_event
 
-from .state import get_loadbalancer_settings
+from .policy import EffectiveLoadbalancePolicy
 from .types import FailureKind, RecoveryStateEntry
 
 logger = logging.getLogger("app.services.loadbalancer")
@@ -79,6 +79,7 @@ def _build_event_payload(
     connection_id: int,
     event_type: str,
     failure_kind: FailureKind | None,
+    policy: EffectiveLoadbalancePolicy,
     consecutive_failures: int,
     cooldown_seconds: float,
     blocked_until_at: datetime | None,
@@ -86,8 +87,6 @@ def _build_event_payload(
     endpoint_id: int | None,
     provider_id: int | None,
 ) -> LoadbalanceEventPayload:
-    settings = get_loadbalancer_settings()
-
     return {
         "profile_id": profile_id,
         "connection_id": connection_id,
@@ -99,9 +98,9 @@ def _build_event_payload(
         "model_id": model_id,
         "endpoint_id": endpoint_id,
         "provider_id": provider_id,
-        "failure_threshold": settings.failover_failure_threshold,
-        "backoff_multiplier": settings.failover_backoff_multiplier,
-        "max_cooldown_seconds": settings.failover_max_cooldown_seconds,
+        "failure_threshold": policy.failover_failure_threshold,
+        "backoff_multiplier": policy.failover_backoff_multiplier,
+        "max_cooldown_seconds": policy.failover_max_cooldown_seconds,
     }
 
 
@@ -109,6 +108,7 @@ def record_probe_eligible_transition(
     *,
     profile_id: int,
     connection_id: int,
+    policy: EffectiveLoadbalancePolicy,
     state: RecoveryStateEntry,
     model_id: str,
     endpoint_id: int | None,
@@ -128,6 +128,7 @@ def record_probe_eligible_transition(
             connection_id=connection_id,
             event_type="probe_eligible",
             failure_kind=state["last_failure_kind"],
+            policy=policy,
             consecutive_failures=state["consecutive_failures"],
             cooldown_seconds=state["last_cooldown_seconds"],
             blocked_until_at=None,
@@ -144,6 +145,7 @@ def record_failed_transition(
     profile_id: int,
     connection_id: int,
     failure_kind: FailureKind,
+    policy: EffectiveLoadbalancePolicy,
     consecutive_failures: int,
     cooldown_seconds: float,
     blocked_until_at: datetime | None,
@@ -177,6 +179,7 @@ def record_failed_transition(
             connection_id=connection_id,
             event_type=event_type,
             failure_kind=failure_kind,
+            policy=policy,
             consecutive_failures=consecutive_failures,
             cooldown_seconds=cooldown_seconds,
             blocked_until_at=blocked_until_at,
@@ -191,6 +194,7 @@ def record_recovered_transition(
     *,
     profile_id: int,
     connection_id: int,
+    policy: EffectiveLoadbalancePolicy,
     state: RecoveryStateEntry,
     model_id: str | None,
     endpoint_id: int | None,
@@ -210,6 +214,7 @@ def record_recovered_transition(
             connection_id=connection_id,
             event_type="recovered",
             failure_kind=state["last_failure_kind"],
+            policy=policy,
             consecutive_failures=state["consecutive_failures"],
             cooldown_seconds=state["last_cooldown_seconds"],
             blocked_until_at=None,

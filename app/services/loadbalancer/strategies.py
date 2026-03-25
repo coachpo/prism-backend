@@ -14,6 +14,7 @@ from app.schemas.schemas import (
     LoadbalanceStrategyUpdate,
 )
 
+from .policy import resolve_effective_loadbalance_policy
 from .state import clear_strategy_state
 
 
@@ -65,12 +66,19 @@ def _build_strategy_response(
     *,
     attached_model_count: int,
 ) -> LoadbalanceStrategyResponse:
+    policy = resolve_effective_loadbalance_policy(strategy)
     return LoadbalanceStrategyResponse(
         id=strategy.id,
         profile_id=strategy.profile_id,
         name=strategy.name,
-        strategy_type=cast(Literal["single", "failover"], strategy.strategy_type),
-        failover_recovery_enabled=strategy.failover_recovery_enabled,
+        strategy_type=policy.strategy_type,
+        failover_recovery_enabled=policy.failover_recovery_enabled,
+        failover_cooldown_seconds=int(policy.failover_cooldown_seconds),
+        failover_failure_threshold=policy.failover_failure_threshold,
+        failover_backoff_multiplier=policy.failover_backoff_multiplier,
+        failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
+        failover_jitter_ratio=policy.failover_jitter_ratio,
+        failover_auth_error_cooldown_seconds=policy.failover_auth_error_cooldown_seconds,
         attached_model_count=attached_model_count,
         created_at=strategy.created_at,
         updated_at=strategy.updated_at,
@@ -118,6 +126,12 @@ async def create_loadbalance_strategy(
         name=body.name,
         strategy_type=body.strategy_type,
         failover_recovery_enabled=body.failover_recovery_enabled,
+        failover_cooldown_seconds=body.failover_cooldown_seconds,
+        failover_failure_threshold=body.failover_failure_threshold,
+        failover_backoff_multiplier=body.failover_backoff_multiplier,
+        failover_max_cooldown_seconds=body.failover_max_cooldown_seconds,
+        failover_jitter_ratio=body.failover_jitter_ratio,
+        failover_auth_error_cooldown_seconds=body.failover_auth_error_cooldown_seconds,
     )
     db.add(strategy)
     await db.flush()
@@ -176,17 +190,22 @@ async def update_loadbalance_strategy(
         strategy_id=strategy_id,
         lock_for_update=True,
     )
+    current_policy = resolve_effective_loadbalance_policy(strategy)
 
     update_data: dict[str, object] = body.model_dump(exclude_unset=True)
     next_name = cast(str, update_data.get("name", strategy.name))
     next_strategy_type = cast(
         str, update_data.get("strategy_type", strategy.strategy_type)
     )
-    next_recovery_enabled = cast(
-        bool,
-        update_data.get(
-            "failover_recovery_enabled", strategy.failover_recovery_enabled
-        ),
+    next_recovery_enabled = (
+        False
+        if next_strategy_type == "single"
+        else cast(
+            bool,
+            update_data.get(
+                "failover_recovery_enabled", strategy.failover_recovery_enabled
+            ),
+        )
     )
 
     if next_name != strategy.name:
@@ -201,11 +220,12 @@ async def update_loadbalance_strategy(
         strategy_type=next_strategy_type,
         recovery_enabled=next_recovery_enabled,
     )
-
-    behavior_changed = (
-        next_strategy_type != strategy.strategy_type
-        or next_recovery_enabled != strategy.failover_recovery_enabled
-    )
+    if next_strategy_type == "single" and (
+        "strategy_type" in update_data
+        or "failover_recovery_enabled" in update_data
+        or strategy.failover_recovery_enabled
+    ):
+        update_data["failover_recovery_enabled"] = False
 
     for key, value in update_data.items():
         setattr(strategy, key, value)
@@ -215,8 +235,9 @@ async def update_loadbalance_strategy(
 
     await db.flush()
     await db.refresh(strategy)
+    updated_policy = resolve_effective_loadbalance_policy(strategy)
 
-    if behavior_changed:
+    if current_policy != updated_policy:
         await clear_strategy_state(profile_id, strategy.id)
 
     attached_model_count = await _count_attached_models(

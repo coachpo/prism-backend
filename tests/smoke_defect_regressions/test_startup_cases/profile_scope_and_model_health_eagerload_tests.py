@@ -136,6 +136,122 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             assert response.connections[0].endpoint is not None
             assert response.connections[0].endpoint.id == endpoint.id
 
+    @pytest.mark.asyncio
+    async def test_model_routes_resolve_effective_policy_for_legacy_strategy_rows(self):
+        from sqlalchemy import select
+
+        from app.core.config import get_settings
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, Profile, Provider
+        from app.routers.models import get_model, list_models
+        from app.schemas.schemas import ModelConfigResponse
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        model_id = f"def065-legacy-policy-{suffix}"
+        settings = get_settings()
+
+        async with AsyncSessionLocal() as db:
+            provider = (
+                await db.execute(
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                provider = Provider(
+                    name=f"DEF065 Legacy OpenAI {suffix}",
+                    provider_type="openai",
+                    description="DEF065 legacy provider",
+                )
+                db.add(provider)
+                await db.flush()
+
+            profile = Profile(
+                name=f"DEF065 Legacy Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            strategy = make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+            )
+            strategy.failover_cooldown_seconds = None
+            strategy.failover_failure_threshold = None
+            strategy.failover_backoff_multiplier = None
+            strategy.failover_max_cooldown_seconds = None
+            strategy.failover_jitter_ratio = None
+            strategy.failover_auth_error_cooldown_seconds = None
+
+            model = ModelConfig(
+                profile_id=profile.id,
+                provider_id=provider.id,
+                model_id=model_id,
+                model_type="native",
+                redirect_to=None,
+                loadbalance_strategy=strategy,
+                is_enabled=True,
+            )
+            db.add_all([strategy, model])
+            await db.flush()
+
+            config = await get_model(
+                model_config_id=model.id,
+                db=db,
+                profile_id=profile.id,
+            )
+            response = ModelConfigResponse.model_validate(config, from_attributes=True)
+
+            assert response.loadbalance_strategy is not None
+            assert response.loadbalance_strategy.strategy_type == "failover"
+            assert response.loadbalance_strategy.failover_recovery_enabled is True
+            assert (
+                response.loadbalance_strategy.failover_cooldown_seconds
+                == settings.failover_cooldown_seconds
+            )
+            assert (
+                response.loadbalance_strategy.failover_failure_threshold
+                == settings.failover_failure_threshold
+            )
+            assert response.loadbalance_strategy.failover_backoff_multiplier == pytest.approx(
+                settings.failover_backoff_multiplier
+            )
+            assert (
+                response.loadbalance_strategy.failover_max_cooldown_seconds
+                == settings.failover_max_cooldown_seconds
+            )
+            assert response.loadbalance_strategy.failover_jitter_ratio == pytest.approx(
+                settings.failover_jitter_ratio
+            )
+            assert (
+                response.loadbalance_strategy.failover_auth_error_cooldown_seconds
+                == settings.failover_auth_error_cooldown_seconds
+            )
+
+            with patch(
+                "app.routers.models.get_model_health_stats",
+                AsyncMock(return_value={}),
+            ):
+                listed = await list_models(db=db, profile_id=profile.id)
+
+            assert len(listed) == 1
+            assert listed[0].loadbalance_strategy is not None
+            assert (
+                listed[0].loadbalance_strategy.failover_cooldown_seconds
+                == settings.failover_cooldown_seconds
+            )
+            assert (
+                listed[0].loadbalance_strategy.failover_failure_threshold
+                == settings.failover_failure_threshold
+            )
+
 
 class TestDEF025_ModelHealthStatsProfileScope:
     @pytest.mark.asyncio

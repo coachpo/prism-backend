@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
@@ -44,6 +44,38 @@ def make_session_context(session: AsyncMock) -> AsyncMock:
     session_ctx.__aenter__ = AsyncMock(return_value=session)
     session_ctx.__aexit__ = AsyncMock(return_value=False)
     return session_ctx
+
+
+def make_failover_policy(**overrides):
+    from app.services.loadbalancer.policy import EffectiveLoadbalancePolicy
+
+    return EffectiveLoadbalancePolicy(
+        strategy_type=cast(
+            Literal["single", "failover"],
+            overrides.get("strategy_type", "failover"),
+        ),
+        failover_recovery_enabled=cast(
+            bool, overrides.get("failover_recovery_enabled", True)
+        ),
+        failover_cooldown_seconds=float(
+            cast(float | int, overrides.get("failover_cooldown_seconds", 30.0))
+        ),
+        failover_failure_threshold=cast(
+            int, overrides.get("failover_failure_threshold", 2)
+        ),
+        failover_backoff_multiplier=float(
+            cast(float | int, overrides.get("failover_backoff_multiplier", 2.0))
+        ),
+        failover_max_cooldown_seconds=cast(
+            int, overrides.get("failover_max_cooldown_seconds", 900)
+        ),
+        failover_jitter_ratio=float(
+            cast(float | int, overrides.get("failover_jitter_ratio", 0.2))
+        ),
+        failover_auth_error_cooldown_seconds=cast(
+            int, overrides.get("failover_auth_error_cooldown_seconds", 1800)
+        ),
+    )
 
 
 def as_websocket(mock_websocket: MockWebSocket) -> WebSocket:
@@ -1074,6 +1106,7 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
             profile_id=6,
             connection_id=13,
             failure_kind="timeout",
+            policy=make_failover_policy(),
             consecutive_failures=4,
             cooldown_seconds=30.0,
             blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -1126,6 +1159,7 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
             profile_id=6,
             connection_id=13,
             failure_kind="timeout",
+            policy=make_failover_policy(),
             consecutive_failures=4,
             cooldown_seconds=30.0,
             blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
@@ -1177,6 +1211,7 @@ async def test_record_connection_failure_preserves_state_when_loadbalance_enqueu
             connection_id=9,
             base_cooldown_seconds=30.0,
             failure_kind="timeout",
+            policy=make_failover_policy(),
             model_id="gpt-4o-mini",
             endpoint_id=12,
             provider_id=1,
@@ -1220,6 +1255,7 @@ async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_
         await record_connection_recovery(
             profile_id=4,
             connection_id=9,
+            policy=make_failover_policy(),
             model_id="gpt-4o-mini",
             endpoint_id=12,
             provider_id=1,
@@ -1309,6 +1345,7 @@ async def test_claim_probe_eligible_stays_off_path_when_loadbalance_enqueue_fail
             connection_id=7,
             model_id="gpt-4o-mini",
             endpoint_id=12,
+            policy=make_failover_policy(),
             provider_id=1,
             now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         )

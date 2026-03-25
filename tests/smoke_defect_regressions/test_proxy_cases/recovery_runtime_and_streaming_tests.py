@@ -23,6 +23,98 @@ def _attempt_plan(*connections):
 
 class TestDEF062_NonFailover4xxRecoveryState:
     @pytest.mark.asyncio
+    async def test_prepare_proxy_request_captures_failover_policy_snapshot(self):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        app = FastAPI()
+        app.state.http_client = object()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = SimpleNamespace(
+            provider_type="openai",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            failover_cooldown_seconds=45,
+            failover_failure_threshold=4,
+            failover_backoff_multiplier=3.5,
+            failover_max_cooldown_seconds=720,
+            failover_jitter_ratio=0.35,
+            failover_auth_error_cooldown_seconds=2400,
+        )
+        connection = SimpleNamespace(endpoint_id=501)
+        model_config = SimpleNamespace(
+            provider=provider,
+            model_id="gpt-4o-mini",
+            loadbalance_strategy=strategy,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        strategy.failover_cooldown_seconds = 999
+        strategy.failover_failure_threshold = 9
+
+        assert setup.failover_policy.failover_cooldown_seconds == 45
+        assert setup.failover_policy.failover_failure_threshold == 4
+
+    @pytest.mark.asyncio
     async def test_non_failover_4xx_preserves_existing_recovery_state(self):
         from fastapi import FastAPI
         from starlette.requests import Request
@@ -149,6 +241,71 @@ class TestDEF062_NonFailover4xxRecoveryState:
         }
         mark_failed.assert_not_awaited()
         mark_recovered.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_failover_failure_uses_request_scoped_policy_cooldown(self):
+        from app.routers.proxy_domains.attempt_handlers import (
+            _record_connection_failure_if_needed,
+        )
+        from app.routers.proxy_domains.attempt_types import (
+            ProxyAttemptTarget,
+            ProxyRequestState,
+            ProxyRuntimeDependencies,
+        )
+
+        record_connection_failure = AsyncMock()
+        deps = cast(
+            ProxyRuntimeDependencies,
+            cast(
+                object,
+                SimpleNamespace(record_connection_failure_fn=record_connection_failure),
+            ),
+        )
+        state = cast(
+            ProxyRequestState,
+            cast(
+                object,
+                SimpleNamespace(
+                    profile_id=7,
+                    setup=SimpleNamespace(
+                        recovery_active=True,
+                        failover_policy=SimpleNamespace(
+                            failover_recovery_enabled=True,
+                            failover_cooldown_seconds=17.5,
+                        ),
+                        model_id="gpt-4o-mini",
+                        provider_id=1,
+                    ),
+                ),
+            ),
+        )
+        target = cast(
+            ProxyAttemptTarget,
+            cast(
+                object,
+                SimpleNamespace(connection=SimpleNamespace(id=1001, endpoint_id=501)),
+            ),
+        )
+
+        await _record_connection_failure_if_needed(
+            deps=deps,
+            state=state,
+            target=target,
+            status_code=500,
+            raw_body=b'{"error": {"message": "retry"}}',
+        )
+
+        record_connection_failure.assert_awaited_once_with(
+            7,
+            1001,
+            17.5,
+            "transient_http",
+            state.setup.failover_policy,
+            "gpt-4o-mini",
+            501,
+            1,
+            now_at=None,
+        )
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:

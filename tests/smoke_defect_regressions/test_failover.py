@@ -89,6 +89,30 @@ class TestLoadbalanceStrategyFieldValidation:
         exported = model.model_dump(mode="json")
         assert exported["loadbalance_strategy_name"] == "failover-primary"
 
+    def test_config_export_includes_explicit_failover_policy_fields(self):
+        from app.schemas.schemas import ConfigLoadbalanceStrategyExport
+
+        strategy = ConfigLoadbalanceStrategyExport(
+            name="failover-primary",
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            failover_cooldown_seconds=45,
+            failover_failure_threshold=4,
+            failover_backoff_multiplier=3.5,
+            failover_max_cooldown_seconds=720,
+            failover_jitter_ratio=0.35,
+            failover_auth_error_cooldown_seconds=2400,
+        )
+
+        exported = strategy.model_dump(mode="json")
+
+        assert exported["failover_cooldown_seconds"] == 45
+        assert exported["failover_failure_threshold"] == 4
+        assert exported["failover_backoff_multiplier"] == 3.5
+        assert exported["failover_max_cooldown_seconds"] == 720
+        assert exported["failover_jitter_ratio"] == 0.35
+        assert exported["failover_auth_error_cooldown_seconds"] == 2400
+
     def test_config_import_accepts_minimal_payload(self):
         from app.schemas.schemas import ConfigImportRequest
 
@@ -104,6 +128,43 @@ class TestLoadbalanceStrategyFieldValidation:
         assert validation.endpoints == []
         assert validation.loadbalance_strategies == []
         assert validation.models == []
+
+    def test_config_import_accepts_legacy_strategy_without_failover_policy_fields(self):
+        from app.schemas.schemas import ConfigImportRequest
+
+        validation = ConfigImportRequest.model_validate(
+            {
+                "version": 3,
+                "endpoints": [
+                    {
+                        "name": "openai-main",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "sk-test",
+                    }
+                ],
+                "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "failover-primary",
+                        "strategy_type": "failover",
+                        "failover_recovery_enabled": True,
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": "gpt-4o",
+                        "model_type": "native",
+                        "loadbalance_strategy_name": "failover-primary",
+                        "connections": [{"endpoint_name": "openai-main"}],
+                    }
+                ],
+            }
+        )
+
+        strategy = validation.loadbalance_strategies[0]
+        assert strategy.name == "failover-primary"
+        assert strategy.failover_recovery_enabled is True
 
     def test_config_import_rejects_native_model_missing_strategy_name(self):
         from app.routers.config import _validate_import
@@ -224,6 +285,12 @@ class TestLoadbalanceStrategyFieldValidation:
                     name="failover-primary",
                     strategy_type="failover",
                     failover_recovery_enabled=False,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
                 )
             ],
             models=[
@@ -252,6 +319,12 @@ class TestLoadbalanceStrategyFieldValidation:
         strategy = reimported.loadbalance_strategies[0]
         assert strategy.name == "failover-primary"
         assert strategy.failover_recovery_enabled is False
+        assert strategy.failover_cooldown_seconds == 45
+        assert strategy.failover_failure_threshold == 4
+        assert strategy.failover_backoff_multiplier == 3.5
+        assert strategy.failover_max_cooldown_seconds == 720
+        assert strategy.failover_jitter_ratio == 0.35
+        assert strategy.failover_auth_error_cooldown_seconds == 2400
         model = reimported.models[0]
         assert model.loadbalance_strategy_name == "failover-primary"
 

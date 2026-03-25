@@ -13,43 +13,40 @@ from .events import (
     record_probe_eligible_transition,
     record_recovered_transition,
 )
-from .state import (
-    current_state_to_recovery_entry,
-    get_loadbalancer_settings,
-)
+from .policy import EffectiveLoadbalancePolicy
+from .state import current_state_to_recovery_entry
 from .types import FailureKind, RecoveryStateEntry
 
 
 def _compute_base_cooldown(
     *,
+    policy: EffectiveLoadbalancePolicy,
     base_cooldown_seconds: float,
     consecutive_failures: int,
     failure_kind: FailureKind,
 ) -> float:
-    settings = get_loadbalancer_settings()
-
     if failure_kind == "auth_like":
-        return float(settings.failover_auth_error_cooldown_seconds)
+        return float(policy.failover_auth_error_cooldown_seconds)
 
-    if consecutive_failures < settings.failover_failure_threshold:
+    if consecutive_failures < policy.failover_failure_threshold:
         return 0.0
 
-    exponent = consecutive_failures - settings.failover_failure_threshold
+    exponent = consecutive_failures - policy.failover_failure_threshold
     transient_cooldown = max(base_cooldown_seconds, 0.0) * (
-        settings.failover_backoff_multiplier**exponent
+        policy.failover_backoff_multiplier**exponent
     )
-    return float(min(transient_cooldown, settings.failover_max_cooldown_seconds))
+    return float(min(transient_cooldown, policy.failover_max_cooldown_seconds))
 
 
-def _apply_jitter(cooldown_seconds: float) -> float:
-    settings = get_loadbalancer_settings()
-
-    if cooldown_seconds <= 0.0 or settings.failover_jitter_ratio <= 0.0:
+def _apply_jitter(
+    cooldown_seconds: float, *, policy: EffectiveLoadbalancePolicy
+) -> float:
+    if cooldown_seconds <= 0.0 or policy.failover_jitter_ratio <= 0.0:
         return cooldown_seconds
 
     jitter_multiplier = random.uniform(
-        max(0.0, 1.0 - settings.failover_jitter_ratio),
-        1.0 + settings.failover_jitter_ratio,
+        max(0.0, 1.0 - policy.failover_jitter_ratio),
+        1.0 + policy.failover_jitter_ratio,
     )
     return cooldown_seconds * jitter_multiplier
 
@@ -95,6 +92,7 @@ async def claim_probe_eligible(
     connection_id: int,
     model_id: str,
     endpoint_id: int | None,
+    policy: EffectiveLoadbalancePolicy,
     provider_id: int,
     now_at: datetime | None = None,
 ) -> None:
@@ -109,6 +107,7 @@ async def claim_probe_eligible(
     record_probe_eligible_transition(
         profile_id=profile_id,
         connection_id=connection_id,
+        policy=policy,
         state=claimed_state,
         model_id=model_id,
         endpoint_id=endpoint_id,
@@ -121,6 +120,7 @@ async def record_connection_failure(
     connection_id: int,
     base_cooldown_seconds: float,
     failure_kind: FailureKind,
+    policy: EffectiveLoadbalancePolicy,
     model_id: str | None = None,
     endpoint_id: int | None = None,
     provider_id: int | None = None,
@@ -157,11 +157,12 @@ async def record_connection_failure(
         consecutive_failures = current_state.consecutive_failures + 1
 
         base_cooldown = _compute_base_cooldown(
+            policy=policy,
             base_cooldown_seconds=base_cooldown_seconds,
             consecutive_failures=consecutive_failures,
             failure_kind=failure_kind,
         )
-        cooldown_seconds = _apply_jitter(base_cooldown)
+        cooldown_seconds = _apply_jitter(base_cooldown, policy=policy)
 
         current_state.consecutive_failures = consecutive_failures
         current_state.last_failure_kind = failure_kind
@@ -177,6 +178,7 @@ async def record_connection_failure(
                 profile_id=profile_id,
                 connection_id=connection_id,
                 failure_kind=failure_kind,
+                policy=policy,
                 consecutive_failures=consecutive_failures,
                 cooldown_seconds=0.0,
                 blocked_until_at=None,
@@ -203,6 +205,7 @@ async def record_connection_failure(
         profile_id=profile_id,
         connection_id=connection_id,
         failure_kind=failure_kind,
+        policy=policy,
         consecutive_failures=snapshot["consecutive_failures"],
         cooldown_seconds=snapshot["last_cooldown_seconds"],
         blocked_until_at=snapshot["blocked_until_at"],
@@ -215,6 +218,7 @@ async def record_connection_failure(
 async def record_connection_recovery(
     profile_id: int,
     connection_id: int,
+    policy: EffectiveLoadbalancePolicy,
     model_id: str | None = None,
     endpoint_id: int | None = None,
     provider_id: int | None = None,
@@ -240,6 +244,7 @@ async def record_connection_recovery(
     record_recovered_transition(
         profile_id=profile_id,
         connection_id=connection_id,
+        policy=policy,
         state=state,
         model_id=model_id,
         endpoint_id=endpoint_id,

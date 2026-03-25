@@ -98,6 +98,7 @@ async def execute_proxy_attempts(
                 connection_id=connection.id,
                 model_id=setup.model_id,
                 endpoint_id=connection.endpoint_id,
+                policy=setup.failover_policy,
                 provider_id=setup.provider_id,
                 now_at=None,
             )

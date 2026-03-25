@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -63,6 +64,22 @@ class LoadbalanceStrategy(Base):
     )
     failover_recovery_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
+    )
+    failover_cooldown_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    failover_failure_threshold: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    failover_backoff_multiplier: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    failover_max_cooldown_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    failover_jitter_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
+    failover_auth_error_cooldown_seconds: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now

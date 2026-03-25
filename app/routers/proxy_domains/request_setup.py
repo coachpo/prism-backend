@@ -13,6 +13,10 @@ from app.services.costing_service import (
     compute_cost_fields,
     load_costing_settings,
 )
+from app.services.loadbalancer.policy import (
+    EffectiveLoadbalancePolicy,
+    resolve_effective_loadbalance_policy,
+)
 from app.services.loadbalancer.planner import (
     build_attempt_plan,
     get_model_config_with_connections,
@@ -52,6 +56,7 @@ class ProxyRequestSetup:
     client_headers: dict[str, str]
     effective_request_path: str
     endpoints_to_try: list[Connection]
+    failover_policy: EffectiveLoadbalancePolicy
     is_streaming: bool
     method: str
     model_config: ModelConfig
@@ -177,9 +182,7 @@ async def prepare_proxy_request(
             f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
         )
 
-    recovery_active = (
-        strategy.strategy_type == "failover" and strategy.failover_recovery_enabled
-    )
+    failover_policy = resolve_effective_loadbalance_policy(strategy)
 
     return ProxyRequestSetup(
         audit_capture_bodies=audit_capture_bodies,
@@ -190,6 +193,7 @@ async def prepare_proxy_request(
         client_headers=client_headers,
         effective_request_path=effective_request_path,
         endpoints_to_try=endpoints_to_try,
+        failover_policy=failover_policy,
         is_streaming=is_streaming,
         method=method,
         model_config=model_config,
@@ -198,7 +202,7 @@ async def prepare_proxy_request(
         provider_type=provider_type,
         probe_eligible_connection_ids=attempt_plan.probe_eligible_connection_ids,
         raw_body=raw_body,
-        recovery_active=recovery_active,
+        recovery_active=failover_policy.failover_recovery_enabled,
         request_compressed=request_compressed,
         rewritten_body=rewritten_body,
     )

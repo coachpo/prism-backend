@@ -131,6 +131,23 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
+    def test_export_schema_includes_all_loadbalance_strategy_fields(self):
+        from app.schemas.schemas import ConfigLoadbalanceStrategyExport
+
+        fields = set(ConfigLoadbalanceStrategyExport.model_fields.keys())
+        expected = {
+            "name",
+            "strategy_type",
+            "failover_recovery_enabled",
+            "failover_cooldown_seconds",
+            "failover_failure_threshold",
+            "failover_backoff_multiplier",
+            "failover_max_cooldown_seconds",
+            "failover_jitter_ratio",
+            "failover_auth_error_cooldown_seconds",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
     def test_roundtrip_custom_headers_preserved(self):
         from app.schemas.schemas import ConfigConnectionExport
 
@@ -202,6 +219,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     name="failover-primary",
                     strategy_type="failover",
                     failover_recovery_enabled=True,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
                 )
             ],
             models=[
@@ -232,6 +255,13 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         m = reimported.models[0]
         assert m.model_id == "gpt-4o"
         assert m.loadbalance_strategy_name == "failover-primary"
+        strategy = reimported.loadbalance_strategies[0]
+        assert strategy.failover_cooldown_seconds == 45
+        assert strategy.failover_failure_threshold == 4
+        assert strategy.failover_backoff_multiplier == 3.5
+        assert strategy.failover_max_cooldown_seconds == 720
+        assert strategy.failover_jitter_ratio == 0.35
+        assert strategy.failover_auth_error_cooldown_seconds == 2400
         assert len(m.connections) == 1
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}

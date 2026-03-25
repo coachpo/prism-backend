@@ -11,6 +11,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+
 from .common import AuthType
 from .endpoint_pricing import (
     ConnectionPricingTemplateSummary,
@@ -154,6 +156,12 @@ class LoadbalanceStrategyBase(BaseModel):
     name: str
     strategy_type: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = False
+    failover_cooldown_seconds: int = Field(default=60, ge=0)
+    failover_failure_threshold: int = Field(default=2, ge=1, le=10)
+    failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
+    failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
 
     @field_validator("name")
     @classmethod
@@ -178,6 +186,14 @@ class LoadbalanceStrategyUpdate(BaseModel):
     name: str | None = None
     strategy_type: Literal["single", "failover"] | None = None
     failover_recovery_enabled: bool | None = None
+    failover_cooldown_seconds: int | None = Field(default=None, ge=0)
+    failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
+    failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
+    failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    failover_auth_error_cooldown_seconds: int | None = Field(
+        default=None, ge=1, le=86_400
+    )
 
     @field_validator("name")
     @classmethod
@@ -203,6 +219,36 @@ class LoadbalanceStrategySummary(BaseModel):
     name: str
     strategy_type: Literal["single", "failover"]
     failover_recovery_enabled: bool
+    failover_cooldown_seconds: int
+    failover_failure_threshold: int
+    failover_backoff_multiplier: float
+    failover_max_cooldown_seconds: int
+    failover_jitter_ratio: float
+    failover_auth_error_cooldown_seconds: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_effective_policy_from_orm(cls, value: object) -> object:
+        if value is None or isinstance(value, (cls, dict)):
+            return value
+        if not hasattr(value, "id") or not hasattr(value, "name"):
+            return value
+
+        policy = resolve_effective_loadbalance_policy(value)
+        return {
+            "id": getattr(value, "id"),
+            "name": getattr(value, "name"),
+            "strategy_type": policy.strategy_type,
+            "failover_recovery_enabled": policy.failover_recovery_enabled,
+            "failover_cooldown_seconds": int(policy.failover_cooldown_seconds),
+            "failover_failure_threshold": policy.failover_failure_threshold,
+            "failover_backoff_multiplier": policy.failover_backoff_multiplier,
+            "failover_max_cooldown_seconds": policy.failover_max_cooldown_seconds,
+            "failover_jitter_ratio": policy.failover_jitter_ratio,
+            "failover_auth_error_cooldown_seconds": (
+                policy.failover_auth_error_cooldown_seconds
+            ),
+        }
 
 
 class LoadbalanceStrategyResponse(LoadbalanceStrategySummary):

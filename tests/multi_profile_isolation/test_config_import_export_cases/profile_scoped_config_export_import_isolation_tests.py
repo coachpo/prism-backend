@@ -27,6 +27,7 @@ from app.models.models import (
     ModelConfig,
     Endpoint,
     Connection,
+    LoadbalanceStrategy,
     UserSetting,
     EndpointFxRateSetting,
     RequestLog,
@@ -93,6 +94,12 @@ class TestConfigExportImportIsolation:
                 name="single-primary",
                 strategy_type="single",
                 failover_recovery_enabled=False,
+                failover_cooldown_seconds=45,
+                failover_failure_threshold=4,
+                failover_backoff_multiplier=3.5,
+                failover_max_cooldown_seconds=720,
+                failover_jitter_ratio=0.35,
+                failover_auth_error_cooldown_seconds=2400,
             ),
             is_enabled=True,
             connections=[],
@@ -143,7 +150,15 @@ class TestConfigExportImportIsolation:
 
         # Verify export contains profile 1 data only
         assert len(payload["endpoints"]) == 1
+        assert len(payload["loadbalance_strategies"]) == 1
         assert len(payload["models"]) == 1
+        strategy_payload = payload["loadbalance_strategies"][0]
+        assert strategy_payload["failover_cooldown_seconds"] == 45
+        assert strategy_payload["failover_failure_threshold"] == 4
+        assert strategy_payload["failover_backoff_multiplier"] == 3.5
+        assert strategy_payload["failover_max_cooldown_seconds"] == 720
+        assert strategy_payload["failover_jitter_ratio"] == 0.35
+        assert strategy_payload["failover_auth_error_cooldown_seconds"] == 2400
         assert "providers" not in payload
 
     @pytest.mark.asyncio
@@ -333,6 +348,12 @@ class TestConfigExportImportIsolation:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_cooldown_seconds": 45,
+                        "failover_failure_threshold": 4,
+                        "failover_backoff_multiplier": 3.5,
+                        "failover_max_cooldown_seconds": 720,
+                        "failover_jitter_ratio": 0.35,
+                        "failover_auth_error_cooldown_seconds": 2400,
                     }
                 ],
                 "models": [
@@ -401,6 +422,17 @@ class TestConfigExportImportIsolation:
                     await db.execute(
                         select(ModelConfig).where(
                             ModelConfig.profile_id == target_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_strategies = (
+                (
+                    await db.execute(
+                        select(LoadbalanceStrategy).where(
+                            LoadbalanceStrategy.profile_id == target_profile_id
                         )
                     )
                 )
@@ -518,6 +550,14 @@ class TestConfigExportImportIsolation:
         assert len(target_models) == 1
         assert target_models[0].model_id == new_model_id
         assert target_models[0].model_id != old_target_model_id
+
+        assert len(target_strategies) == 1
+        assert target_strategies[0].failover_cooldown_seconds == 45
+        assert target_strategies[0].failover_failure_threshold == 4
+        assert target_strategies[0].failover_backoff_multiplier == 3.5
+        assert target_strategies[0].failover_max_cooldown_seconds == 720
+        assert target_strategies[0].failover_jitter_ratio == 0.35
+        assert target_strategies[0].failover_auth_error_cooldown_seconds == 2400
 
         assert len(target_connections) == 1
         assert target_connections[0].name == new_connection_name

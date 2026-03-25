@@ -47,12 +47,28 @@ class ConfigLoadbalanceStrategyExport(BaseModel):
     name: str
     strategy_type: Literal["single", "failover"] = "single"
     failover_recovery_enabled: bool = False
+    failover_cooldown_seconds: int = Field(default=60, ge=0)
+    failover_failure_threshold: int = Field(default=2, ge=1, le=10)
+    failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
+    failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
 
 
-class ConfigLoadbalanceStrategyImport(ConfigLoadbalanceStrategyExport):
+class ConfigLoadbalanceStrategyImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    pass
+    name: str
+    strategy_type: Literal["single", "failover"] = "single"
+    failover_recovery_enabled: bool = False
+    failover_cooldown_seconds: int | None = Field(default=None, ge=0)
+    failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
+    failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
+    failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
+    failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    failover_auth_error_cooldown_seconds: int | None = Field(
+        default=None, ge=1, le=86_400
+    )
 
 
 class ConfigConnectionExport(BaseModel):
