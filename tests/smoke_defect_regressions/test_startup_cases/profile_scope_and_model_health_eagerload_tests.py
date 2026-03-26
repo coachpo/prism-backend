@@ -93,7 +93,6 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 provider_id=provider.id,
                 model_id=model_id,
                 model_type="native",
-                redirect_to=None,
                 loadbalance_strategy=make_loadbalance_strategy(
                     profile_id=profile.id,
                     strategy_type="single",
@@ -195,7 +194,6 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 provider_id=provider.id,
                 model_id=model_id,
                 model_type="native",
-                redirect_to=None,
                 loadbalance_strategy=strategy,
                 is_enabled=True,
             )
@@ -220,8 +218,9 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 response.loadbalance_strategy.failover_failure_threshold
                 == settings.failover_failure_threshold
             )
-            assert response.loadbalance_strategy.failover_backoff_multiplier == pytest.approx(
-                settings.failover_backoff_multiplier
+            assert (
+                response.loadbalance_strategy.failover_backoff_multiplier
+                == pytest.approx(settings.failover_backoff_multiplier)
             )
             assert (
                 response.loadbalance_strategy.failover_max_cooldown_seconds

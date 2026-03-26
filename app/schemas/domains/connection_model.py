@@ -92,9 +92,9 @@ class ConnectionResponse(BaseModel):
     auth_type: AuthType | None
     custom_headers: dict[str, str] | None
     pricing_template_id: int | None
-    qps_limit: int | None
-    max_in_flight_non_stream: int | None
-    max_in_flight_stream: int | None
+    qps_limit: int | None = None
+    max_in_flight_non_stream: int | None = None
+    max_in_flight_stream: int | None = None
     pricing_template: ConnectionPricingTemplateSummary | None = Field(
         default=None,
         validation_alias=AliasChoices("pricing_template", "pricing_template_rel"),

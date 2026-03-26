@@ -105,7 +105,7 @@ class TestProfileScopedDataIsolation:
             model_id="gpt-4",
             display_name=None,
             model_type="native",
-            redirect_to=None,
+            proxy_targets=[],
             loadbalance_strategy_id=11,
             loadbalance_strategy=SimpleNamespace(
                 id=11,
@@ -126,7 +126,7 @@ class TestProfileScopedDataIsolation:
             model_id="gpt-3.5-turbo",
             display_name=None,
             model_type="native",
-            redirect_to=None,
+            proxy_targets=[],
             loadbalance_strategy_id=12,
             loadbalance_strategy=SimpleNamespace(
                 id=12,

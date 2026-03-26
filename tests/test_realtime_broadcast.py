@@ -75,6 +75,16 @@ def make_failover_policy(**overrides):
         failover_auth_error_cooldown_seconds=cast(
             int, overrides.get("failover_auth_error_cooldown_seconds", 1800)
         ),
+        failover_ban_mode=cast(
+            Literal["off", "temporary", "manual"],
+            overrides.get("failover_ban_mode", "off"),
+        ),
+        failover_max_cooldown_strikes_before_ban=cast(
+            int, overrides.get("failover_max_cooldown_strikes_before_ban", 0)
+        ),
+        failover_ban_duration_seconds=cast(
+            int, overrides.get("failover_ban_duration_seconds", 0)
+        ),
     )
 
 
@@ -1230,6 +1240,9 @@ async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_
     current_state = SimpleNamespace(
         consecutive_failures=3,
         blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
+        max_cooldown_strikes=0,
+        ban_mode="off",
+        banned_until_at=None,
         last_cooldown_seconds=30.0,
         last_failure_kind="timeout",
         probe_eligible_logged=False,
@@ -1329,6 +1342,9 @@ async def test_claim_probe_eligible_stays_off_path_when_loadbalance_enqueue_fail
                 return_value={
                     "consecutive_failures": 2,
                     "blocked_until_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                    "max_cooldown_strikes": 0,
+                    "ban_mode": "off",
+                    "banned_until_at": None,
                     "last_cooldown_seconds": 30.0,
                     "last_failure_kind": "timeout",
                     "probe_eligible_logged": True,

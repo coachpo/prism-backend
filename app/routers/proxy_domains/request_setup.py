@@ -64,6 +64,7 @@ class ProxyRequestSetup:
     method: str
     model_config: ModelConfig
     model_id: str
+    resolved_target_model_id: str
     provider_id: int
     provider_type: str
     probe_eligible_connection_ids: list[int]
@@ -210,6 +211,7 @@ async def prepare_proxy_request(
         method=method,
         model_config=model_config,
         model_id=model_id,
+        resolved_target_model_id=model_config.model_id,
         provider_id=provider_id,
         provider_type=provider_type,
         probe_eligible_connection_ids=attempt_plan.probe_eligible_connection_ids,

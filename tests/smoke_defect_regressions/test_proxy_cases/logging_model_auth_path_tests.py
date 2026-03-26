@@ -111,6 +111,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
                 response_time_ms=100,
                 is_stream=False,
                 request_path="/v1/chat/completions",
+                resolved_target_model_id="target-model-a",
                 ingress_request_id="ingress-123",
                 attempt_number=2,
                 provider_correlation_id="resp_123",
@@ -120,6 +121,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
         assert request_log_id == 41
         mock_session.add.assert_called_once()
         mock_session.commit.assert_awaited_once()
+        assert captured_entry["entry"].resolved_target_model_id == "target-model-a"
         assert captured_entry["entry"].ingress_request_id == "ingress-123"
         assert captured_entry["entry"].attempt_number == 2
         assert captured_entry["entry"].provider_correlation_id == "resp_123"

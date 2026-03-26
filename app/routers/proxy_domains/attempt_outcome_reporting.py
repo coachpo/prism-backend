@@ -117,6 +117,7 @@ async def record_request_log(
         model_id=state.setup.model_id,
         profile_id=state.profile_id,
         provider_type=state.setup.provider_type,
+        resolved_target_model_id=state.setup.resolved_target_model_id,
         endpoint_id=target.connection.endpoint_id,
         connection_id=target.connection.id,
         ingress_request_id=state.setup.ingress_request_id,
@@ -239,6 +240,7 @@ class StreamFinalizationSnapshot:
     provider_id: int
     provider_correlation_id: str | None
     provider_type: str
+    resolved_target_model_id: str | None
     record_audit_log_fn: RecordAuditLogFn
     request_body: bytes | None
     request_headers: dict[str, str]
@@ -287,6 +289,7 @@ def build_stream_finalization_snapshot(
         provider_id=state.setup.provider_id,
         provider_correlation_id=provider_correlation_id,
         provider_type=state.setup.provider_type,
+        resolved_target_model_id=state.setup.resolved_target_model_id,
         record_audit_log_fn=deps.record_audit_log_fn,
         request_body=bytes(target.endpoint_body)
         if target.endpoint_body is not None
@@ -310,6 +313,7 @@ async def _persist_stream_request_log(
         model_id=snapshot.model_id,
         profile_id=snapshot.profile_id,
         provider_type=snapshot.provider_type,
+        resolved_target_model_id=snapshot.resolved_target_model_id,
         endpoint_id=snapshot.endpoint_id,
         connection_id=snapshot.connection_id,
         ingress_request_id=snapshot.ingress_request_id,

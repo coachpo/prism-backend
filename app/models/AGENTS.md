@@ -25,14 +25,15 @@ models/
 - `WebAuthnChallenge` & `WebAuthnCredential`: Passkey lifecycle and device metadata.
 
 ### ROUTING
-- `ModelConfig`: Per-profile model settings, attached loadbalance strategy selection for native models, and redirect targets.
+- `ModelConfig`: Per-profile model settings, attached loadbalance strategy selection for native models, and ordered proxy-target routing for proxy models.
+- `ModelProxyTarget`: Ordered proxy-model target rows that connect one proxy model to one native target model.
 - `LoadbalanceStrategy`: Profile-scoped reusable routing strategy metadata for native model attachment.
 - `Endpoint`: Encrypted upstream base URLs and API keys.
 - `PricingTemplate`: Costing rules for input, output, reasoning, and cache tokens.
 - `Connection`: Linkage between model configs, endpoints, and pricing; owns health status.
 
 ### OBSERVABILITY
-- `RequestLog`: High-volume telemetry for all proxy traffic; owns billable and priced flags.
+- `RequestLog`: High-volume telemetry for all proxy traffic; owns requested model identity plus resolved target identity when proxy routing is involved, along with billable and priced flags.
 - `UserSetting`: Per-profile currency and timezone preferences.
 - `EndpointFxRateSetting`: Custom FX rates for specific model/endpoint pairs.
 - `HeaderBlocklistRule`: System and profile-scoped rules for stripping sensitive headers.

@@ -15,6 +15,7 @@ def _request_log(
     response_time_ms: int,
     created_at: datetime,
     status_code: int = 200,
+    resolved_target_model_id: str | None = None,
     ingress_request_id: str | None = None,
     attempt_number: int | None = None,
     provider_correlation_id: str | None = None,
@@ -23,6 +24,7 @@ def _request_log(
         profile_id=profile_id,
         model_id="gpt-test",
         provider_type="openai",
+        resolved_target_model_id=resolved_target_model_id,
         endpoint_id=None,
         connection_id=None,
         ingress_request_id=ingress_request_id,
@@ -357,3 +359,39 @@ async def test_get_request_logs_filters_by_ingress_request_id_and_preserves_atte
     assert total == 2
     assert [item.attempt_number for item in items] == [2, 1]
     assert [item.provider_correlation_id for item in items] == ["resp-2", "resp-1"]
+
+
+@pytest.mark.asyncio
+async def test_get_request_logs_preserves_resolved_target_model_id() -> None:
+    from app.services.stats.request_logs import get_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"resolved-target-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add(
+            _request_log(
+                profile_id=profile.id,
+                response_time_ms=100,
+                created_at=created_at,
+                resolved_target_model_id="target-model-a",
+            )
+        )
+        await db.commit()
+
+        items, total = await get_request_logs(
+            db,
+            profile_id=profile.id,
+            limit=50,
+            offset=0,
+        )
+
+    assert total == 1
+    assert items[0].resolved_target_model_id == "target-model-a"

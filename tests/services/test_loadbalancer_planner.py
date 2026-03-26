@@ -75,38 +75,119 @@ class TestLoadbalancerPlanner:
         assert [connection.id for connection in ordered] == [7, 9, 11]
 
     @pytest.mark.asyncio
-    async def test_get_model_config_with_connections_resolves_proxy_target(self):
+    async def test_get_model_config_with_connections_selects_first_available_proxy_target(
+        self,
+    ):
+        from app.models.models import Connection
         from app.services.loadbalancer.planner import get_model_config_with_connections
+        from app.services.loadbalancer.types import AttemptPlan
 
         proxy_model = SimpleNamespace(
             profile_id=5,
             model_id="alias-model",
             model_type="proxy",
-            redirect_to="target-model",
+            proxy_targets=[
+                SimpleNamespace(target_model_id="target-model-a", position=0),
+                SimpleNamespace(target_model_id="target-model-b", position=1),
+            ],
         )
-        target_model = SimpleNamespace(
+        target_model_a = SimpleNamespace(
             profile_id=5,
-            model_id="target-model",
+            model_id="target-model-a",
             model_type="native",
-            redirect_to=None,
+        )
+        connection = SimpleNamespace(id=11)
+
+        first_result = MagicMock()
+        first_result.scalar_one_or_none.return_value = proxy_model
+        second_result = MagicMock()
+        second_result.scalar_one_or_none.return_value = target_model_a
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[first_result, second_result])
+
+        with patch(
+            "app.services.loadbalancer.planner.build_attempt_plan",
+            AsyncMock(
+                return_value=AttemptPlan(
+                    connections=cast(list[Connection], [connection]),
+                    blocked_connection_ids=[],
+                    probe_eligible_connection_ids=[],
+                )
+            ),
+        ):
+            resolved = await get_model_config_with_connections(
+                db=db,
+                profile_id=5,
+                model_id="alias-model",
+            )
+
+        assert resolved is target_model_a
+        assert db.execute.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_get_model_config_with_connections_skips_proxy_target_without_attempt_plan(
+        self,
+    ):
+        from app.models.models import Connection
+        from app.services.loadbalancer.planner import get_model_config_with_connections
+        from app.services.loadbalancer.types import AttemptPlan
+
+        proxy_model = SimpleNamespace(
+            profile_id=5,
+            model_id="alias-model",
+            model_type="proxy",
+            proxy_targets=[
+                SimpleNamespace(target_model_id="target-model-a", position=0),
+                SimpleNamespace(target_model_id="target-model-b", position=1),
+            ],
+        )
+        target_model_a = SimpleNamespace(
+            profile_id=5,
+            model_id="target-model-a",
+            model_type="native",
+        )
+        target_model_b = SimpleNamespace(
+            profile_id=5,
+            model_id="target-model-b",
+            model_type="native",
         )
 
         first_result = MagicMock()
         first_result.scalar_one_or_none.return_value = proxy_model
         second_result = MagicMock()
-        second_result.scalar_one_or_none.return_value = target_model
+        second_result.scalar_one_or_none.return_value = target_model_a
+        third_result = MagicMock()
+        third_result.scalar_one_or_none.return_value = target_model_b
 
         db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[first_result, second_result])
+        db.execute = AsyncMock(side_effect=[first_result, second_result, third_result])
 
-        resolved = await get_model_config_with_connections(
-            db=db,
-            profile_id=5,
-            model_id="alias-model",
-        )
+        with patch(
+            "app.services.loadbalancer.planner.build_attempt_plan",
+            AsyncMock(
+                side_effect=[
+                    AttemptPlan(
+                        connections=[],
+                        blocked_connection_ids=[],
+                        probe_eligible_connection_ids=[],
+                    ),
+                    AttemptPlan(
+                        connections=cast(list[Connection], [SimpleNamespace(id=22)]),
+                        blocked_connection_ids=[],
+                        probe_eligible_connection_ids=[],
+                    ),
+                ]
+            ),
+        ):
+            resolved = await get_model_config_with_connections(
+                db=db,
+                profile_id=5,
+                model_id="alias-model",
+            )
 
-        assert resolved is target_model
-        assert db.execute.await_count == 2
+        assert resolved is target_model_b
+        assert db.execute.await_count == 3
 
     @pytest.mark.asyncio
     async def test_build_attempt_plan_reports_probe_eligible_candidates_without_mutation(

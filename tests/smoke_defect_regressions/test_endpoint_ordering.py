@@ -223,7 +223,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         ordered_import = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": f"DEF063 Import Later {suffix}",
@@ -258,7 +258,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         legacy_import = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": f"DEF063 Legacy One {suffix}",

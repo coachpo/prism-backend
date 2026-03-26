@@ -1526,11 +1526,18 @@ class TestDEF021_StreamingCancellationResilience:
 
 class TestDEF080_OpenAIChatStreamingUsageOptIn:
     @staticmethod
-    def _build_request(app, raw_body: bytes, path: str = "/v1/responses"):
+    def _build_request(
+        app,
+        raw_body: bytes,
+        *,
+        path: str = "/v1/responses",
+        raw_path: bytes | None = None,
+    ):
         return TestDEF021_StreamingCancellationResilience._build_request(
             app,
             raw_body,
             path=path,
+            raw_path=path.encode("utf-8") if raw_path is None else raw_path,
         )
 
     @staticmethod
@@ -1538,8 +1545,12 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         return TestDEF021_StreamingCancellationResilience._build_db_mock()
 
     @staticmethod
-    def _build_model_config_and_endpoint():
-        return TestDEF021_StreamingCancellationResilience._build_model_config_and_endpoint()
+    def _build_model_config_and_endpoint(**kwargs):
+        return (
+            TestDEF021_StreamingCancellationResilience._build_model_config_and_endpoint(
+                **kwargs,
+            )
+        )
 
     @staticmethod
     async def _wait_for_asyncmock_calls(

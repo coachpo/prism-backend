@@ -297,7 +297,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": f"DEF068 E0 {suffix}",

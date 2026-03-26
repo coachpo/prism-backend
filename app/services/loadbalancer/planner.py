@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.time import ensure_utc_datetime, utc_now
-from app.models.models import Connection, ModelConfig
+from app.models.models import Connection, ModelConfig, ModelProxyTarget
 
 from .state import get_current_states_for_connections
 from .types import AttemptPlan
@@ -15,13 +15,27 @@ logger = logging.getLogger("app.services.loadbalancer")
 
 
 def _is_connection_banned(current_state, *, now_at: datetime) -> bool:
-    if current_state.ban_mode == "manual":
+    if getattr(current_state, "ban_mode", "off") == "manual":
         return True
-    banned_until_at = ensure_utc_datetime(current_state.banned_until_at)
+    banned_until_at = ensure_utc_datetime(
+        getattr(current_state, "banned_until_at", None)
+    )
     return banned_until_at is not None and banned_until_at > now_at
 
 
+def _resolve_proxy_target_model_id(proxy_target) -> str | None:
+    direct_target_model_id = getattr(proxy_target, "target_model_id", None)
+    if isinstance(direct_target_model_id, str) and direct_target_model_id:
+        return direct_target_model_id
+    target_model = getattr(proxy_target, "target_model_config", None)
+    target_model_id = getattr(target_model, "model_id", None)
+    return target_model_id if isinstance(target_model_id, str) else None
+
+
 MODEL_CONFIG_WITH_CONNECTION_OPTIONS = (
+    selectinload(ModelConfig.proxy_targets).selectinload(
+        ModelProxyTarget.target_model_config
+    ),
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
     selectinload(ModelConfig.loadbalance_strategy),
@@ -64,23 +78,44 @@ async def get_model_config_with_connections(
     if config is None:
         return None
 
-    if config.model_type != "proxy" or not config.redirect_to:
+    if config.model_type != "proxy":
         return config
 
-    target = await _load_enabled_model_config(
-        db,
-        profile_id=profile_id,
-        model_id=config.redirect_to,
-    )
-    if target is None:
-        logger.warning(
-            "Proxy target model_id=%r not found or disabled for profile_id=%d proxy model_id=%r",
-            config.redirect_to,
-            profile_id,
-            model_id,
+    for proxy_target in sorted(
+        getattr(config, "proxy_targets", []),
+        key=lambda proxy_target: proxy_target.position,
+    ):
+        target_model_id = _resolve_proxy_target_model_id(proxy_target)
+        if target_model_id is None:
+            continue
+        target = await _load_enabled_model_config(
+            db,
+            profile_id=profile_id,
+            model_id=target_model_id,
         )
-        return None
-    return target
+        if target is None:
+            logger.warning(
+                "Proxy target model_id=%r not found or disabled for profile_id=%d proxy model_id=%r",
+                target_model_id,
+                profile_id,
+                model_id,
+            )
+            continue
+        attempt_plan = await build_attempt_plan(
+            db,
+            profile_id,
+            target,
+            utc_now(),
+        )
+        if attempt_plan.connections:
+            return target
+
+    logger.warning(
+        "Proxy model_id=%r has no enabled target model with an attempt plan for profile_id=%d",
+        model_id,
+        profile_id,
+    )
+    return None
 
 
 def get_active_connections(model_config: ModelConfig) -> list[Connection]:
@@ -182,7 +217,9 @@ async def build_attempt_plan(
             blocked_connection_ids.append(connection.id)
             continue
 
-        if blocked_until_at is not None and not current_state.probe_eligible_logged:
+        if blocked_until_at is not None and not getattr(
+            current_state, "probe_eligible_logged", False
+        ):
             probe_eligible_connection_ids.append(connection.id)
 
         attempt_plan.append(connection)
