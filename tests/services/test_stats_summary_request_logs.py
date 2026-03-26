@@ -22,7 +22,7 @@ def _request_log(
         provider_type="openai",
         endpoint_id=None,
         connection_id=None,
-        endpoint_base_url="https://api.openai.com/v1",
+        endpoint_base_url="https://api.openai.com",
         status_code=status_code,
         response_time_ms=response_time_ms,
         is_stream=False,

@@ -132,7 +132,7 @@ class TestObservabilityAttribution:
                 provider_type="openai",
                 endpoint_id=10,
                 connection_id=20,
-                endpoint_base_url="https://api.openai.com/v1",
+                endpoint_base_url="https://api.openai.com",
                 status_code=200,
                 response_time_ms=100,
                 is_stream=False,

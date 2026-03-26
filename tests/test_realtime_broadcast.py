@@ -317,7 +317,7 @@ async def test_log_request_enqueues_dashboard_broadcast_payload() -> None:
             provider_type="openai",
             endpoint_id=4,
             connection_id=8,
-            endpoint_base_url="https://api.openai.com/v1",
+            endpoint_base_url="https://api.openai.com",
             status_code=200,
             response_time_ms=145,
             is_stream=False,
@@ -1027,7 +1027,7 @@ async def test_record_attempt_audit_skips_when_request_log_id_missing() -> None:
     target = MagicMock()
     target.connection.endpoint_id = 4
     target.connection.id = 8
-    target.connection.endpoint_rel.base_url = "https://api.openai.com/v1"
+    target.connection.endpoint_rel.base_url = "https://api.openai.com"
     target.description = "Primary endpoint"
     target.upstream_url = "https://api.openai.com/v1/chat/completions"
     target.headers = {"authorization": "Bearer sk-test"}
@@ -1399,7 +1399,7 @@ async def test_log_request_returns_id_when_dashboard_enqueue_fails() -> None:
             provider_type="openai",
             endpoint_id=4,
             connection_id=8,
-            endpoint_base_url="https://api.openai.com/v1",
+            endpoint_base_url="https://api.openai.com",
             status_code=500,
             response_time_ms=145,
             is_stream=False,
@@ -1465,7 +1465,7 @@ async def test_log_request_keeps_committed_id_when_background_build_fails() -> N
             provider_type="openai",
             endpoint_id=4,
             connection_id=8,
-            endpoint_base_url="https://api.openai.com/v1",
+            endpoint_base_url="https://api.openai.com",
             status_code=500,
             response_time_ms=145,
             is_stream=False,
