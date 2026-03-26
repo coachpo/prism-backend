@@ -138,7 +138,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 "endpoints": [
                     {
                         "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                     }
                 ],
@@ -176,7 +176,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 "endpoints": [
                     {
                         "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                         "position": 0,
                     }
@@ -216,7 +216,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 "endpoints": [
                     {
                         "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                         "position": 0,
                     }
@@ -274,7 +274,7 @@ class TestLoadbalanceStrategyFieldValidation:
             endpoints=[
                 ConfigEndpointExport(
                     name="openai-main",
-                    base_url="https://api.openai.com/v1",
+                    base_url="https://api.openai.com",
                     api_key="sk-test",
                     position=0,
                 )

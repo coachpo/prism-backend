@@ -76,7 +76,7 @@ class TestConfigExportImportIsolation:
             id=10,
             profile_id=1,
             name="openai-main",
-            base_url="https://api.openai.com/v1",
+            base_url="https://api.openai.com",
             api_key="sk-test",
             position=0,
         )
@@ -230,14 +230,14 @@ class TestConfigExportImportIsolation:
             target_endpoint = Endpoint(
                 profile_id=target_profile.id,
                 name=old_target_endpoint_name,
-                base_url="https://api.openai.com/v1",
+                base_url="https://api.openai.com",
                 api_key="sk-target-old",
                 position=0,
             )
             other_endpoint = Endpoint(
                 profile_id=other_profile.id,
                 name=other_endpoint_name,
-                base_url="https://api.openai.com/v1",
+                base_url="https://api.openai.com",
                 api_key="sk-other",
                 position=0,
             )
@@ -338,7 +338,7 @@ class TestConfigExportImportIsolation:
                 "endpoints": [
                     {
                         "name": new_endpoint_name,
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-target-new",
                     }
                 ],

@@ -208,7 +208,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             endpoints=[
                 ConfigEndpointExport(
                     name="openai-main",
-                    base_url="https://api.openai.com/v1",
+                    base_url="https://api.openai.com",
                     api_key="sk-test",
                     position=0,
                 )
@@ -283,7 +283,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         {
                             "endpoint_id": 1,
                             "name": "openai-main",
-                            "base_url": "https://api.openai.com/v1",
+                            "base_url": "https://api.openai.com",
                             "api_key": "sk-test",
                             "position": 0,
                         }
@@ -335,7 +335,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "endpoints": [
                     {
                         "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                     }
                 ],
@@ -386,7 +386,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "endpoints": [
                     {
                         "name": "openai-main",
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                     }
                 ],

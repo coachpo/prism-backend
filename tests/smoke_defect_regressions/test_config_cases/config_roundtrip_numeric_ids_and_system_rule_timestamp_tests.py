@@ -42,7 +42,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                 "endpoints": [
                     {
                         "name": endpoint_name,
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test",
                     }
                 ],
@@ -213,12 +213,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                 "endpoints": [
                     {
                         "name": endpoint_a_name,
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test-a",
                     },
                     {
                         "name": endpoint_b_name,
-                        "base_url": "https://api.openai.com/v1",
+                        "base_url": "https://api.openai.com",
                         "api_key": "sk-test-b",
                     },
                 ],
