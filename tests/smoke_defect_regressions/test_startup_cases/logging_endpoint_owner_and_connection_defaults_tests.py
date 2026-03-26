@@ -283,7 +283,7 @@ class TestEndpointOwnerRoute:
         mock_endpoint = MagicMock()
         mock_endpoint.id = 13
         mock_endpoint.name = "primary"
-        mock_endpoint.base_url = "https://api.openai.com/v1"
+        mock_endpoint.base_url = "https://api.openai.com"
 
         mock_connection = MagicMock()
         mock_connection.id = 7
@@ -306,7 +306,7 @@ class TestEndpointOwnerRoute:
         assert response.connection_name == "PackyCode"
         assert response.endpoint_id == 13
         assert response.endpoint_name == "primary"
-        assert response.endpoint_base_url == "https://api.openai.com/v1"
+        assert response.endpoint_base_url == "https://api.openai.com"
 
     @pytest.mark.asyncio
     async def test_owner_route_returns_404_for_missing_endpoint(self):

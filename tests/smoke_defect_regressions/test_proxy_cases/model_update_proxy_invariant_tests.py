@@ -174,7 +174,7 @@ class TestDEF032_ProxyModelUpdateInvariants:
             endpoint = Endpoint(
                 profile_id=profile.id,
                 name=f"DEF032 endpoint {suffix}",
-                base_url="https://api.openai.com/v1",
+                base_url="https://api.openai.com",
                 api_key="sk-test",
                 position=0,
             )

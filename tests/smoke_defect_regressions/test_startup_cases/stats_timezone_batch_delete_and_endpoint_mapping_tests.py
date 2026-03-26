@@ -791,7 +791,7 @@ class TestBatchDeleteValidation:
         row.model_id = "gpt-4o-mini"
         row.endpoint_id = 5
         row.connection_id = 8
-        row.endpoint_base_url = "https://api.openai.com/v1"
+        row.endpoint_base_url = "https://api.openai.com"
         row.endpoint_description = "Primary endpoint"
         row.request_method = "POST"
         row.request_url = "https://api.openai.com/v1/responses"
@@ -837,7 +837,7 @@ class TestDEF061_ConnectionResponseEndpointMapping:
             id=3,
             profile_id=1,
             name="primary-endpoint",
-            base_url="https://api.openai.com/v1",
+            base_url="https://api.openai.com",
             api_key="sk-test",
             position=0,
             created_at=now,

@@ -172,7 +172,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         provider.id = 1
 
         endpoint_rel = MagicMock()
-        endpoint_rel.base_url = "https://api.openai.com/v1"
+        endpoint_rel.base_url = "https://api.openai.com"
 
         connection = MagicMock()
         connection.id = 1001
@@ -611,7 +611,7 @@ class TestDEF021_StreamingCancellationResilience:
         endpoint = MagicMock()
         endpoint.id = 201
         endpoint.endpoint_id = 201
-        endpoint.base_url = "https://api.openai.com/v1"
+        endpoint.base_url = "https://api.openai.com"
         endpoint.api_key = "sk-test"
         endpoint.auth_type = None
         endpoint.name = "primary"
