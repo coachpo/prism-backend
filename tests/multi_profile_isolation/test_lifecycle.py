@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 
 from app.models.models import (
     Profile,
-    Provider,
     ModelConfig,
     Endpoint,
     Connection,
