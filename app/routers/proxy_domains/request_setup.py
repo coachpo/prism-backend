@@ -31,6 +31,7 @@ from app.services.proxy_service import (
 from .proxy_request_helpers import (
     extract_model_from_path,
     get_client_headers,
+    inject_openai_stream_usage_option,
     resolve_model_id,
     rewrite_model_in_body,
     rewrite_model_in_path,
@@ -109,6 +110,12 @@ async def prepare_proxy_request(
     rewritten_body = raw_body
     if raw_body and body_model_id and upstream_model_id != body_model_id:
         rewritten_body = rewrite_model_in_body(raw_body, upstream_model_id)
+    if rewritten_body and is_streaming:
+        rewritten_body = inject_openai_stream_usage_option(
+            rewritten_body,
+            provider_type,
+            request_path,
+        )
 
     path_model = extract_model_from_path(request_path)
     effective_request_path = request_path

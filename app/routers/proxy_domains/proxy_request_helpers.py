@@ -157,6 +157,48 @@ def rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
     return _rewrite_model_in_body(raw_body, target_model_id)
 
 
+def _inject_openai_stream_usage_option(
+    raw_body: bytes,
+    provider_type: str,
+    request_path: str,
+) -> bytes:
+    if provider_type != "openai":
+        return raw_body
+
+    if not request_path.rstrip("/").endswith("/chat/completions"):
+        return raw_body
+
+    try:
+        payload = cast(object, json.loads(raw_body))
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+        return raw_body
+
+    payload_dict = _as_object_dict(payload)
+    if payload_dict is None:
+        return raw_body
+
+    stream_options_value = payload_dict.get("stream_options")
+    stream_options_dict = _as_object_dict(stream_options_value)
+    stream_options = (
+        dict(stream_options_dict) if stream_options_dict is not None else {}
+    )
+    stream_options["include_usage"] = True
+    payload_dict["stream_options"] = stream_options
+
+    try:
+        return json.dumps(payload_dict, separators=(",", ":")).encode("utf-8")
+    except (TypeError, ValueError):
+        return raw_body
+
+
+def inject_openai_stream_usage_option(
+    raw_body: bytes,
+    provider_type: str,
+    request_path: str,
+) -> bytes:
+    return _inject_openai_stream_usage_option(raw_body, provider_type, request_path)
+
+
 _AUTH_LIKE_ERROR_RE = re.compile(
     r"(auth|authoriz|forbidden|permission|api[\s_-]?key|token|credential|access denied)",
     re.IGNORECASE,
