@@ -214,7 +214,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
         assert [endpoint.position for endpoint in endpoints_b] == [0]
 
         exported = await export_config(db=db, profile_id=profile_a.id)
-        payload = json.loads(exported.body.decode("utf-8"))
+        payload = json.loads(bytes(exported.body).decode("utf-8"))
         assert [endpoint["name"] for endpoint in payload["endpoints"]] == [
             f"DEF063 A Second {suffix}",
             f"DEF063 A First {suffix}",
@@ -223,7 +223,8 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         ordered_import = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [],
                 "endpoints": [
                     {
                         "name": f"DEF063 Import Later {suffix}",
@@ -258,7 +259,8 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         legacy_import = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [],
                 "endpoints": [
                     {
                         "name": f"DEF063 Legacy One {suffix}",
