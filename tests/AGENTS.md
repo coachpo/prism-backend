@@ -7,6 +7,7 @@
 ```
 tests/
 ├── conftest.py                           # PostgreSQL testcontainer and Alembic bootstrap
+├── loadbalance_strategy_helpers.py       # Shared loadbalance strategy fixtures and payload helpers
 ├── test_smoke_defect_regressions.py      # Top-level DEF aggregator, currently through DEF079
 ├── test_multi_profile_isolation.py       # Top-level selected-vs-active profile isolation aggregator for the core subtree
 ├── test_realtime_broadcast.py            # Websocket channel fanout and dashboard update coverage
@@ -27,6 +28,7 @@ tests/
 ## WHERE TO LOOK
 
 - Testcontainer setup and migrated database bootstrap: `conftest.py`
+- Shared loadbalance strategy helper payloads used by focused tests: `loadbalance_strategy_helpers.py`
 - Smoke regression export surface and current DEF range: `test_smoke_defect_regressions.py`
 - Multi-profile export surface: `test_multi_profile_isolation.py`
 - Multi-profile leaf that is currently not re-exported by the top-level aggregator: `multi_profile_isolation/test_connection_priority_isolation.py`

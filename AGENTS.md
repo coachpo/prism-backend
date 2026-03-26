@@ -6,45 +6,36 @@ Prism's backend owns the management API on `/api/*` and the runtime proxy API on
 ## STRUCTURE
 ```
 backend/
-├── app/AGENTS.md                                # Live runtime map
-├── app/alembic/                                 # Packaged Alembic env + revisions; schema source of truth
-├── app/bootstrap/AGENTS.md                      # Startup sequence and auth split
-├── app/core/AGENTS.md                           # Settings, database, auth helpers, crypto, migrations
-├── app/models/AGENTS.md                         # ORM domain ownership and `models.py` boundary
-├── app/routers/AGENTS.md                        # Router map and domain packages
-├── app/routers/proxy_domains/AGENTS.md          # Runtime proxy execution package
-├── app/routers/connections_domains/AGENTS.md    # Connection router leaf map
-├── app/schemas/AGENTS.md                        # Contract ownership and `schemas.py` boundary
-├── app/services/AGENTS.md                       # Service-root boundaries, worker infra, reporting helpers
-├── app/services/auth/AGENTS.md                  # Session, email, reset, proxy-key internals
-├── app/services/loadbalancer/AGENTS.md          # Planner, state, recovery, events, admin seams
-├── app/services/proxy_support/AGENTS.md         # Upstream URL, header, body, transport helpers
-├── app/services/realtime/AGENTS.md              # Websocket room-state ownership
-├── app/services/stats/AGENTS.md                 # Telemetry, spending, throughput, dashboard helpers
-├── app/services/webauthn/AGENTS.md              # Passkey internals
-├── tests/AGENTS.md                              # Test map and aggregators
-├── tests/services/AGENTS.md                     # Focused service-test handoff
-├── tests/multi_profile_isolation/AGENTS.md      # Cross-profile containment hierarchy
-├── tests/smoke_defect_regressions/AGENTS.md     # DEF hierarchy map and leaf ownership
-├── alembic.ini                                  # Root Alembic CLI config pointing at `app/alembic`
-├── Dockerfile
-├── docker-compose.yml                           # PostgreSQL-only helper on 15432
-├── pyproject.toml                               # Runtime deps and `prism-backend` console script
+├── app/AGENTS.md                                                # Live runtime map
+├── app/alembic/                                                 # Packaged Alembic env + revisions; schema source of truth
+├── app/bootstrap/AGENTS.md                                      # Startup sequence and auth split
+├── app/core/AGENTS.md                                           # Settings, database, auth helpers, crypto, migrations
+├── app/models/AGENTS.md                                         # ORM domain ownership and `models.py` boundary
+├── app/routers/AGENTS.md                                        # Router map, standalone routers, and leaf handoff
+├── app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md
+├── app/routers/connections_domains/AGENTS.md                    # Dense connection-management leaf
+├── app/routers/proxy_domains/AGENTS.md                          # Dense runtime proxy leaf
+├── app/schemas/AGENTS.md                                        # Contract ownership and `schemas.py` boundary
+├── app/services/AGENTS.md                                       # Service-root boundaries, worker infra, reporting helpers
+├── app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md
+├── tests/AGENTS.md                                              # Test map and aggregators
+├── tests/services/AGENTS.md                                     # Focused service-test handoff
+├── tests/multi_profile_isolation/AGENTS.md                      # Cross-profile containment hierarchy
+├── tests/smoke_defect_regressions/AGENTS.md                     # DEF hierarchy map and leaf ownership
+├── alembic.ini                                                  # Root Alembic CLI config pointing at `app/alembic`
+├── docker-compose.yml                                           # PostgreSQL-only helper on 15432
+├── pyproject.toml                                               # Runtime deps and `prism-backend` console script
 └── uv.lock
 ```
 
 ## CHILD DOCS
 
 - `app/AGENTS.md`: live runtime map.
-- `app/bootstrap/AGENTS.md`: startup sequence, seed defaults, and middleware auth split.
-- `app/core/AGENTS.md`: settings, database, auth helpers, crypto, and migrations.
-- `app/models/AGENTS.md`: ORM domains and the `models.py` export boundary.
-- `app/routers/AGENTS.md`: router map and domain package handoffs.
-- `app/routers/proxy_domains/AGENTS.md`: runtime proxy setup, attempt execution, streaming, and reporting.
-- `app/routers/connections_domains/AGENTS.md`: connection CRUD, health checks, and owner helpers.
-- `app/schemas/AGENTS.md`: schema contract boundary and `schemas.py` surface.
-- `app/services/AGENTS.md`: service-root boundaries, worker lifecycle, and reporting helpers.
-- `app/services/auth/AGENTS.md`, `app/services/loadbalancer/AGENTS.md`, `app/services/proxy_support/AGENTS.md`, `app/services/realtime/AGENTS.md`, `app/services/stats/AGENTS.md`, `app/services/webauthn/AGENTS.md`: deeper package docs.
+- `app/bootstrap/AGENTS.md`, `app/core/AGENTS.md`, `app/models/AGENTS.md`, `app/schemas/AGENTS.md`: startup, shared infra, ORM, and contract boundaries.
+- `app/routers/AGENTS.md`: router parent map.
+- `app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
+- `app/routers/connections_domains/AGENTS.md`, `app/routers/proxy_domains/AGENTS.md`: the two densest router packages.
+- `app/services/AGENTS.md` plus `app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service-root and service-package boundaries.
 - `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, and `tests/multi_profile_isolation/AGENTS.md`: test hierarchy and suite leaves.
 
 ## RUNTIME FACTS
@@ -62,7 +53,7 @@ backend/
 - App assembly, router registration, lifespan startup, and shared infra wiring: `app/main.py`
 - Startup sequencing, provider and profile seeding, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
 - Management versus runtime scope rules: `app/dependencies.py`
-- Router map and runtime proxy package: `app/routers/AGENTS.md`, `app/routers/proxy_domains/AGENTS.md`
+- Router map and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
 - Shared worker lifecycle, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
 - Migration source of truth: `alembic.ini`, `app/alembic/`, `app/core/migrations.py`
@@ -73,7 +64,7 @@ backend/
 - Keep backend workflow and commands uv-native.
 - Keep parent docs summary-oriented and push package detail down into child AGENTS files.
 - Keep app-owned shared infrastructure in `app/main.py`; feature code should consume `app.state.http_client` and `app.state.background_task_manager`.
-- Keep routers thin. Dense logic belongs in `*_domains/`, `proxy_domains/`, or service modules.
+- Keep routers thin. Dense logic belongs in `*_domains/`, `connections_domains/`, `proxy_domains/`, or service modules.
 - Use `app.schemas.schemas`, `app.models.models`, and the service-root `*_service.py` modules as the supported re-export boundaries.
 - Keep management auth and profile rules separate from runtime proxy auth and routing semantics.
 
@@ -85,4 +76,4 @@ backend/
 - Do not describe `docker-compose.yml` as a full stack definition. It provisions PostgreSQL only.
 - Do not import schema, model, or service leaf modules when a documented re-export boundary exists.
 - Do not blur management effective-profile behavior with runtime active-profile routing or proxy-key auth.
-- Do not duplicate leaf-level router, service, schema, or test internals here when the child docs already own them.
+- Do not stale-claim that most router-domain packages are parent-covered; the management `*_domains/` packages now have their own AGENTS leaves.
