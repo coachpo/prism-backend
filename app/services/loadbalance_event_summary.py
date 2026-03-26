@@ -41,6 +41,30 @@ def describe_loadbalance_event(
         else "the failover threshold"
     )
 
+    if event_type == "max_cooldown_strike":
+        return {
+            "event": "Connection hit max cooldown",
+            "reason": (
+                f"The {failure_label} pushed the connection to the configured max cooldown after {consecutive_failures} consecutive failures."
+            ),
+            "operation": (
+                "Prism recorded a max-cooldown strike for ban escalation tracking."
+            ),
+            "cooldown": cooldown_label,
+        }
+
+    if event_type == "banned":
+        return {
+            "event": "Connection was banned",
+            "reason": (
+                f"The {failure_label} reached the ban escalation threshold after {consecutive_failures} consecutive failures."
+            ),
+            "operation": (
+                "Prism removed the connection from normal failover planning until the ban clears or is reset."
+            ),
+            "cooldown": cooldown_label,
+        }
+
     if event_type == "opened":
         if failure_kind == "auth_like":
             reason = "An authentication-like failure triggered the dedicated recovery cooldown."

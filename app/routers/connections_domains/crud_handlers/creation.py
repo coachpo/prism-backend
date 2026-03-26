@@ -4,7 +4,7 @@ from app.models.models import Connection
 from app.schemas.schemas import ConnectionCreate
 
 from ..crud_dependencies import ConnectionCrudDependencies
-from .shared import resolve_create_endpoint
+from .shared import build_connection_limiter_data, resolve_create_endpoint
 
 
 async def create_connection_record(
@@ -51,6 +51,7 @@ async def create_connection_record(
         auth_type=body.auth_type,
         custom_headers=deps.serialize_custom_headers_fn(body.custom_headers),
         pricing_template_id=pricing_template_id,
+        **build_connection_limiter_data(body=body, exclude_unset=False),
     )
     db.add(connection)
     await db.flush()

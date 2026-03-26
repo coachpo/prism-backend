@@ -54,6 +54,21 @@ def _is_recovery_success_status(status_code: int) -> bool:
     return 200 <= status_code < 400
 
 
+async def _release_limiter_lease_if_needed(
+    *,
+    deps: ProxyRuntimeDependencies,
+    state: ProxyRequestState,
+    target: ProxyAttemptTarget,
+) -> None:
+    if target.limiter_lease_token is None:
+        return
+    await deps.release_connection_lease_fn(
+        profile_id=state.profile_id,
+        lease_token=target.limiter_lease_token,
+        now_at=None,
+    )
+
+
 async def _record_connection_recovery_if_needed(
     *,
     deps: ProxyRuntimeDependencies,
@@ -157,6 +172,11 @@ async def handle_streaming_attempt(
                 elapsed_ms=elapsed_ms,
                 error_detail=error_detail,
             )
+            await _release_limiter_lease_if_needed(
+                deps=deps,
+                state=state,
+                target=target,
+            )
             await _record_connection_failure_if_needed(
                 deps=deps,
                 state=state,
@@ -178,6 +198,11 @@ async def handle_streaming_attempt(
             elapsed_ms=elapsed_ms,
             error_detail=error_detail,
             tokens=tokens,
+        )
+        await _release_limiter_lease_if_needed(
+            deps=deps,
+            state=state,
+            target=target,
         )
         await _record_connection_recovery_if_needed(
             deps=deps,
@@ -252,6 +277,11 @@ async def handle_buffered_attempt(
             elapsed_ms=elapsed_ms,
             error_detail=response_error_detail(response.content),
         )
+        await _release_limiter_lease_if_needed(
+            deps=deps,
+            state=state,
+            target=target,
+        )
         await _record_connection_failure_if_needed(
             deps=deps,
             state=state,
@@ -277,6 +307,11 @@ async def handle_buffered_attempt(
         elapsed_ms=elapsed_ms,
         error_detail=error_detail,
         tokens=tokens,
+    )
+    await _release_limiter_lease_if_needed(
+        deps=deps,
+        state=state,
+        target=target,
     )
     await _record_connection_recovery_if_needed(
         deps=deps,
@@ -320,6 +355,11 @@ async def handle_transport_exception(
         is_stream=state.setup.is_streaming,
         elapsed_ms=elapsed_ms,
         error_detail=str(exc)[:500],
+    )
+    await _release_limiter_lease_if_needed(
+        deps=deps,
+        state=state,
+        target=target,
     )
     await _record_connection_failure_if_needed(
         deps=deps,

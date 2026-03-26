@@ -23,10 +23,26 @@ from .request_setup import ProxyRequestSetup
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_LIMITER_LEASE_TTL_SECONDS = 30
+
+
+def _connection_has_limiter_config(connection: Connection) -> bool:
+    for field_name in (
+        "qps_limit",
+        "max_in_flight_non_stream",
+        "max_in_flight_stream",
+    ):
+        value = getattr(connection, field_name, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return True
+    return False
+
 
 def _build_attempt_target(
     *,
+    attempt_number: int,
     connection: Connection,
+    limiter_lease_token: str | None,
     request_query: str | None,
     setup: ProxyRequestSetup,
     deps: ProxyRuntimeDependencies,
@@ -40,6 +56,7 @@ def _build_attempt_target(
         upstream_url = f"{upstream_url}?{request_query}"
 
     return ProxyAttemptTarget(
+        attempt_number=attempt_number,
         connection=connection,
         description=connection.name or f"Connection {connection.id}",
         endpoint_body=setup.rewritten_body,
@@ -51,6 +68,7 @@ def _build_attempt_target(
             endpoint=connection.endpoint_rel,
             request_compressed=setup.request_compressed,
         ),
+        limiter_lease_token=limiter_lease_token,
         upstream_url=upstream_url,
     )
 
@@ -67,13 +85,14 @@ async def execute_proxy_attempts(
 ) -> Response | StreamingResponse:
     last_error = None
     attempted_any_endpoint = False
+    limiter_denied_any_endpoint = False
     state = ProxyRequestState(
         profile_id=profile_id,
         request_path=request_path,
         setup=setup,
     )
 
-    for connection in setup.endpoints_to_try:
+    for attempt_number, connection in enumerate(setup.endpoints_to_try, start=1):
         if connection.endpoint_rel is None:
             logger.warning(
                 "Skipping connection %d because endpoint is missing",
@@ -103,9 +122,30 @@ async def execute_proxy_attempts(
                 now_at=None,
             )
 
+        limiter_lease_token = None
+        if _connection_has_limiter_config(connection):
+            limiter_result = await deps.acquire_connection_limit_fn(
+                profile_id=profile_id,
+                connection=connection,
+                lease_kind="stream" if setup.is_streaming else "non_stream",
+                lease_ttl_seconds=DEFAULT_LIMITER_LEASE_TTL_SECONDS,
+                now_at=None,
+            )
+            if not limiter_result.admitted:
+                limiter_denied_any_endpoint = True
+                last_error = (
+                    f"Connection {connection.id} rejected by limiter: "
+                    f"{limiter_result.deny_reason}"
+                )
+                logger.info(last_error)
+                continue
+            limiter_lease_token = limiter_result.lease_token
+
         attempted_any_endpoint = True
         target = _build_attempt_target(
+            attempt_number=attempt_number,
             connection=connection,
+            limiter_lease_token=limiter_lease_token,
             request_query=request_query,
             setup=setup,
             deps=deps,
@@ -143,6 +183,14 @@ async def execute_proxy_attempts(
             return response
 
     if not attempted_any_endpoint:
+        if limiter_denied_any_endpoint:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"All connections for model '{setup.model_id}' are currently "
+                    "rate-limited or saturated."
+                ),
+            )
         raise HTTPException(
             status_code=503,
             detail=f"No active connections available for model '{setup.model_id}'.",

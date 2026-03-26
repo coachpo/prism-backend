@@ -102,6 +102,9 @@ class TestLoadbalanceStrategyFieldValidation:
             failover_max_cooldown_seconds=720,
             failover_jitter_ratio=0.35,
             failover_auth_error_cooldown_seconds=2400,
+            failover_ban_mode="temporary",
+            failover_max_cooldown_strikes_before_ban=3,
+            failover_ban_duration_seconds=600,
         )
 
         exported = strategy.model_dump(mode="json")
@@ -112,13 +115,16 @@ class TestLoadbalanceStrategyFieldValidation:
         assert exported["failover_max_cooldown_seconds"] == 720
         assert exported["failover_jitter_ratio"] == 0.35
         assert exported["failover_auth_error_cooldown_seconds"] == 2400
+        assert exported["failover_ban_mode"] == "temporary"
+        assert exported["failover_max_cooldown_strikes_before_ban"] == 3
+        assert exported["failover_ban_duration_seconds"] == 600
 
     def test_config_import_accepts_minimal_payload(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 4,
                 "endpoints": [],
                 "pricing_templates": [],
                 "loadbalance_strategies": [],
@@ -165,6 +171,9 @@ class TestLoadbalanceStrategyFieldValidation:
         strategy = validation.loadbalance_strategies[0]
         assert strategy.name == "failover-primary"
         assert strategy.failover_recovery_enabled is True
+        assert strategy.failover_ban_mode == "off"
+        assert strategy.failover_max_cooldown_strikes_before_ban == 0
+        assert strategy.failover_ban_duration_seconds == 0
 
     def test_config_import_rejects_native_model_missing_strategy_name(self):
         from app.routers.config import _validate_import
@@ -172,7 +181,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 4,
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -212,7 +221,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 4,
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -291,6 +300,9 @@ class TestLoadbalanceStrategyFieldValidation:
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
                     failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="off",
+                    failover_max_cooldown_strikes_before_ban=0,
+                    failover_ban_duration_seconds=0,
                 )
             ],
             models=[
@@ -325,6 +337,9 @@ class TestLoadbalanceStrategyFieldValidation:
         assert strategy.failover_max_cooldown_seconds == 720
         assert strategy.failover_jitter_ratio == 0.35
         assert strategy.failover_auth_error_cooldown_seconds == 2400
+        assert strategy.failover_ban_mode == "off"
+        assert strategy.failover_max_cooldown_strikes_before_ban == 0
+        assert strategy.failover_ban_duration_seconds == 0
         model = reimported.models[0]
         assert model.loadbalance_strategy_name == "failover-primary"
 
@@ -419,6 +434,9 @@ class TestLoadbalanceCurrentStateContracts:
                     consecutive_failures=1,
                     last_failure_kind="timeout",
                     last_cooldown_seconds=0,
+                    max_cooldown_strikes=0,
+                    ban_mode="off",
+                    banned_until_at=None,
                     blocked_until_at=None,
                     probe_eligible_logged=False,
                     state="counting",
@@ -430,6 +448,9 @@ class TestLoadbalanceCurrentStateContracts:
                     consecutive_failures=3,
                     last_failure_kind="transient_http",
                     last_cooldown_seconds=30,
+                    max_cooldown_strikes=1,
+                    ban_mode="off",
+                    banned_until_at=None,
                     blocked_until_at=blocked_until,
                     probe_eligible_logged=False,
                     state="blocked",
@@ -441,9 +462,26 @@ class TestLoadbalanceCurrentStateContracts:
                     consecutive_failures=4,
                     last_failure_kind="timeout",
                     last_cooldown_seconds=45,
+                    max_cooldown_strikes=1,
+                    ban_mode="off",
+                    banned_until_at=None,
                     blocked_until_at=probe_eligible,
                     probe_eligible_logged=True,
                     state="probe_eligible",
+                    created_at=created_at,
+                    updated_at=updated_at,
+                ),
+                LoadbalanceCurrentStateItem(
+                    connection_id=4,
+                    consecutive_failures=5,
+                    last_failure_kind="transient_http",
+                    last_cooldown_seconds=60,
+                    max_cooldown_strikes=2,
+                    ban_mode="temporary",
+                    banned_until_at=blocked_until,
+                    blocked_until_at=blocked_until,
+                    probe_eligible_logged=False,
+                    state="banned",
                     created_at=created_at,
                     updated_at=updated_at,
                 ),
@@ -469,11 +507,14 @@ class TestLoadbalanceCurrentStateContracts:
             "counting",
             "blocked",
             "probe_eligible",
+            "banned",
         ]
-        assert [item.connection_id for item in response.items] == [1, 2, 3]
+        assert [item.connection_id for item in response.items] == [1, 2, 3, 4]
         assert response.items[0].probe_eligible_logged is False
         assert response.items[1].last_failure_kind == "transient_http"
         assert response.items[2].probe_eligible_logged is True
+        assert response.items[3].max_cooldown_strikes == 2
+        assert response.items[3].ban_mode == "temporary"
 
     @pytest.mark.asyncio
     async def test_current_state_list_returns_404_for_model_outside_profile(self):

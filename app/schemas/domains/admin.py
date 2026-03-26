@@ -4,6 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.domains.core import AuthType, _HEADER_TOKEN_RE
+from app.services.loadbalancer.policy import validate_strategy_ban_policy
 
 # --- Config Export/Import Schemas ---
 
@@ -53,6 +54,9 @@ class ConfigLoadbalanceStrategyExport(BaseModel):
     failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
+    failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
+    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
+    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
 
 
 class ConfigLoadbalanceStrategyImport(BaseModel):
@@ -69,6 +73,31 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
     failover_auth_error_cooldown_seconds: int | None = Field(
         default=None, ge=1, le=86_400
     )
+    failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
+    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
+    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be empty")
+        return normalized
+
+    @field_validator("failover_ban_duration_seconds")
+    @classmethod
+    def validate_ban_policy(cls, value: int, info):
+        validate_strategy_ban_policy(
+            strategy_type=info.data.get("strategy_type", "single"),
+            failover_recovery_enabled=info.data.get("failover_recovery_enabled", False),
+            failover_ban_mode=info.data.get("failover_ban_mode", "off"),
+            failover_max_cooldown_strikes_before_ban=info.data.get(
+                "failover_max_cooldown_strikes_before_ban", 0
+            ),
+            failover_ban_duration_seconds=value,
+        )
+        return value
 
 
 class ConfigConnectionExport(BaseModel):
@@ -79,6 +108,9 @@ class ConfigConnectionExport(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
+    qps_limit: int | None = Field(default=None, ge=1)
+    max_in_flight_non_stream: int | None = Field(default=None, ge=1)
+    max_in_flight_stream: int | None = Field(default=None, ge=1)
 
 
 class ConfigConnectionImport(BaseModel):
@@ -91,6 +123,21 @@ class ConfigConnectionImport(BaseModel):
     name: str | None = None
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
+    qps_limit: int | None = Field(default=None, ge=1)
+    max_in_flight_non_stream: int | None = Field(default=None, ge=1)
+    max_in_flight_stream: int | None = Field(default=None, ge=1)
+
+
+class ConfigProxyTargetExport(BaseModel):
+    target_model_id: str
+    position: int = Field(ge=0)
+
+
+class ConfigProxyTargetImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_model_id: str
+    position: int = Field(ge=0)
 
 
 class ConfigModelExport(BaseModel):
@@ -98,7 +145,7 @@ class ConfigModelExport(BaseModel):
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
-    redirect_to: str | None = None
+    proxy_targets: list[ConfigProxyTargetExport] = Field(default_factory=list)
     loadbalance_strategy_name: str | None = None
     is_enabled: bool = True
     connections: list[ConfigConnectionExport] = Field(default_factory=list)
@@ -111,7 +158,7 @@ class ConfigModelImport(BaseModel):
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
-    redirect_to: str | None = None
+    proxy_targets: list[ConfigProxyTargetImport] = Field(default_factory=list)
     loadbalance_strategy_name: str | None = None
     is_enabled: bool = True
     connections: list[ConfigConnectionImport] = Field(default_factory=list)
@@ -146,7 +193,7 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[3] = 3
+    version: Literal[5] = 5
     exported_at: datetime
     endpoints: list[ConfigEndpointExport]
     pricing_templates: list[ConfigPricingTemplateExport]

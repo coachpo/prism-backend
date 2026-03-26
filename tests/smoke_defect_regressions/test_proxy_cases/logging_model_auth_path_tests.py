@@ -79,6 +79,51 @@ class TestDEF001_LogsSurviveFailoverRollback:
         mock_session.add.assert_called_once()
         mock_session.commit.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_log_request_persists_request_tracking_fields(self):
+        mock_session = AsyncMock()
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        captured_entry = {}
+
+        async def fake_refresh(entry):
+            entry.id = 41
+            captured_entry["entry"] = entry
+
+        mock_session.refresh = AsyncMock(side_effect=fake_refresh)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch(
+            "app.core.database.AsyncSessionLocal",
+            return_value=mock_session_ctx,
+        ):
+            request_log_id = await log_request(
+                model_id="test-model",
+                profile_id=1,
+                provider_type="openai",
+                endpoint_id=1,
+                connection_id=1,
+                endpoint_base_url="http://example.com",
+                status_code=503,
+                response_time_ms=100,
+                is_stream=False,
+                request_path="/v1/chat/completions",
+                ingress_request_id="ingress-123",
+                attempt_number=2,
+                provider_correlation_id="resp_123",
+                error_detail="upstream failed",
+            )
+
+        assert request_log_id == 41
+        mock_session.add.assert_called_once()
+        mock_session.commit.assert_awaited_once()
+        assert captured_entry["entry"].ingress_request_id == "ingress-123"
+        assert captured_entry["entry"].attempt_number == 2
+        assert captured_entry["entry"].provider_correlation_id == "resp_123"
+
 
 class TestDEF002_ModelExtraction:
     """DEF-002 (P1): routing model must be extracted from request body only."""
@@ -234,4 +279,80 @@ class TestDEF005_GeminiPathModelRewrite:
                 "/v1beta/models/gemini-3-flash:generateContent",
             )
             == "gemini-3-flash"
+        )
+
+
+class TestDEF080_ProviderCorrelationExtraction:
+    def test_openai_prefers_x_request_id_header_then_client_request_id(self):
+        from app.routers.proxy_domains.attempt_outcome_reporting import (
+            extract_provider_correlation_id,
+        )
+
+        assert (
+            extract_provider_correlation_id(
+                provider_type="openai",
+                response_headers={"x-request-id": "req-openai-1"},
+                response_body=None,
+                request_headers={"X-Client-Request-Id": "client-1"},
+            )
+            == "req-openai-1"
+        )
+        assert (
+            extract_provider_correlation_id(
+                provider_type="openai",
+                response_headers={},
+                response_body=None,
+                request_headers={"X-Client-Request-Id": "client-1"},
+            )
+            == "client-1"
+        )
+
+    def test_anthropic_prefers_request_id_header_then_error_body_request_id(self):
+        from app.routers.proxy_domains.attempt_outcome_reporting import (
+            extract_provider_correlation_id,
+        )
+
+        assert (
+            extract_provider_correlation_id(
+                provider_type="anthropic",
+                response_headers={"request-id": "req-anthropic-1"},
+                response_body=b'{"type":"error","request_id":"req-anthropic-body"}',
+                request_headers={},
+            )
+            == "req-anthropic-1"
+        )
+        assert (
+            extract_provider_correlation_id(
+                provider_type="anthropic",
+                response_headers={},
+                response_body=b'{"type":"error","request_id":"req-anthropic-body"}',
+                request_headers={},
+            )
+            == "req-anthropic-body"
+        )
+
+    def test_gemini_extracts_response_id_from_body_or_stream_chunk(self):
+        from app.routers.proxy_domains.attempt_outcome_reporting import (
+            extract_provider_correlation_id,
+        )
+
+        assert (
+            extract_provider_correlation_id(
+                provider_type="gemini",
+                response_headers={},
+                response_body=b'{"responseId":"gemini-response-1"}',
+                request_headers={},
+            )
+            == "gemini-response-1"
+        )
+        assert (
+            extract_provider_correlation_id(
+                provider_type="gemini",
+                response_headers={},
+                response_body=(
+                    b'data: {"responseId":"gemini-stream-1","usageMetadata":{"totalTokenCount":3}}\n\n'
+                ),
+                request_headers={},
+            )
+            == "gemini-stream-1"
         )

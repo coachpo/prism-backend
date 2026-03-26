@@ -87,7 +87,7 @@ class TestConfigExportImportIsolation:
             model_id="gpt-4",
             display_name=None,
             model_type="native",
-            redirect_to=None,
+            proxy_targets=[],
             loadbalance_strategy_id=11,
             loadbalance_strategy=SimpleNamespace(
                 id=11,
@@ -100,7 +100,43 @@ class TestConfigExportImportIsolation:
                 failover_max_cooldown_seconds=720,
                 failover_jitter_ratio=0.35,
                 failover_auth_error_cooldown_seconds=2400,
+                failover_ban_mode="off",
+                failover_max_cooldown_strikes_before_ban=0,
+                failover_ban_duration_seconds=0,
             ),
+            is_enabled=True,
+            connections=[
+                SimpleNamespace(
+                    id=30,
+                    endpoint_id=endpoint.id,
+                    endpoint_rel=endpoint,
+                    pricing_template_id=None,
+                    pricing_template_rel=None,
+                    is_active=True,
+                    priority=0,
+                    name="primary",
+                    auth_type=None,
+                    custom_headers=None,
+                    qps_limit=3,
+                    max_in_flight_non_stream=5,
+                    max_in_flight_stream=2,
+                )
+            ],
+            created_at=now,
+            updated_at=now,
+        )
+        proxy_model = SimpleNamespace(
+            id=21,
+            profile_id=1,
+            provider_id=1,
+            model_id="gpt-4-proxy",
+            display_name="GPT-4 Proxy",
+            model_type="proxy",
+            loadbalance_strategy_id=None,
+            loadbalance_strategy=None,
+            proxy_targets=[
+                SimpleNamespace(target_model_id="gpt-4", position=0),
+            ],
             is_enabled=True,
             connections=[],
             created_at=now,
@@ -112,7 +148,7 @@ class TestConfigExportImportIsolation:
         endpoint_result.scalars.return_value.all.return_value = [endpoint]
 
         model_result = MagicMock()
-        model_result.scalars.return_value.all.return_value = [model]
+        model_result.scalars.return_value.all.return_value = [model, proxy_model]
 
         pricing_templates_result = MagicMock()
         pricing_templates_result.scalars.return_value.all.return_value = []
@@ -149,9 +185,10 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
+        assert payload["version"] == 5
         assert len(payload["endpoints"]) == 1
         assert len(payload["loadbalance_strategies"]) == 1
-        assert len(payload["models"]) == 1
+        assert len(payload["models"]) == 2
         strategy_payload = payload["loadbalance_strategies"][0]
         assert strategy_payload["failover_cooldown_seconds"] == 45
         assert strategy_payload["failover_failure_threshold"] == 4
@@ -159,6 +196,20 @@ class TestConfigExportImportIsolation:
         assert strategy_payload["failover_max_cooldown_seconds"] == 720
         assert strategy_payload["failover_jitter_ratio"] == 0.35
         assert strategy_payload["failover_auth_error_cooldown_seconds"] == 2400
+        assert strategy_payload["failover_ban_mode"] == "off"
+        assert strategy_payload["failover_max_cooldown_strikes_before_ban"] == 0
+        assert strategy_payload["failover_ban_duration_seconds"] == 0
+        exported_connection = payload["models"][0]["connections"][0]
+        assert exported_connection["qps_limit"] == 3
+        assert exported_connection["max_in_flight_non_stream"] == 5
+        assert exported_connection["max_in_flight_stream"] == 2
+        exported_proxy = next(
+            item for item in payload["models"] if item["model_type"] == "proxy"
+        )
+        assert exported_proxy["proxy_targets"] == [
+            {"target_model_id": "gpt-4", "position": 0}
+        ]
+        assert "redirect_to" not in exported_proxy
         assert "providers" not in payload
 
     @pytest.mark.asyncio
@@ -334,7 +385,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": new_endpoint_name,
@@ -354,6 +405,9 @@ class TestConfigExportImportIsolation:
                         "failover_max_cooldown_seconds": 720,
                         "failover_jitter_ratio": 0.35,
                         "failover_auth_error_cooldown_seconds": 2400,
+                        "failover_ban_mode": "manual",
+                        "failover_max_cooldown_strikes_before_ban": 2,
+                        "failover_ban_duration_seconds": 0,
                     }
                 ],
                 "models": [
@@ -368,6 +422,9 @@ class TestConfigExportImportIsolation:
                                 "name": new_connection_name,
                                 "priority": 0,
                                 "is_active": True,
+                                "qps_limit": 7,
+                                "max_in_flight_non_stream": 9,
+                                "max_in_flight_stream": 4,
                             }
                         ],
                     }
@@ -558,9 +615,15 @@ class TestConfigExportImportIsolation:
         assert target_strategies[0].failover_max_cooldown_seconds == 720
         assert target_strategies[0].failover_jitter_ratio == 0.35
         assert target_strategies[0].failover_auth_error_cooldown_seconds == 2400
+        assert target_strategies[0].failover_ban_mode == "off"
+        assert target_strategies[0].failover_max_cooldown_strikes_before_ban == 0
+        assert target_strategies[0].failover_ban_duration_seconds == 0
 
         assert len(target_connections) == 1
         assert target_connections[0].name == new_connection_name
+        assert target_connections[0].qps_limit == 7
+        assert target_connections[0].max_in_flight_non_stream == 9
+        assert target_connections[0].max_in_flight_stream == 4
 
         assert len(target_fx_rows) == 1
         assert target_fx_rows[0].model_id == new_model_id
@@ -581,6 +644,9 @@ class TestConfigExportImportIsolation:
 
         assert len(other_connections) == 1
         assert other_connections[0].name == other_connection_name
+        assert other_connections[0].qps_limit is None
+        assert other_connections[0].max_in_flight_non_stream is None
+        assert other_connections[0].max_in_flight_stream is None
 
         assert len(other_fx_rows) == 1
         assert other_fx_rows[0].model_id == other_model_id

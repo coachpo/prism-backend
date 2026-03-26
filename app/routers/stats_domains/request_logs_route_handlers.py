@@ -21,6 +21,7 @@ async def list_request_logs(
     db: AsyncSession,
     profile_id: int,
     request_id: int | None = None,
+    ingress_request_id: str | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -41,6 +42,7 @@ async def list_request_logs(
     items, total = await get_request_logs_fn(
         db,
         request_id=request_id,
+        ingress_request_id=ingress_request_id,
         model_id=model_id,
         profile_id=profile_id,
         provider_type=provider_type,
@@ -67,6 +69,7 @@ async def list_operations_request_logs(
     db: AsyncSession,
     profile_id: int,
     request_id: int | None = None,
+    ingress_request_id: str | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -87,6 +90,7 @@ async def list_operations_request_logs(
     items, total = await get_operations_request_logs_fn(
         db,
         request_id=request_id,
+        ingress_request_id=ingress_request_id,
         model_id=model_id,
         profile_id=profile_id,
         provider_type=provider_type,

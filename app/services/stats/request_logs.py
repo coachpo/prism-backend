@@ -11,6 +11,7 @@ def _build_request_log_where(
     *,
     profile_id: int,
     request_id: int | None = None,
+    ingress_request_id: str | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -24,6 +25,8 @@ def _build_request_log_where(
     filters = [RequestLog.profile_id == profile_id]
     if request_id is not None:
         filters.append(RequestLog.id == request_id)
+    if ingress_request_id:
+        filters.append(RequestLog.ingress_request_id == ingress_request_id)
     if model_id:
         filters.append(RequestLog.model_id == model_id)
     if provider_type:
@@ -64,6 +67,7 @@ async def get_request_logs(
     *,
     profile_id: int,
     request_id: int | None = None,
+    ingress_request_id: str | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -79,6 +83,7 @@ async def get_request_logs(
     where = _build_request_log_where(
         profile_id=profile_id,
         request_id=request_id,
+        ingress_request_id=ingress_request_id,
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,
@@ -107,6 +112,7 @@ async def get_operations_request_logs(
     *,
     profile_id: int,
     request_id: int | None = None,
+    ingress_request_id: str | None = None,
     model_id: str | None = None,
     provider_type: str | None = None,
     status_code: int | None = None,
@@ -122,6 +128,7 @@ async def get_operations_request_logs(
     where = _build_request_log_where(
         profile_id=profile_id,
         request_id=request_id,
+        ingress_request_id=ingress_request_id,
         model_id=model_id,
         provider_type=provider_type,
         status_code=status_code,

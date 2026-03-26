@@ -27,6 +27,7 @@ from .connection_model import (
     ModelConfigListResponse,
     ModelConfigResponse,
     ModelConfigUpdate,
+    ProxyTargetReference,
 )
 from .endpoint_pricing import (
     ConnectionPricingTemplateSummary,
@@ -88,6 +89,7 @@ __all__ = [
     "ModelConfigListResponse",
     "ModelConfigResponse",
     "ModelConfigUpdate",
+    "ProxyTargetReference",
     "PricingTemplateConnectionUsageItem",
     "PricingTemplateConnectionsResponse",
     "PricingTemplateCreate",

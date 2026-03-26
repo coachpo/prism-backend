@@ -7,6 +7,7 @@ from app.services.loadbalancer.state import clear_model_state
 from app.schemas.schemas import (
     ModelConfigCreate,
     ModelConfigUpdate,
+    ProxyTargetReference,
 )
 
 from .mutation_helpers import (
@@ -17,6 +18,7 @@ from .mutation_helpers import (
     ensure_proxy_update_preconditions,
     ensure_valid_model_type,
     load_model_config_or_404,
+    replace_proxy_targets,
     sync_renamed_model_references,
     validate_native_model_update,
 )
@@ -49,11 +51,11 @@ async def create_model_config_record(
     )
 
     model_type = ensure_valid_model_type(body.model_type or "native")
-    await validate_proxy_model(
+    target_models = await validate_proxy_model(
         db,
         profile_id=profile_id,
         model_type=model_type,
-        redirect_to=body.redirect_to,
+        proxy_targets=body.proxy_targets,
         provider_id=body.provider_id,
     )
 
@@ -64,13 +66,20 @@ async def create_model_config_record(
             model_id=body.model_id,
             display_name=body.display_name,
             model_type=model_type,
-            redirect_to=body.redirect_to,
             loadbalance_strategy_id=body.loadbalance_strategy_id,
             is_enabled=body.is_enabled,
         )
     )
     db.add(config)
     await db.flush()
+    if model_type == "proxy":
+        await replace_proxy_targets(
+            db,
+            config=config,
+            target_models=target_models,
+            proxy_targets=body.proxy_targets,
+        )
+        await db.flush()
 
     result = await db.execute(
         select(ModelConfig)
@@ -109,11 +118,18 @@ async def update_model_config_record(
     new_model_type = ensure_valid_model_type(
         update_data.get("model_type", config.model_type)
     )
-    new_redirect_to = update_data.get("redirect_to", config.redirect_to)
     new_provider_id = update_data.get("provider_id", config.provider_id)
     new_model_id = update_data.get("model_id", config.model_id)
     new_loadbalance_strategy_id = update_data.get(
         "loadbalance_strategy_id", config.loadbalance_strategy_id
+    )
+    new_proxy_targets: list[ProxyTargetReference] = (
+        body.proxy_targets or []
+        if "proxy_targets" in update_data
+        else [
+            ProxyTargetReference.model_validate(target)
+            for target in config.proxy_targets
+        ]
     )
 
     await validate_native_model_update(
@@ -126,15 +142,15 @@ async def update_model_config_record(
     ensure_proxy_update_preconditions(
         config=config,
         new_model_type=new_model_type,
-        new_redirect_to=new_redirect_to,
+        new_proxy_targets=new_proxy_targets,
         new_model_id=new_model_id,
     )
 
-    await validate_proxy_model(
+    target_models = await validate_proxy_model(
         db,
         profile_id=profile_id,
         model_type=new_model_type,
-        redirect_to=new_redirect_to,
+        proxy_targets=new_proxy_targets,
         provider_id=new_provider_id,
         exclude_model_id=config.model_id,
     )
@@ -161,6 +177,7 @@ async def update_model_config_record(
         )
 
     apply_model_type_update_defaults(update_data, model_type=new_model_type)
+    update_data.pop("proxy_targets", None)
 
     clear_model_current_state = any(
         (
@@ -176,6 +193,16 @@ async def update_model_config_record(
 
     for key, value in update_data.items():
         setattr(config, key, value)
+
+    if new_model_type == "proxy":
+        await replace_proxy_targets(
+            db,
+            config=config,
+            target_models=target_models,
+            proxy_targets=new_proxy_targets,
+        )
+    else:
+        config.proxy_targets.clear()
 
     if "model_id" in update_data and update_data["model_id"] != original_model_id:
         await sync_renamed_model_references(

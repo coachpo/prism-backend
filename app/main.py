@@ -14,6 +14,7 @@ from app import bootstrap
 from app.core.config import Settings, get_settings
 from app.core.database import get_engine
 from app.services.background_tasks import background_task_manager
+from app.services.loadbalancer.limiter import reconcile_all_connection_limits
 from app.services.stats.logging import shutdown_dashboard_update_lifecycle
 from app.routers import (
     audit,
@@ -167,6 +168,7 @@ async def lifespan(app: FastAPI):
 
     try:
         await bootstrap.run_startup_sequence()
+        await reconcile_all_connection_limits()
         http_client = bootstrap.build_http_client()
         background_task_manager.configure(
             worker_count=settings.background_task_worker_count

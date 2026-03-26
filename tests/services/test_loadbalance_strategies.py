@@ -64,6 +64,9 @@ class TestLoadbalanceStrategies:
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
                     failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=600,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -79,6 +82,9 @@ class TestLoadbalanceStrategies:
             assert created.failover_max_cooldown_seconds == 720
             assert created.failover_jitter_ratio == pytest.approx(0.35)
             assert created.failover_auth_error_cooldown_seconds == 2400
+            assert created.failover_ban_mode == "temporary"
+            assert created.failover_max_cooldown_strikes_before_ban == 3
+            assert created.failover_ban_duration_seconds == 600
             assert created.attached_model_count == 0
 
             listed = await list_strategies(db=db, profile_id=profile.id)
@@ -89,6 +95,9 @@ class TestLoadbalanceStrategies:
             assert listed[0].failover_max_cooldown_seconds == 720
             assert listed[0].failover_jitter_ratio == pytest.approx(0.35)
             assert listed[0].failover_auth_error_cooldown_seconds == 2400
+            assert listed[0].failover_ban_mode == "temporary"
+            assert listed[0].failover_max_cooldown_strikes_before_ban == 3
+            assert listed[0].failover_ban_duration_seconds == 600
 
             updated = await update_strategy(
                 strategy_id=created.id,
@@ -102,6 +111,9 @@ class TestLoadbalanceStrategies:
                     failover_max_cooldown_seconds=1440,
                     failover_jitter_ratio=0.5,
                     failover_auth_error_cooldown_seconds=3600,
+                    failover_ban_mode="manual",
+                    failover_max_cooldown_strikes_before_ban=2,
+                    failover_ban_duration_seconds=0,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -117,6 +129,9 @@ class TestLoadbalanceStrategies:
             assert updated.failover_max_cooldown_seconds == 1440
             assert updated.failover_jitter_ratio == pytest.approx(0.5)
             assert updated.failover_auth_error_cooldown_seconds == 3600
+            assert updated.failover_ban_mode == "manual"
+            assert updated.failover_max_cooldown_strikes_before_ban == 2
+            assert updated.failover_ban_duration_seconds == 0
 
             deleted = await delete_strategy(
                 strategy_id=created.id,
@@ -323,4 +338,120 @@ class TestLoadbalanceStrategies:
             )
 
             assert updated.failover_cooldown_seconds == 120
+            assert state_rows == []
+
+    def test_strategy_ban_policy_validation_rejects_invalid_combinations(self):
+        with pytest.raises(ValueError):
+            LoadbalanceStrategyCreate(
+                name="invalid-ban-off",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_ban_mode="off",
+                failover_max_cooldown_strikes_before_ban=1,
+                failover_ban_duration_seconds=60,
+            )
+
+        with pytest.raises(ValueError):
+            LoadbalanceStrategyCreate(
+                name="invalid-ban-temporary",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_ban_mode="temporary",
+                failover_max_cooldown_strikes_before_ban=1,
+                failover_ban_duration_seconds=0,
+            )
+
+        with pytest.raises(ValueError):
+            LoadbalanceStrategyCreate(
+                name="invalid-ban-manual",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_ban_mode="manual",
+                failover_max_cooldown_strikes_before_ban=1,
+                failover_ban_duration_seconds=60,
+            )
+
+    @pytest.mark.asyncio
+    async def test_updating_strategy_ban_policy_clears_attached_model_state(self):
+        async with AsyncSessionLocal() as db:
+            provider = await _get_or_create_provider(db)
+            profile = Profile(
+                name="Strategy Ban Policy State Profile", is_active=False, version=0
+            )
+            db.add(profile)
+            await db.flush()
+
+            strategy = make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                name="failover-ban-policy-stateful",
+            )
+            model = ModelConfig(
+                profile_id=profile.id,
+                provider_id=provider.id,
+                model_id="ban-policy-stateful-model",
+                model_type="native",
+                loadbalance_strategy=strategy,
+                is_enabled=True,
+            )
+            endpoint = Endpoint(
+                profile_id=profile.id,
+                name="ban-policy-stateful-endpoint",
+                base_url="https://ban-policy-stateful.example.com/v1",
+                api_key="sk-ban-policy-stateful",
+                position=0,
+            )
+            db.add_all([strategy, model, endpoint])
+            await db.flush()
+
+            connection = Connection(
+                profile_id=profile.id,
+                model_config_id=model.id,
+                endpoint_id=endpoint.id,
+                is_active=True,
+                priority=0,
+                name="ban-policy-stateful-connection",
+            )
+            db.add(connection)
+            await db.flush()
+
+            db.add(
+                LoadbalanceCurrentState(
+                    profile_id=profile.id,
+                    connection_id=connection.id,
+                    consecutive_failures=3,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=30,
+                )
+            )
+            await db.commit()
+
+            updated = await update_strategy(
+                strategy_id=strategy.id,
+                body=LoadbalanceStrategyUpdate(
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=2,
+                    failover_ban_duration_seconds=600,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            state_rows = (
+                (
+                    await db.execute(
+                        select(LoadbalanceCurrentState).where(
+                            LoadbalanceCurrentState.profile_id == profile.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            assert updated.failover_ban_mode == "temporary"
+            assert updated.failover_max_cooldown_strikes_before_ban == 2
+            assert updated.failover_ban_duration_seconds == 600
             assert state_rows == []

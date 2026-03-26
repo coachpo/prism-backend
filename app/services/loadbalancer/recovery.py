@@ -9,13 +9,64 @@ from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import LoadbalanceCurrentState
 
 from .events import (
+    record_banned_transition,
     record_failed_transition,
+    record_max_cooldown_strike_transition,
     record_probe_eligible_transition,
     record_recovered_transition,
 )
 from .policy import EffectiveLoadbalancePolicy
 from .state import current_state_to_recovery_entry
 from .types import FailureKind, RecoveryStateEntry
+
+
+def _reached_max_cooldown_cap(
+    *,
+    cooldown_seconds: float,
+    policy: EffectiveLoadbalancePolicy,
+) -> bool:
+    return policy.failover_max_cooldown_seconds > 0 and cooldown_seconds >= float(
+        policy.failover_max_cooldown_seconds
+    )
+
+
+def _should_increment_max_cooldown_strike(
+    *,
+    base_cooldown_seconds: float,
+    consecutive_failures: int,
+    failure_kind: FailureKind,
+    previous_consecutive_failures: int,
+    previous_failure_kind: FailureKind | None,
+    policy: EffectiveLoadbalancePolicy,
+) -> bool:
+    if failure_kind != "transient_http":
+        return False
+
+    current_base_cooldown = _compute_base_cooldown(
+        policy=policy,
+        base_cooldown_seconds=base_cooldown_seconds,
+        consecutive_failures=consecutive_failures,
+        failure_kind=failure_kind,
+    )
+    if not _reached_max_cooldown_cap(
+        cooldown_seconds=current_base_cooldown,
+        policy=policy,
+    ):
+        return False
+
+    if previous_failure_kind != "transient_http":
+        return True
+
+    previous_base_cooldown = _compute_base_cooldown(
+        policy=policy,
+        base_cooldown_seconds=base_cooldown_seconds,
+        consecutive_failures=previous_consecutive_failures,
+        failure_kind=previous_failure_kind,
+    )
+    return not _reached_max_cooldown_cap(
+        cooldown_seconds=previous_base_cooldown,
+        policy=policy,
+    )
 
 
 def _compute_base_cooldown(
@@ -137,6 +188,9 @@ async def record_connection_failure(
                 consecutive_failures=0,
                 last_failure_kind=None,
                 last_cooldown_seconds=0.0,
+                max_cooldown_strikes=0,
+                ban_mode="off",
+                banned_until_at=None,
                 blocked_until_at=None,
                 probe_eligible_logged=False,
                 created_at=normalized_now,
@@ -154,6 +208,10 @@ async def record_connection_failure(
         )
         current_state = result.scalar_one()
         previous_blocked_until = current_state.blocked_until_at
+        previous_failure_kind = current_state_to_recovery_entry(current_state)[
+            "last_failure_kind"
+        ]
+        previous_consecutive_failures = current_state.consecutive_failures
         consecutive_failures = current_state.consecutive_failures + 1
 
         base_cooldown = _compute_base_cooldown(
@@ -168,6 +226,30 @@ async def record_connection_failure(
         current_state.last_failure_kind = failure_kind
         current_state.last_cooldown_seconds = max(cooldown_seconds, 0.0)
         current_state.probe_eligible_logged = False
+
+        strike_incremented = _should_increment_max_cooldown_strike(
+            base_cooldown_seconds=base_cooldown_seconds,
+            consecutive_failures=consecutive_failures,
+            failure_kind=failure_kind,
+            previous_consecutive_failures=previous_consecutive_failures,
+            previous_failure_kind=previous_failure_kind,
+            policy=policy,
+        )
+        if strike_incremented:
+            current_state.max_cooldown_strikes += 1
+
+        if (
+            policy.failover_ban_mode != "off"
+            and current_state.max_cooldown_strikes
+            >= policy.failover_max_cooldown_strikes_before_ban
+            and strike_incremented
+        ):
+            current_state.ban_mode = policy.failover_ban_mode
+            current_state.banned_until_at = (
+                normalized_now + timedelta(seconds=policy.failover_ban_duration_seconds)
+                if policy.failover_ban_mode == "temporary"
+                else None
+            )
 
         if cooldown_seconds <= 0.0:
             current_state.blocked_until_at = None
@@ -200,6 +282,17 @@ async def record_connection_failure(
         snapshot = current_state_to_recovery_entry(current_state)
         await session.commit()
 
+    if strike_incremented:
+        record_max_cooldown_strike_transition(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            policy=policy,
+            state=snapshot,
+            model_id=model_id,
+            endpoint_id=endpoint_id,
+            provider_id=provider_id,
+        )
+
     record_failed_transition(
         event_type=transition,
         profile_id=profile_id,
@@ -212,7 +305,23 @@ async def record_connection_failure(
         model_id=model_id,
         endpoint_id=endpoint_id,
         provider_id=provider_id,
+        max_cooldown_strikes=snapshot["max_cooldown_strikes"],
+        ban_mode=snapshot["ban_mode"],
+        banned_until_at=snapshot["banned_until_at"],
     )
+
+    if snapshot["ban_mode"] != "off" and (
+        snapshot["ban_mode"] == "manual" or snapshot["banned_until_at"] is not None
+    ):
+        record_banned_transition(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            policy=policy,
+            state=snapshot,
+            model_id=model_id,
+            endpoint_id=endpoint_id,
+            provider_id=provider_id,
+        )
 
 
 async def record_connection_recovery(

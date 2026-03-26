@@ -112,8 +112,27 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "name",
             "auth_type",
             "custom_headers",
+            "qps_limit",
+            "max_in_flight_non_stream",
+            "max_in_flight_stream",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_connection_response_schema_includes_limiter_fields(self):
+        from app.schemas.schemas import ConnectionResponse
+
+        fields = set(ConnectionResponse.model_fields.keys())
+        expected = {
+            "qps_limit",
+            "max_in_flight_non_stream",
+            "max_in_flight_stream",
+        }
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+
+    def test_config_export_schema_defaults_to_version_5(self):
+        from app.schemas.schemas import ConfigExportResponse
+
+        assert ConfigExportResponse.model_fields["version"].default == 5
 
     def test_export_schema_includes_all_model_fields(self):
         from app.schemas.schemas import ConfigModelExport
@@ -124,12 +143,19 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "model_id",
             "display_name",
             "model_type",
-            "redirect_to",
+            "proxy_targets",
             "loadbalance_strategy_name",
             "is_enabled",
             "connections",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+        assert "redirect_to" not in fields
+
+    def test_request_log_response_schema_includes_resolved_target_model_id(self):
+        from app.schemas.schemas import RequestLogResponse
+
+        fields = set(RequestLogResponse.model_fields.keys())
+        assert "resolved_target_model_id" in fields
 
     def test_export_schema_includes_all_loadbalance_strategy_fields(self):
         from app.schemas.schemas import ConfigLoadbalanceStrategyExport

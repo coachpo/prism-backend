@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from app.schemas.schemas import ConfigImportRequest
+from app.services.loadbalancer.policy import validate_strategy_ban_policy
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
@@ -18,6 +19,39 @@ def _validate_optional_strategy_policy_fields(*, strategy_name: str, strategy) -
                 "failover_cooldown_seconds"
             ),
         )
+
+    try:
+        validate_strategy_ban_policy(
+            strategy_type=strategy.strategy_type,
+            failover_recovery_enabled=strategy.failover_recovery_enabled,
+            failover_ban_mode=strategy.failover_ban_mode,
+            failover_max_cooldown_strikes_before_ban=(
+                strategy.failover_max_cooldown_strikes_before_ban
+            ),
+            failover_ban_duration_seconds=strategy.failover_ban_duration_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Loadbalance strategy '{strategy_name}' has invalid ban policy: {exc}",
+        ) from exc
+
+
+def _validate_optional_connection_limiter_fields(*, model_id: str, connection) -> None:
+    limiter_fields = {
+        "qps_limit": connection.qps_limit,
+        "max_in_flight_non_stream": connection.max_in_flight_non_stream,
+        "max_in_flight_stream": connection.max_in_flight_stream,
+    }
+    for field_name, limiter_value in limiter_fields.items():
+        if limiter_value is not None and limiter_value < 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Connection for model '{model_id}' has invalid {field_name} "
+                    f"'{limiter_value}'"
+                ),
+            )
 
 
 def _normalize_reference_name(*, field: str, value: str | None) -> str | None:
@@ -174,10 +208,10 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 detail=f"Unsupported model_type '{model.model_type}' for model '{model.model_id}'",
             )
         if model.model_type == "native":
-            if model.redirect_to is not None:
+            if model.proxy_targets:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Native model '{model.model_id}' must not have redirect_to",
+                    detail=f"Native model '{model.model_id}' must not have proxy_targets",
                 )
             strategy_name = _normalize_reference_name(
                 field="loadbalance_strategy_name",
@@ -201,10 +235,10 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 )
             native_models[model.model_id] = model.provider_type
         else:
-            if not model.redirect_to:
+            if not model.proxy_targets:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Proxy model '{model.model_id}' must include redirect_to",
+                    detail=f"Proxy model '{model.model_id}' must include proxy_targets",
                 )
             if model.loadbalance_strategy_name is not None:
                 raise HTTPException(
@@ -219,8 +253,31 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                     status_code=400,
                     detail=f"Proxy model '{model.model_id}' must not have connections",
                 )
+            expected_positions = list(range(len(model.proxy_targets)))
+            actual_positions = [target.position for target in model.proxy_targets]
+            if actual_positions != expected_positions:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Proxy model '{model.model_id}' must use contiguous proxy_targets positions starting at 0"
+                    ),
+                )
+            seen_proxy_targets: set[str] = set()
+            for target in model.proxy_targets:
+                if target.target_model_id in seen_proxy_targets:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Proxy model '{model.model_id}' has duplicate proxy target '{target.target_model_id}'"
+                        ),
+                    )
+                seen_proxy_targets.add(target.target_model_id)
 
         for connection in model.connections:
+            _validate_optional_connection_limiter_fields(
+                model_id=model.model_id,
+                connection=connection,
+            )
             resolved_endpoint_name = _resolve_endpoint_reference_name(
                 context=f"Connection for model '{model.model_id}'",
                 endpoint_name=connection.endpoint_name,
@@ -238,22 +295,23 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
     for model in data.models:
         if model.model_type != "proxy":
             continue
-        if model.redirect_to not in native_models:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Model '{model.model_id}' references unknown redirect target "
-                    f"'{model.redirect_to}'"
-                ),
-            )
-        if native_models[model.redirect_to] != model.provider_type:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Model '{model.model_id}' cannot redirect cross-provider to "
-                    f"'{model.redirect_to}'"
-                ),
-            )
+        for target in model.proxy_targets:
+            if target.target_model_id not in native_models:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model '{model.model_id}' references unknown proxy target "
+                        f"'{target.target_model_id}'"
+                    ),
+                )
+            if native_models[target.target_model_id] != model.provider_type:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model '{model.model_id}' cannot target cross-provider model "
+                        f"'{target.target_model_id}'"
+                    ),
+                )
 
     if data.user_settings is not None:
         seen_fx: set[tuple[str, str]] = set()

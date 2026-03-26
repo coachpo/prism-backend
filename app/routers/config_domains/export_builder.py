@@ -14,6 +14,7 @@ from app.models.models import (
     HeaderBlocklistRule,
     LoadbalanceStrategy,
     ModelConfig,
+    ModelProxyTarget,
     PricingTemplate,
     Provider,
     UserSetting,
@@ -25,6 +26,7 @@ from app.schemas.schemas import (
     ConfigExportResponse,
     ConfigLoadbalanceStrategyExport,
     ConfigModelExport,
+    ConfigProxyTargetExport,
     ConfigPricingTemplateExport,
     ConfigUserSettingsExport,
     HeaderBlocklistRuleExport,
@@ -73,6 +75,9 @@ async def build_export_payload(
                 select(ModelConfig)
                 .options(
                     selectinload(ModelConfig.loadbalance_strategy),
+                    selectinload(ModelConfig.proxy_targets).selectinload(
+                        ModelProxyTarget.target_model_config
+                    ),
                     selectinload(ModelConfig.connections).selectinload(
                         Connection.endpoint_rel
                     ),
@@ -168,6 +173,9 @@ async def build_export_payload(
                 failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
                 failover_jitter_ratio=policy.failover_jitter_ratio,
                 failover_auth_error_cooldown_seconds=policy.failover_auth_error_cooldown_seconds,
+                failover_ban_mode=policy.failover_ban_mode,
+                failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
+                failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
             )
         )
 
@@ -219,6 +227,9 @@ async def build_export_payload(
                     custom_headers=_normalize_custom_headers_for_export(
                         connection.custom_headers
                     ),
+                    qps_limit=connection.qps_limit,
+                    max_in_flight_non_stream=connection.max_in_flight_non_stream,
+                    max_in_flight_stream=connection.max_in_flight_stream,
                 )
             )
         exported_models.append(
@@ -227,7 +238,16 @@ async def build_export_payload(
                 model_id=model.model_id,
                 display_name=model.display_name,
                 model_type=cast(Literal["native", "proxy"], model.model_type),
-                redirect_to=model.redirect_to,
+                proxy_targets=[
+                    ConfigProxyTargetExport(
+                        target_model_id=cast(str, proxy_target.target_model_id),
+                        position=proxy_target.position,
+                    )
+                    for proxy_target in sorted(
+                        model.proxy_targets,
+                        key=lambda proxy_target: proxy_target.position,
+                    )
+                ],
                 loadbalance_strategy_name=(
                     model.loadbalance_strategy.name
                     if model.model_type == "native"
@@ -282,7 +302,7 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=3,
+        version=5,
         exported_at=utc_now(),
         endpoints=exported_endpoints,
         pricing_templates=exported_pricing_templates,

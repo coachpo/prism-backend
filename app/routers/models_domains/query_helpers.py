@@ -5,16 +5,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Connection, ModelConfig
+from app.models.models import Connection, ModelConfig, ModelProxyTarget
 from app.schemas.schemas import (
     LoadbalanceStrategySummary,
     ModelConfigListResponse,
     ProviderResponse,
+    ProxyTargetReference,
 )
 
 MODEL_CONFIG_DETAIL_OPTIONS = (
     selectinload(ModelConfig.provider),
     selectinload(ModelConfig.loadbalance_strategy),
+    selectinload(ModelConfig.proxy_targets).selectinload(
+        ModelProxyTarget.target_model_config
+    ),
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
 )
@@ -43,7 +47,13 @@ def build_model_list_response(
         model_id=config.model_id,
         display_name=config.display_name,
         model_type=cast(Literal["native", "proxy"], config.model_type),
-        redirect_to=config.redirect_to,
+        proxy_targets=[
+            ProxyTargetReference.model_validate(proxy_target)
+            for proxy_target in sorted(
+                config.proxy_targets,
+                key=lambda proxy_target: (proxy_target.position, proxy_target.id),
+            )
+        ],
         loadbalance_strategy_id=config.loadbalance_strategy_id,
         loadbalance_strategy=(
             LoadbalanceStrategySummary.model_validate(config.loadbalance_strategy)
@@ -107,9 +117,25 @@ async def list_proxy_referrers(
     model_id: str,
     exclude_id: int | None = None,
 ) -> list[ModelConfig]:
-    query = select(ModelConfig).where(
-        ModelConfig.profile_id == profile_id,
-        ModelConfig.redirect_to == model_id,
+    target_model_id_subquery = (
+        select(ModelConfig.id)
+        .where(
+            ModelConfig.profile_id == profile_id,
+            ModelConfig.model_id == model_id,
+        )
+        .scalar_subquery()
+    )
+    query = (
+        select(ModelConfig)
+        .join(
+            ModelProxyTarget,
+            ModelProxyTarget.source_model_config_id == ModelConfig.id,
+        )
+        .where(
+            ModelConfig.profile_id == profile_id,
+            ModelProxyTarget.target_model_config_id == target_model_id_subquery,
+        )
+        .distinct()
     )
     if exclude_id is not None:
         query = query.where(ModelConfig.id != exclude_id)
@@ -121,53 +147,62 @@ async def validate_proxy_model(
     *,
     profile_id: int,
     model_type: str,
-    redirect_to: str | None,
+    proxy_targets: list[ProxyTargetReference],
     provider_id: int,
     exclude_model_id: str | None = None,
-) -> None:
+) -> list[ModelConfig]:
     if model_type == "proxy":
-        if not redirect_to:
+        if not proxy_targets:
             raise HTTPException(
                 status_code=400,
-                detail="redirect_to is required for proxy models",
+                detail="proxy_targets is required for proxy models",
             )
-        if exclude_model_id is not None and redirect_to == exclude_model_id:
+        target_model_ids = [target.target_model_id for target in proxy_targets]
+        if exclude_model_id is not None and exclude_model_id in target_model_ids:
             raise HTTPException(
                 status_code=400,
-                detail="Proxy model cannot redirect to itself",
+                detail="Proxy model cannot target itself",
             )
         target_result = await db.execute(
             select(ModelConfig)
             .options(selectinload(ModelConfig.provider))
             .where(
                 ModelConfig.profile_id == profile_id,
-                ModelConfig.model_id == redirect_to,
+                ModelConfig.model_id.in_(target_model_ids),
             )
         )
-        target = target_result.scalar_one_or_none()
-        if not target:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Target model '{redirect_to}' not found",
-            )
-        if target.model_type != "native":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Target model '{redirect_to}' is not a native model "
-                    "(chained proxies not allowed)"
-                ),
-            )
-        if target.provider_id != provider_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Proxy target must be the same provider as the proxy model",
-            )
-    elif model_type == "native" and redirect_to:
+        targets_by_model_id = {
+            target.model_id: target for target in target_result.scalars().all()
+        }
+        ordered_targets: list[ModelConfig] = []
+        for proxy_target in proxy_targets:
+            target = targets_by_model_id.get(proxy_target.target_model_id)
+            if target is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Target model '{proxy_target.target_model_id}' not found",
+                )
+            if target.model_type != "native":
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Target model '{proxy_target.target_model_id}' is not a native model "
+                        "(chained proxies not allowed)"
+                    ),
+                )
+            if target.provider_id != provider_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Proxy targets must use the same provider as the proxy model",
+                )
+            ordered_targets.append(target)
+        return ordered_targets
+    if model_type == "native" and proxy_targets:
         raise HTTPException(
             status_code=400,
-            detail="redirect_to must be null for native models",
+            detail="proxy_targets must be empty for native models",
         )
+    return []
 
 
 __all__ = [

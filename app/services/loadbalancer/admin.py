@@ -22,11 +22,28 @@ from .state import (
 )
 
 
+def _is_banned_now(
+    *, ban_mode: str, banned_until_at: datetime | None, now_at: datetime
+) -> bool:
+    if ban_mode == "manual":
+        return True
+    normalized_banned_until = ensure_utc_datetime(banned_until_at)
+    return normalized_banned_until is not None and normalized_banned_until > now_at
+
+
 def _derive_current_state_value(
     *,
+    ban_mode: str,
+    banned_until_at: datetime | None,
     blocked_until_at: datetime | None,
     now_at: datetime,
 ) -> LoadbalanceCurrentStateValue:
+    if _is_banned_now(
+        ban_mode=ban_mode,
+        banned_until_at=banned_until_at,
+        now_at=now_at,
+    ):
+        return "banned"
     normalized_blocked_until = ensure_utc_datetime(blocked_until_at)
     if normalized_blocked_until is None:
         return "counting"
@@ -63,9 +80,14 @@ async def list_model_current_state(
                 consecutive_failures=row.consecutive_failures,
                 last_failure_kind=row.last_failure_kind,
                 last_cooldown_seconds=float(row.last_cooldown_seconds),
+                max_cooldown_strikes=row.max_cooldown_strikes,
+                ban_mode=row.ban_mode,
+                banned_until_at=row.banned_until_at,
                 blocked_until_at=row.blocked_until_at,
                 probe_eligible_logged=row.probe_eligible_logged,
                 state=_derive_current_state_value(
+                    ban_mode=row.ban_mode,
+                    banned_until_at=row.banned_until_at,
                     blocked_until_at=row.blocked_until_at,
                     now_at=now_at,
                 ),

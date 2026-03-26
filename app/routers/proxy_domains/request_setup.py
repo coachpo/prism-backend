@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable, Protocol, cast
+from uuid import uuid4
 
 import httpx
 from fastapi import HTTPException, Request
@@ -58,6 +59,7 @@ class ProxyRequestSetup:
     effective_request_path: str
     endpoints_to_try: list[Connection]
     failover_policy: EffectiveLoadbalancePolicy
+    ingress_request_id: str
     is_streaming: bool
     method: str
     model_config: ModelConfig
@@ -102,7 +104,9 @@ async def prepare_proxy_request(
     provider_id = provider.id
     app = cast(_RequestAppWithClientState, request.app)
     client = app.state.http_client
-    is_streaming = extract_stream_flag(raw_body) if raw_body else False
+    is_streaming = (
+        extract_stream_flag(raw_body) if raw_body else False
+    ) or request_path.endswith(":streamGenerateContent")
     client_headers = get_client_headers(request)
     method = request.method
     upstream_model_id = model_config.model_id
@@ -201,6 +205,7 @@ async def prepare_proxy_request(
         effective_request_path=effective_request_path,
         endpoints_to_try=endpoints_to_try,
         failover_policy=failover_policy,
+        ingress_request_id=str(uuid4()),
         is_streaming=is_streaming,
         method=method,
         model_config=model_config,

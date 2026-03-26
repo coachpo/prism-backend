@@ -5,9 +5,11 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.time import ensure_utc_datetime
 from app.core.database import AsyncSessionLocal
 from app.models.models import Connection, LoadbalanceCurrentState, ModelConfig
 
+from .policy import BanMode
 from .types import FailureKind, RecoveryStateEntry
 
 LOGGER_NAME = "app.services.loadbalancer"
@@ -24,6 +26,9 @@ def current_state_to_recovery_entry(
     return {
         "consecutive_failures": current_state.consecutive_failures,
         "blocked_until_at": current_state.blocked_until_at,
+        "max_cooldown_strikes": current_state.max_cooldown_strikes,
+        "ban_mode": cast(BanMode, current_state.ban_mode),
+        "banned_until_at": ensure_utc_datetime(current_state.banned_until_at),
         "last_cooldown_seconds": float(current_state.last_cooldown_seconds),
         "last_failure_kind": cast(FailureKind | None, current_state.last_failure_kind),
         "probe_eligible_logged": current_state.probe_eligible_logged,

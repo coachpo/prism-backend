@@ -251,11 +251,14 @@ class TestDEF007_EndpointIdentityInLogs:
             assert "endpoint_base_url" in schema_fields
             assert "endpoint_description" in schema_fields
 
-    def test_request_log_schema_includes_endpoint_description(self):
+    def test_request_log_schema_includes_endpoint_description_and_tracking_fields(self):
         from app.schemas.schemas import RequestLogResponse
 
         fields = set(RequestLogResponse.model_fields.keys())
         assert "endpoint_description" in fields
+        assert "ingress_request_id" in fields
+        assert "attempt_number" in fields
+        assert "provider_correlation_id" in fields
 
 
 class TestEndpointOwnerRoute:

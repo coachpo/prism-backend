@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.models import Connection, ModelConfig
+from app.models.models import Connection, ModelConfig, ModelProxyTarget
 from app.schemas.schemas import ModelConfigListResponse
 
 from .query_helpers import build_model_list_response, load_model_config_detail_or_404
@@ -19,6 +19,9 @@ async def list_models_for_profile(
         .options(
             selectinload(ModelConfig.provider),
             selectinload(ModelConfig.loadbalance_strategy),
+            selectinload(ModelConfig.proxy_targets).selectinload(
+                ModelProxyTarget.target_model_config
+            ),
             selectinload(ModelConfig.connections),
         )
         .where(ModelConfig.profile_id == profile_id)
@@ -66,6 +69,9 @@ async def get_models_by_endpoint_for_profile(
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.loadbalance_strategy
             ),
+            selectinload(Connection.model_config_rel)
+            .selectinload(ModelConfig.proxy_targets)
+            .selectinload(ModelProxyTarget.target_model_config),
             selectinload(Connection.pricing_template_rel),
         )
         .where(
@@ -121,6 +127,9 @@ async def get_models_by_endpoints_for_profile(
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.loadbalance_strategy
             ),
+            selectinload(Connection.model_config_rel)
+            .selectinload(ModelConfig.proxy_targets)
+            .selectinload(ModelProxyTarget.target_model_config),
             selectinload(Connection.pricing_template_rel),
         )
         .where(

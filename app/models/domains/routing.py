@@ -51,6 +51,10 @@ class LoadbalanceStrategy(Base):
             "strategy_type = 'failover' OR failover_recovery_enabled = false",
             name="chk_loadbalance_strategies_recovery",
         ),
+        CheckConstraint(
+            "failover_ban_mode IN ('off', 'temporary', 'manual')",
+            name="chk_loadbalance_strategies_ban_mode",
+        ),
         Index("idx_loadbalance_strategies_profile_id", "profile_id"),
     )
 
@@ -80,6 +84,15 @@ class LoadbalanceStrategy(Base):
     failover_jitter_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     failover_auth_error_cooldown_seconds: Mapped[int | None] = mapped_column(
         Integer, nullable=True
+    )
+    failover_ban_mode: Mapped[str] = mapped_column(
+        String(20), default="off", nullable=False
+    )
+    failover_max_cooldown_strikes_before_ban: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+    failover_ban_duration_seconds: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
@@ -132,9 +145,6 @@ class ModelConfig(Base):
     model_type: Mapped[str] = mapped_column(
         String(20), default="native", nullable=False
     )  # native, proxy
-    redirect_to: Mapped[str | None] = mapped_column(
-        String(200), nullable=True
-    )  # target model_id for redirect models
     loadbalance_strategy_id: Mapped[int | None] = mapped_column(
         Integer,
         nullable=True,
@@ -157,6 +167,63 @@ class ModelConfig(Base):
     connections: Mapped[list["Connection"]] = relationship(
         back_populates="model_config_rel", cascade="all, delete-orphan"
     )
+    proxy_targets: Mapped[list["ModelProxyTarget"]] = relationship(
+        back_populates="source_model_config",
+        cascade="all, delete-orphan",
+        foreign_keys="ModelProxyTarget.source_model_config_id",
+        order_by="ModelProxyTarget.position",
+    )
+    referenced_by_proxy_targets: Mapped[list["ModelProxyTarget"]] = relationship(
+        back_populates="target_model_config",
+        foreign_keys="ModelProxyTarget.target_model_config_id",
+    )
+
+
+class ModelProxyTarget(Base):
+    __tablename__ = "model_proxy_targets"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_model_config_id",
+            "position",
+            name="uq_model_proxy_targets_source_position",
+        ),
+        UniqueConstraint(
+            "source_model_config_id",
+            "target_model_config_id",
+            name="uq_model_proxy_targets_source_target",
+        ),
+        Index(
+            "idx_model_proxy_targets_source_position",
+            "source_model_config_id",
+            "position",
+        ),
+        Index(
+            "idx_model_proxy_targets_target_model",
+            "target_model_config_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_model_config_id: Mapped[int] = mapped_column(
+        ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    target_model_config_id: Mapped[int] = mapped_column(
+        ForeignKey("model_configs.id", ondelete="RESTRICT"), nullable=False
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    source_model_config: Mapped["ModelConfig"] = relationship(
+        back_populates="proxy_targets",
+        foreign_keys=[source_model_config_id],
+    )
+    target_model_config: Mapped["ModelConfig"] = relationship(
+        back_populates="referenced_by_proxy_targets",
+        foreign_keys=[target_model_config_id],
+    )
+
+    @property
+    def target_model_id(self) -> str | None:
+        return self.target_model_config.model_id if self.target_model_config else None
 
 
 class Endpoint(Base):
@@ -277,6 +344,9 @@ class Connection(Base):
     pricing_template_id: Mapped[int | None] = mapped_column(
         ForeignKey("pricing_templates.id", ondelete="RESTRICT"), nullable=True
     )
+    qps_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_in_flight_non_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_in_flight_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)

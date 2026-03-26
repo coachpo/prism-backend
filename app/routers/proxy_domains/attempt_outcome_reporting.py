@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -20,6 +21,77 @@ CostFieldsBuilder = Callable[[dict[str, int | None] | None], CostFieldPayload]
 TokenUsage = dict[str, int | None]
 
 
+def _lower_header_map(headers: dict[str, str] | None) -> dict[str, str]:
+    if not headers:
+        return {}
+    return {key.lower(): value for key, value in headers.items()}
+
+
+def _parse_json_object(raw_body: bytes | None) -> dict[str, object] | None:
+    if not raw_body:
+        return None
+    try:
+        parsed = json.loads(raw_body)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _extract_gemini_response_id_from_sse(raw_body: bytes | None) -> str | None:
+    if not raw_body:
+        return None
+    for line in raw_body.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith(b"data: ") or stripped == b"data: [DONE]":
+            continue
+        payload = _parse_json_object(stripped[6:])
+        if payload is None:
+            continue
+        response_id = payload.get("responseId")
+        if isinstance(response_id, str) and response_id:
+            return response_id
+        nested_response = payload.get("response")
+        if isinstance(nested_response, dict):
+            nested_response_id = nested_response.get("responseId")
+            if isinstance(nested_response_id, str) and nested_response_id:
+                return nested_response_id
+    return None
+
+
+def extract_provider_correlation_id(
+    *,
+    provider_type: str,
+    response_headers: dict[str, str] | None,
+    response_body: bytes | None,
+    request_headers: dict[str, str] | None,
+) -> str | None:
+    normalized_response_headers = _lower_header_map(response_headers)
+    normalized_request_headers = _lower_header_map(request_headers)
+
+    if provider_type == "openai":
+        return normalized_response_headers.get(
+            "x-request-id"
+        ) or normalized_request_headers.get("x-client-request-id")
+
+    if provider_type == "anthropic":
+        header_request_id = normalized_response_headers.get("request-id")
+        if header_request_id:
+            return header_request_id
+        payload = _parse_json_object(response_body)
+        body_request_id = payload.get("request_id") if payload is not None else None
+        return body_request_id if isinstance(body_request_id, str) else None
+
+    if provider_type == "gemini":
+        payload = _parse_json_object(response_body)
+        if payload is not None:
+            response_id = payload.get("responseId")
+            if isinstance(response_id, str) and response_id:
+                return response_id
+        return _extract_gemini_response_id_from_sse(response_body)
+
+    return None
+
+
 def response_error_detail(raw_body: bytes | None) -> str | None:
     if raw_body is None:
         return None
@@ -32,6 +104,8 @@ async def record_request_log(
     state: ProxyRequestState,
     target: ProxyAttemptTarget,
     status_code: int,
+    response_headers: dict[str, str] | None,
+    response_body: bytes | None,
     elapsed_ms: int,
     is_stream: bool,
     error_detail: str | None = None,
@@ -45,6 +119,14 @@ async def record_request_log(
         provider_type=state.setup.provider_type,
         endpoint_id=target.connection.endpoint_id,
         connection_id=target.connection.id,
+        ingress_request_id=state.setup.ingress_request_id,
+        attempt_number=target.attempt_number,
+        provider_correlation_id=extract_provider_correlation_id(
+            provider_type=state.setup.provider_type,
+            response_headers=response_headers,
+            response_body=response_body,
+            request_headers=target.headers,
+        ),
         endpoint_base_url=endpoint.base_url,
         endpoint_description=target.description,
         status_code=status_code,
@@ -117,6 +199,8 @@ async def log_and_audit_attempt(
         state=state,
         target=target,
         status_code=status_code,
+        response_headers=response_headers,
+        response_body=response_body,
         elapsed_ms=elapsed_ms,
         is_stream=is_stream,
         error_detail=error_detail,
@@ -138,6 +222,7 @@ async def log_and_audit_attempt(
 
 @dataclass(frozen=True, slots=True)
 class StreamFinalizationSnapshot:
+    attempt_number: int
     audit_capture_bodies: bool
     audit_enabled: bool
     build_cost_fields: CostFieldsBuilder
@@ -146,11 +231,13 @@ class StreamFinalizationSnapshot:
     endpoint_base_url: str
     endpoint_description: str | None
     endpoint_id: int | None
+    ingress_request_id: str
     log_request_fn: LogRequestFn
     model_id: str
     payload: bytes | None
     profile_id: int
     provider_id: int
+    provider_correlation_id: str | None
     provider_type: str
     record_audit_log_fn: RecordAuditLogFn
     request_body: bytes | None
@@ -172,6 +259,7 @@ def build_stream_finalization_snapshot(
     status_code: int,
     elapsed_ms: int,
     payload: bytes | None,
+    provider_correlation_id: str | None,
     token_usage: TokenUsage | None,
 ) -> StreamFinalizationSnapshot:
     endpoint = target.connection.endpoint_rel
@@ -183,6 +271,7 @@ def build_stream_finalization_snapshot(
 
     return StreamFinalizationSnapshot(
         audit_capture_bodies=state.setup.audit_capture_bodies,
+        attempt_number=target.attempt_number,
         audit_enabled=state.setup.audit_enabled,
         build_cost_fields=build_cost_fields,
         connection_id=connection.id,
@@ -190,11 +279,13 @@ def build_stream_finalization_snapshot(
         endpoint_base_url=endpoint.base_url,
         endpoint_description=target.description,
         endpoint_id=connection.endpoint_id,
+        ingress_request_id=state.setup.ingress_request_id,
         log_request_fn=deps.log_request_fn,
         model_id=state.setup.model_id,
         payload=payload,
         profile_id=state.profile_id,
         provider_id=state.setup.provider_id,
+        provider_correlation_id=provider_correlation_id,
         provider_type=state.setup.provider_type,
         record_audit_log_fn=deps.record_audit_log_fn,
         request_body=bytes(target.endpoint_body)
@@ -221,6 +312,15 @@ async def _persist_stream_request_log(
         provider_type=snapshot.provider_type,
         endpoint_id=snapshot.endpoint_id,
         connection_id=snapshot.connection_id,
+        ingress_request_id=snapshot.ingress_request_id,
+        attempt_number=snapshot.attempt_number,
+        provider_correlation_id=snapshot.provider_correlation_id
+        or extract_provider_correlation_id(
+            provider_type=snapshot.provider_type,
+            response_headers=snapshot.response_headers,
+            response_body=snapshot.payload,
+            request_headers=snapshot.request_headers,
+        ),
         endpoint_base_url=snapshot.endpoint_base_url,
         endpoint_description=snapshot.endpoint_description,
         status_code=snapshot.status_code,
@@ -330,6 +430,7 @@ async def persist_stream_request_log_inline_fallback(
 __all__ = [
     "build_stream_finalization_snapshot",
     "enqueue_stream_finalize",
+    "extract_provider_correlation_id",
     "log_and_audit_attempt",
     "persist_stream_request_log_inline_fallback",
     "record_attempt_audit",

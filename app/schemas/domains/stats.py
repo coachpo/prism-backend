@@ -17,8 +17,12 @@ class RequestLogResponse(BaseModel):
     profile_id: int
     model_id: str
     provider_type: str
+    resolved_target_model_id: str | None = None
     endpoint_id: int | None
     connection_id: int | None
+    ingress_request_id: str | None = None
+    attempt_number: int | None = None
+    provider_correlation_id: str | None = None
     endpoint_base_url: str | None
     status_code: int
     response_time_ms: int
@@ -365,6 +369,9 @@ class LoadbalanceEventListItem(BaseModel):
     model_id: str | None
     endpoint_id: int | None
     provider_id: int | None
+    max_cooldown_strikes: int | None = None
+    ban_mode: str | None = None
+    banned_until_at: datetime | None = None
     summary: LoadbalanceEventSummary
     created_at: datetime
 
@@ -421,7 +428,9 @@ class LoadbalanceEventDeleteResponse(BaseModel):
     accepted: bool
 
 
-LoadbalanceCurrentStateValue = Literal["counting", "blocked", "probe_eligible"]
+LoadbalanceCurrentStateValue = Literal[
+    "counting", "blocked", "probe_eligible", "banned"
+]
 
 
 class LoadbalanceCurrentStateItem(BaseModel):
@@ -431,6 +440,9 @@ class LoadbalanceCurrentStateItem(BaseModel):
     consecutive_failures: int
     last_failure_kind: str | None
     last_cooldown_seconds: float
+    max_cooldown_strikes: int
+    ban_mode: str
+    banned_until_at: datetime | None
     blocked_until_at: datetime | None
     probe_eligible_logged: bool
     state: LoadbalanceCurrentStateValue

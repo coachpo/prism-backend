@@ -10,6 +10,8 @@ from app.models.domains.identity import (
 )
 from app.models.domains.observability import (
     AuditLog,
+    ConnectionLimiterLease,
+    ConnectionLimiterState,
     EndpointFxRateSetting,
     HeaderBlocklistRule,
     LoadbalanceCurrentState,
@@ -22,6 +24,7 @@ from app.models.domains.routing import (
     Endpoint,
     LoadbalanceStrategy,
     ModelConfig,
+    ModelProxyTarget,
     PricingTemplate,
 )
 
@@ -29,6 +32,8 @@ __all__ = [
     "AppAuthSettings",
     "AuditLog",
     "Connection",
+    "ConnectionLimiterLease",
+    "ConnectionLimiterState",
     "Endpoint",
     "EndpointFxRateSetting",
     "HeaderBlocklistRule",
@@ -36,6 +41,7 @@ __all__ = [
     "LoadbalanceCurrentState",
     "LoadbalanceEvent",
     "ModelConfig",
+    "ModelProxyTarget",
     "PasswordResetChallenge",
     "PricingTemplate",
     "Profile",

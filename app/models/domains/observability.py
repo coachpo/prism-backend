@@ -29,6 +29,7 @@ class RequestLog(Base):
     __tablename__ = "request_logs"
     __table_args__ = (
         Index("idx_request_logs_billable_flag", "billable_flag"),
+        Index("idx_request_logs_ingress_request_id", "ingress_request_id"),
         Index("idx_request_logs_priced_flag", "priced_flag"),
         Index("idx_request_logs_profile_created_at", "profile_id", "created_at"),
     )
@@ -39,9 +40,17 @@ class RequestLog(Base):
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    resolved_target_model_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     connection_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True
+    )
+    ingress_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    provider_correlation_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
     )
     endpoint_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
@@ -269,6 +278,92 @@ class AuditLog(Base):
     profile: Mapped["Profile"] = relationship(back_populates="audit_logs")
 
 
+class ConnectionLimiterState(Base):
+    __tablename__ = "connection_limiter_state"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "connection_id",
+            name="uq_connection_limiter_state_profile_connection",
+        ),
+        Index(
+            "idx_connection_limiter_state_profile_connection",
+            "profile_id",
+            "connection_id",
+        ),
+        CheckConstraint(
+            "window_request_count >= 0",
+            name="ck_connection_limiter_state_window_request_count_nonnegative",
+        ),
+        CheckConstraint(
+            "in_flight_non_stream >= 0",
+            name="ck_connection_limiter_state_non_stream_nonnegative",
+        ),
+        CheckConstraint(
+            "in_flight_stream >= 0",
+            name="ck_connection_limiter_state_stream_nonnegative",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), nullable=False
+    )
+    window_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    window_request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    in_flight_non_stream: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    in_flight_stream: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
+class ConnectionLimiterLease(Base):
+    __tablename__ = "connection_limiter_leases"
+    __table_args__ = (
+        Index(
+            "idx_connection_limiter_leases_profile_connection",
+            "profile_id",
+            "connection_id",
+        ),
+        Index("idx_connection_limiter_leases_expires_at", "expires_at"),
+        CheckConstraint(
+            "lease_kind IN ('stream', 'non_stream')",
+            name="ck_connection_limiter_leases_kind",
+        ),
+    )
+
+    lease_token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False
+    )
+    connection_id: Mapped[int] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), nullable=False
+    )
+    lease_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 class LoadbalanceEvent(Base):
     __tablename__ = "loadbalance_events"
     __table_args__ = (
@@ -278,6 +373,10 @@ class LoadbalanceEvent(Base):
         CheckConstraint(
             "event_type IN ('opened', 'extended', 'probe_eligible', 'recovered', 'not_opened')",
             name="chk_event_type",
+        ),
+        CheckConstraint(
+            "ban_mode IN ('off', 'temporary', 'manual') OR ban_mode IS NULL",
+            name="chk_loadbalance_events_ban_mode",
         ),
         CheckConstraint(
             "failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR failure_kind IS NULL",
@@ -307,6 +406,11 @@ class LoadbalanceEvent(Base):
         Numeric(5, 2), nullable=True
     )
     max_cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_cooldown_strikes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ban_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    banned_until_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
@@ -332,6 +436,14 @@ class LoadbalanceCurrentState(Base):
             "last_failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR last_failure_kind IS NULL",
             name="chk_loadbalance_current_state_failure_kind",
         ),
+        CheckConstraint(
+            "max_cooldown_strikes >= 0",
+            name="chk_loadbalance_current_state_max_cooldown_strikes_nonnegative",
+        ),
+        CheckConstraint(
+            "ban_mode IN ('off', 'temporary', 'manual')",
+            name="chk_loadbalance_current_state_ban_mode",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -347,6 +459,13 @@ class LoadbalanceCurrentState(Base):
     last_failure_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_cooldown_seconds: Mapped[float] = mapped_column(
         Numeric(10, 2), nullable=False, default=0
+    )
+    max_cooldown_strikes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    ban_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="off")
+    banned_until_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     blocked_until_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

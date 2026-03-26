@@ -8,6 +8,33 @@ from app.schemas.schemas import ConnectionCreate, ConnectionUpdate
 from ..crud_dependencies import ConnectionCrudDependencies
 
 
+CONNECTION_LIMITER_FIELDS = (
+    "qps_limit",
+    "max_in_flight_non_stream",
+    "max_in_flight_stream",
+)
+
+
+def build_connection_limiter_data(
+    *,
+    body: ConnectionCreate | ConnectionUpdate,
+    exclude_unset: bool,
+) -> dict[str, int | None]:
+    limiter_data: dict[str, int | None] = {}
+    field_names = body.model_fields_set if exclude_unset else CONNECTION_LIMITER_FIELDS
+    for field_name in CONNECTION_LIMITER_FIELDS:
+        if field_name not in field_names:
+            continue
+        limiter_value = getattr(body, field_name)
+        if limiter_value is not None and limiter_value < 1:
+            raise HTTPException(
+                status_code=422,
+                detail=f"{field_name} must be >= 1 when provided",
+            )
+        limiter_data[field_name] = limiter_value
+    return limiter_data
+
+
 async def load_profile_endpoint_or_404(
     db: AsyncSession,
     *,
@@ -93,6 +120,10 @@ async def build_connection_update_data(
             update_data["custom_headers"]
         )
 
+    for field_name in CONNECTION_LIMITER_FIELDS:
+        update_data.pop(field_name, None)
+    update_data.update(build_connection_limiter_data(body=body, exclude_unset=True))
+
     return update_data
 
 
@@ -116,6 +147,7 @@ def should_clear_recovery_state(
 
 __all__ = [
     "build_connection_update_data",
+    "build_connection_limiter_data",
     "load_profile_endpoint_or_404",
     "resolve_create_endpoint",
     "should_clear_recovery_state",

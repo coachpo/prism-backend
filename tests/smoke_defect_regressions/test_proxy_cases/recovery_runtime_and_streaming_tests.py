@@ -115,6 +115,97 @@ class TestDEF062_NonFailover4xxRecoveryState:
         assert setup.failover_policy.failover_failure_threshold == 4
 
     @pytest.mark.asyncio
+    async def test_prepare_proxy_request_treats_gemini_stream_path_as_streaming_without_body_flag(
+        self,
+    ):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        app = FastAPI()
+        app.state.http_client = object()
+        request_path = "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent"
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": request_path,
+                "raw_path": request_path.encode("utf-8"),
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+        ).encode("utf-8")
+
+        provider = SimpleNamespace(
+            provider_type="gemini",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            failover_cooldown_seconds=45,
+            failover_failure_threshold=4,
+            failover_backoff_multiplier=3.5,
+            failover_max_cooldown_seconds=720,
+            failover_jitter_ratio=0.35,
+            failover_auth_error_cooldown_seconds=2400,
+        )
+        connection = SimpleNamespace(endpoint_id=501)
+        model_config = SimpleNamespace(
+            provider=provider,
+            model_id="gemini-3.1-pro-preview",
+            loadbalance_strategy=strategy,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path=request_path,
+                profile_id=1,
+            )
+
+        assert setup.is_streaming is True
+
+    @pytest.mark.asyncio
     async def test_non_failover_4xx_preserves_existing_recovery_state(self):
         from fastapi import FastAPI
         from starlette.requests import Request
@@ -306,6 +397,631 @@ class TestDEF062_NonFailover4xxRecoveryState:
             1,
             now_at=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_failover_retry_reuses_ingress_request_id_and_increments_attempt_number(
+        self,
+    ):
+        from fastapi import FastAPI
+        import httpx
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+
+        class DummyHttpClient:
+            def __init__(self):
+                self._responses = [
+                    httpx.Response(
+                        status_code=500,
+                        headers={"content-type": "application/json"},
+                        content=b'{"error":{"message":"retry"}}',
+                    ),
+                    httpx.Response(
+                        status_code=200,
+                        headers={"content-type": "application/json"},
+                        content=b'{"id":"ok"}',
+                    ),
+                ]
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                response = self._responses.pop(0)
+                response.request = request
+                return response
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        log_request = AsyncMock(side_effect=[901, 902])
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(
+                    return_value=_attempt_plan(first_connection, second_connection)
+                ),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch("app.routers.proxy.log_request", log_request),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+            patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert response.status_code == 200
+        assert log_request.await_count == 2
+        first_call = log_request.await_args_list[0].kwargs
+        second_call = log_request.await_args_list[1].kwargs
+        assert first_call["attempt_number"] == 1
+        assert second_call["attempt_number"] == 2
+        assert first_call["ingress_request_id"] == second_call["ingress_request_id"]
+
+    @pytest.mark.asyncio
+    async def test_limiter_denial_spills_to_next_connection_without_upstream_attempt_on_first(
+        self,
+    ):
+        from fastapi import FastAPI
+        import httpx
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.sent_urls: list[str] = []
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                self.sent_urls.append(str(request.url))
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=b'{"id":"ok"}',
+                )
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+        first_connection.max_in_flight_non_stream = 1
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+        second_connection.max_in_flight_non_stream = 1
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(
+                    return_value=_attempt_plan(first_connection, second_connection)
+                ),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch(
+                "app.routers.proxy.acquire_connection_limit",
+                AsyncMock(
+                    side_effect=[
+                        LimiterAcquireResult(
+                            admitted=False,
+                            deny_reason="qps_limit",
+                        ),
+                        LimiterAcquireResult(
+                            admitted=True,
+                            lease_token="lease-2",
+                        ),
+                    ]
+                ),
+            ),
+            patch("app.routers.proxy.release_connection_lease", AsyncMock()),
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert response.status_code == 200
+        assert app.state.http_client.sent_urls == [
+            "https://second.example.com/v1/v1/chat/completions"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_buffered_failover_releases_limiter_lease_before_retry(self):
+        from fastapi import FastAPI
+        import httpx
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class DummyHttpClient:
+            def __init__(self):
+                self._responses = [
+                    httpx.Response(
+                        status_code=500,
+                        headers={"content-type": "application/json"},
+                        content=b'{"error":{"message":"retry"}}',
+                    ),
+                    httpx.Response(
+                        status_code=200,
+                        headers={"content-type": "application/json"},
+                        content=b'{"id":"ok"}',
+                    ),
+                ]
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                response = self._responses.pop(0)
+                response.request = request
+                return response
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+        first_connection.max_in_flight_non_stream = 1
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+        second_connection.max_in_flight_non_stream = 1
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        release_connection_lease = AsyncMock()
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(
+                    return_value=_attempt_plan(first_connection, second_connection)
+                ),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch("app.routers.proxy.log_request", AsyncMock(side_effect=[901, 902])),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+            patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+            patch(
+                "app.routers.proxy.acquire_connection_limit",
+                AsyncMock(
+                    side_effect=[
+                        LimiterAcquireResult(admitted=True, lease_token="lease-1"),
+                        LimiterAcquireResult(admitted=True, lease_token="lease-2"),
+                    ]
+                ),
+            ),
+            patch(
+                "app.routers.proxy.release_connection_lease",
+                release_connection_lease,
+            ),
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert response.status_code == 200
+        assert [
+            call.kwargs["lease_token"]
+            for call in release_connection_lease.await_args_list
+        ] == ["lease-1", "lease-2"]
+
+    @pytest.mark.asyncio
+    async def test_transport_exception_releases_limiter_lease_before_retry(self):
+        from fastapi import FastAPI
+        import httpx
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.calls = 0
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise httpx.ConnectError("connect fail")
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=b'{"id":"ok"}',
+                )
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.provider_type = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+        first_connection.max_in_flight_non_stream = 1
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+        second_connection.max_in_flight_non_stream = 1
+
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        release_connection_lease = AsyncMock()
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(
+                    return_value=_attempt_plan(first_connection, second_connection)
+                ),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch("app.routers.proxy.log_request", AsyncMock(side_effect=[901, 902])),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+            patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+            patch(
+                "app.routers.proxy.acquire_connection_limit",
+                AsyncMock(
+                    side_effect=[
+                        LimiterAcquireResult(admitted=True, lease_token="lease-1"),
+                        LimiterAcquireResult(admitted=True, lease_token="lease-2"),
+                    ]
+                ),
+            ),
+            patch(
+                "app.routers.proxy.release_connection_lease",
+                release_connection_lease,
+            ),
+        ):
+            response = await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert response.status_code == 200
+        assert [
+            call.kwargs["lease_token"]
+            for call in release_connection_lease.await_args_list
+        ] == ["lease-1", "lease-2"]
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:
@@ -569,10 +1285,17 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
 class TestDEF021_StreamingCancellationResilience:
     @staticmethod
-    def _build_request(app, raw_body: bytes, path: str = "/v1/responses"):
+    def _build_request(
+        app,
+        raw_body: bytes,
+        *,
+        path: str = "/v1/responses",
+        raw_path: bytes = b"/v1/responses",
+    ):
         from starlette.requests import Request
 
-        raw_path = path.encode("utf-8")
+        if raw_path == b"/v1/responses" and path != "/v1/responses":
+            raw_path = path.encode("utf-8")
 
         async def receive_message():
             return {
@@ -603,9 +1326,13 @@ class TestDEF021_StreamingCancellationResilience:
         return request
 
     @staticmethod
-    def _build_model_config_and_endpoint():
+    def _build_model_config_and_endpoint(
+        *,
+        provider_type: str = "openai",
+        model_id: str = "gpt-4o-mini",
+    ):
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.provider_type = provider_type
         provider.audit_enabled = True
         provider.audit_capture_bodies = False
         provider.id = 11
@@ -627,7 +1354,7 @@ class TestDEF021_StreamingCancellationResilience:
 
         model_config = MagicMock()
         model_config.provider = provider
-        model_config.model_id = "gpt-4o-mini"
+        model_config.model_id = model_id
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="single",
             failover_recovery_enabled=False,
@@ -1545,6 +2272,156 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             await manager.shutdown()
 
     @pytest.mark.asyncio
+    async def test_stream_success_audits_openai_response_completed_payload_when_capture_enabled(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        delta_event = (
+            b"event: response.output_text.delta\n"
+            b'data: {"type":"response.output_text.delta","delta":"Hello"}\n\n'
+        )
+        completed_event = (
+            b"event: response.completed\n"
+            b'data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":75,"output_tokens":125,"total_tokens":200,"input_tokens_details":{"cached_tokens":32},"output_tokens_details":{"reasoning_tokens":64}}}}\n\n'
+        )
+        expected_payload = delta_event + completed_event
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield delta_event
+                yield completed_event
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "input": "hello",
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        model_config.provider.audit_capture_bodies = True
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+
+            def build_cost_fields_for_response_completed_usage(**kwargs):
+                return {
+                    "cache_read_input_tokens": kwargs["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": kwargs[
+                        "cache_creation_input_tokens"
+                    ],
+                    "reasoning_tokens": kwargs["reasoning_tokens"],
+                }
+
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    side_effect=build_cost_fields_for_response_completed_usage,
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=893)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["input_tokens"] == 75
+                assert log_call.kwargs["output_tokens"] == 125
+                assert log_call.kwargs["total_tokens"] == 200
+                assert log_call.kwargs["cache_read_input_tokens"] == 32
+                assert log_call.kwargs["cache_creation_input_tokens"] == 0
+                assert log_call.kwargs["reasoning_tokens"] == 64
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 893
+                assert audit_call.kwargs["capture_bodies"] is True
+                assert audit_call.kwargs["response_body"] == expected_payload
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
     async def test_stream_success_without_body_capture_matches_full_payload_multi_event_usage(
         self, caplog
     ):
@@ -1696,6 +2573,142 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["request_log_id"] == 891
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_gemini_stream_success_without_body_capture_logs_response_id(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        chunk_one = b'data: {"responseId":"resp-gemini-1","served_by":"primary"}\n\n'
+        chunk_two = (
+            b'data: {"usageMetadata":{"promptTokenCount":1,'
+            b'"candidatesTokenCount":1,"totalTokenCount":2}}\n\n'
+        )
+        expected_payload = chunk_one + chunk_two
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield chunk_one
+                yield chunk_two
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        request_path = "/v1beta/models/gemini-2.5-flash:streamGenerateContent"
+        raw_body = json.dumps(
+            {
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": "hello"}],
+                    }
+                ]
+            }
+        ).encode("utf-8")
+        request = self._build_request(
+            app, raw_body, path=request_path, raw_path=request_path.encode("utf-8")
+        )
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint(
+            provider_type="gemini",
+            model_id="gemini-2.5-flash",
+        )
+        model_config.provider.audit_capture_bodies = False
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=892)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path=request_path,
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["provider_correlation_id"] == "resp-gemini-1"
+
+                audit_mock.assert_awaited_once()
                 assert "Failed to log streaming request" not in caplog.text
                 assert "Failed to queue streaming audit follow-up" not in caplog.text
         finally:
@@ -2145,4 +3158,147 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert "Failed to log streaming request" not in caplog.text
                 assert "Failed to queue streaming audit follow-up" not in caplog.text
         finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_stream_generator_close_releases_limiter_lease(self, caplog):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        caplog.set_level(logging.ERROR)
+
+        class SlowStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                await asyncio.sleep(1)
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = SlowStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint()
+        endpoint.max_in_flight_stream = 1
+        log_started = asyncio.Event()
+        release_log = asyncio.Event()
+        manager = BackgroundTaskManager()
+        await manager.start()
+        release_connection_lease = AsyncMock()
+
+        async def delayed_log_request(*args, **kwargs):
+            log_started.set()
+            await release_log.wait()
+            return 778
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch(
+                    "app.routers.proxy.log_request",
+                    AsyncMock(side_effect=delayed_log_request),
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy.acquire_connection_limit",
+                    AsyncMock(
+                        return_value=LimiterAcquireResult(
+                            admitted=True,
+                            lease_token="stream-lease",
+                        )
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy.release_connection_lease",
+                    release_connection_lease,
+                ),
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+                first = await stream.__anext__()
+                assert first.startswith(b"data: ")
+                close_task = asyncio.create_task(stream.aclose())
+                await asyncio.wait_for(log_started.wait(), timeout=1)
+                release_log.set()
+                await close_task
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                release_connection_lease.assert_awaited_once()
+                release_call = release_connection_lease.await_args
+                assert release_call is not None
+                assert release_call.kwargs["lease_token"] == "stream-lease"
+                assert upstream_resp.closed is True
+                assert "Failed to log streaming request" not in caplog.text
+        finally:
+            release_log.set()
             await manager.shutdown()

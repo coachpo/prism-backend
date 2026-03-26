@@ -15,6 +15,9 @@ def _request_log(
     response_time_ms: int,
     created_at: datetime,
     status_code: int = 200,
+    ingress_request_id: str | None = None,
+    attempt_number: int | None = None,
+    provider_correlation_id: str | None = None,
 ) -> RequestLog:
     return RequestLog(
         profile_id=profile_id,
@@ -22,6 +25,9 @@ def _request_log(
         provider_type="openai",
         endpoint_id=None,
         connection_id=None,
+        ingress_request_id=ingress_request_id,
+        attempt_number=attempt_number,
+        provider_correlation_id=provider_correlation_id,
         endpoint_base_url="https://api.openai.com",
         status_code=status_code,
         response_time_ms=response_time_ms,
@@ -279,3 +285,75 @@ async def test_get_operations_request_logs_filters_by_status_family_and_exact_st
 
     assert total == 1
     assert [item["status_code"] for item in items] == [503]
+
+
+@pytest.mark.asyncio
+async def test_get_request_logs_filters_by_ingress_request_id_and_preserves_attempt_order() -> (
+    None
+):
+    from app.services.stats.request_logs import get_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"ingress-log-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        other_profile = Profile(
+            name=f"ingress-log-other-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add_all([profile, other_profile])
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    ingress_request_id="ingress-123",
+                    attempt_number=1,
+                    provider_correlation_id="resp-1",
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    ingress_request_id="ingress-123",
+                    attempt_number=2,
+                    provider_correlation_id="resp-2",
+                    status_code=503,
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=120,
+                    created_at=created_at,
+                    ingress_request_id="other-ingress",
+                    attempt_number=1,
+                ),
+                _request_log(
+                    profile_id=other_profile.id,
+                    response_time_ms=130,
+                    created_at=created_at,
+                    ingress_request_id="ingress-123",
+                    attempt_number=9,
+                ),
+            ]
+        )
+        await db.commit()
+
+        items, total = await get_request_logs(
+            db,
+            profile_id=profile.id,
+            ingress_request_id="ingress-123",
+            limit=50,
+            offset=0,
+        )
+
+    assert total == 2
+    assert [item.attempt_number for item in items] == [2, 1]
+    assert [item.provider_correlation_id for item in items] == ["resp-2", "resp-1"]

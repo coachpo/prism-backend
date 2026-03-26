@@ -11,7 +11,12 @@ from pydantic import (
     model_validator,
 )
 
-from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+from app.services.loadbalancer.policy import (
+    BanMode,
+    normalize_strategy_ban_policy,
+    resolve_effective_loadbalance_policy,
+    validate_strategy_ban_policy,
+)
 
 from .common import AuthType
 from .endpoint_pricing import (
@@ -28,6 +33,9 @@ class ConnectionBase(BaseModel):
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
     pricing_template_id: int | None = None
+    qps_limit: int | None = Field(default=None, ge=1)
+    max_in_flight_non_stream: int | None = Field(default=None, ge=1)
+    max_in_flight_stream: int | None = Field(default=None, ge=1)
 
 
 class ConnectionCreate(ConnectionBase):
@@ -57,6 +65,9 @@ class ConnectionUpdate(BaseModel):
     auth_type: AuthType | None = None
     custom_headers: dict[str, str] | None = None
     pricing_template_id: int | None = None
+    qps_limit: int | None = Field(default=None, ge=1)
+    max_in_flight_non_stream: int | None = Field(default=None, ge=1)
+    max_in_flight_stream: int | None = Field(default=None, ge=1)
 
     @model_validator(mode="after")
     def validate_update(self):
@@ -81,6 +92,9 @@ class ConnectionResponse(BaseModel):
     auth_type: AuthType | None
     custom_headers: dict[str, str] | None
     pricing_template_id: int | None
+    qps_limit: int | None
+    max_in_flight_non_stream: int | None
+    max_in_flight_stream: int | None
     pricing_template: ConnectionPricingTemplateSummary | None = Field(
         default=None,
         validation_alias=AliasChoices("pricing_template", "pricing_template_rel"),
@@ -162,6 +176,9 @@ class LoadbalanceStrategyBase(BaseModel):
     failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
+    failover_ban_mode: BanMode = "off"
+    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
+    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
 
     @field_validator("name")
     @classmethod
@@ -175,6 +192,13 @@ class LoadbalanceStrategyBase(BaseModel):
     def validate_strategy_behavior(self):
         if self.strategy_type == "single" and self.failover_recovery_enabled:
             raise ValueError("single strategies must not enable failover recovery")
+        validate_strategy_ban_policy(
+            strategy_type=self.strategy_type,
+            failover_recovery_enabled=self.failover_recovery_enabled,
+            failover_ban_mode=self.failover_ban_mode,
+            failover_max_cooldown_strikes_before_ban=self.failover_max_cooldown_strikes_before_ban,
+            failover_ban_duration_seconds=self.failover_ban_duration_seconds,
+        )
         return self
 
 
@@ -194,6 +218,11 @@ class LoadbalanceStrategyUpdate(BaseModel):
     failover_auth_error_cooldown_seconds: int | None = Field(
         default=None, ge=1, le=86_400
     )
+    failover_ban_mode: BanMode | None = None
+    failover_max_cooldown_strikes_before_ban: int | None = Field(
+        default=None, ge=0, le=100
+    )
+    failover_ban_duration_seconds: int | None = Field(default=None, ge=0, le=86_400)
 
     @field_validator("name")
     @classmethod
@@ -225,6 +254,9 @@ class LoadbalanceStrategySummary(BaseModel):
     failover_max_cooldown_seconds: int
     failover_jitter_ratio: float
     failover_auth_error_cooldown_seconds: int
+    failover_ban_mode: BanMode
+    failover_max_cooldown_strikes_before_ban: int
+    failover_ban_duration_seconds: int
 
     @model_validator(mode="before")
     @classmethod
@@ -235,6 +267,13 @@ class LoadbalanceStrategySummary(BaseModel):
             return value
 
         policy = resolve_effective_loadbalance_policy(value)
+        ban_mode, ban_strikes, ban_duration = normalize_strategy_ban_policy(
+            strategy_type=policy.strategy_type,
+            failover_recovery_enabled=policy.failover_recovery_enabled,
+            failover_ban_mode=policy.failover_ban_mode,
+            failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
+            failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
+        )
         return {
             "id": getattr(value, "id"),
             "name": getattr(value, "name"),
@@ -248,6 +287,9 @@ class LoadbalanceStrategySummary(BaseModel):
             "failover_auth_error_cooldown_seconds": (
                 policy.failover_auth_error_cooldown_seconds
             ),
+            "failover_ban_mode": ban_mode,
+            "failover_max_cooldown_strikes_before_ban": ban_strikes,
+            "failover_ban_duration_seconds": ban_duration,
         }
 
 
@@ -258,20 +300,39 @@ class LoadbalanceStrategyResponse(LoadbalanceStrategySummary):
     updated_at: datetime
 
 
+class ProxyTargetReference(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    target_model_id: str
+    position: int = Field(ge=0)
+
+    @field_validator("target_model_id")
+    @classmethod
+    def validate_target_model_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("target_model_id must not be empty")
+        return normalized
+
+
 class ModelConfigBase(BaseModel):
     provider_id: int
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
-    redirect_to: str | None = None
+    proxy_targets: list[ProxyTargetReference] = Field(default_factory=list)
     loadbalance_strategy_id: int | None = None
 
     @model_validator(mode="after")
     def validate_strategy_attachment(self):
         if self.model_type == "native" and self.loadbalance_strategy_id is None:
             raise ValueError("loadbalance_strategy_id is required for native models")
+        if self.model_type == "native" and self.proxy_targets:
+            raise ValueError("proxy_targets must be empty for native models")
         if self.model_type == "proxy" and self.loadbalance_strategy_id is not None:
             raise ValueError("loadbalance_strategy_id must be null for proxy models")
+        if self.model_type == "proxy" and not self.proxy_targets:
+            raise ValueError("proxy_targets is required for proxy models")
         return self
 
     is_enabled: bool = True
@@ -286,9 +347,17 @@ class ModelConfigUpdate(BaseModel):
     model_id: str | None = None
     display_name: str | None = None
     model_type: Literal["native", "proxy"] | None = None
-    redirect_to: str | None = None
+    proxy_targets: list[ProxyTargetReference] | None = None
     loadbalance_strategy_id: int | None = None
     is_enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_proxy_targets(self):
+        if self.model_type == "native" and self.proxy_targets:
+            raise ValueError("proxy_targets must be empty for native models")
+        if self.model_type == "proxy" and self.proxy_targets == []:
+            raise ValueError("proxy_targets must not be empty for proxy models")
+        return self
 
 
 class ModelConfigResponse(BaseModel):
@@ -301,7 +370,7 @@ class ModelConfigResponse(BaseModel):
     model_id: str
     display_name: str | None
     model_type: Literal["native", "proxy"]
-    redirect_to: str | None
+    proxy_targets: list[ProxyTargetReference] = Field(default_factory=list)
     loadbalance_strategy_id: int | None
     loadbalance_strategy: LoadbalanceStrategySummary | None = None
     is_enabled: bool
@@ -320,7 +389,7 @@ class ModelConfigListResponse(BaseModel):
     model_id: str
     display_name: str | None
     model_type: Literal["native", "proxy"]
-    redirect_to: str | None
+    proxy_targets: list[ProxyTargetReference] = Field(default_factory=list)
     loadbalance_strategy_id: int | None
     loadbalance_strategy: LoadbalanceStrategySummary | None = None
     is_enabled: bool
@@ -376,4 +445,5 @@ __all__ = [
     "ModelConfigListResponse",
     "ModelConfigResponse",
     "ModelConfigUpdate",
+    "ProxyTargetReference",
 ]

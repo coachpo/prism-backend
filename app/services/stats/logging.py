@@ -232,7 +232,7 @@ async def build_dashboard_route_snapshot(
     )
 
 
-async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict:
+async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict[str, object]:
     window_end = entry.created_at or utc_now()
     window_start_24h = window_end - timedelta(hours=24)
 
@@ -413,6 +413,9 @@ async def log_request(
     provider_type: str,
     endpoint_id: int | None,
     connection_id: int | None,
+    ingress_request_id: str | None = None,
+    attempt_number: int | None = None,
+    provider_correlation_id: str | None = None,
     endpoint_base_url: str | None,
     status_code: int,
     response_time_ms: int,
@@ -460,6 +463,9 @@ async def log_request(
             provider_type=provider_type,
             endpoint_id=endpoint_id,
             connection_id=connection_id,
+            ingress_request_id=ingress_request_id,
+            attempt_number=attempt_number,
+            provider_correlation_id=provider_correlation_id,
             endpoint_base_url=endpoint_base_url,
             status_code=status_code,
             response_time_ms=response_time_ms,

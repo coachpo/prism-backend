@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
@@ -14,12 +14,14 @@ from app.models.models import (
     HeaderBlocklistRule,
     LoadbalanceStrategy,
     ModelConfig,
+    ModelProxyTarget,
     PricingTemplate,
     Provider,
     UserSetting,
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
+from app.services.loadbalancer.policy import normalize_strategy_ban_policy
 from app.services.loadbalancer.state import clear_profile_state
 from app.services.proxy_service import normalize_base_url
 
@@ -259,6 +261,24 @@ async def execute_import_payload(
     strategies_count = 0
     for strategy_data in data.loadbalance_strategies:
         strategy_name = strategy_data.name.strip()
+        (
+            failover_ban_mode,
+            failover_max_cooldown_strikes_before_ban,
+            failover_ban_duration_seconds,
+        ) = normalize_strategy_ban_policy(
+            strategy_type=cast(
+                Literal["single", "failover"], strategy_data.strategy_type
+            ),
+            failover_recovery_enabled=strategy_data.failover_recovery_enabled,
+            failover_ban_mode=cast(
+                Literal["off", "temporary", "manual"],
+                strategy_data.failover_ban_mode,
+            ),
+            failover_max_cooldown_strikes_before_ban=(
+                strategy_data.failover_max_cooldown_strikes_before_ban
+            ),
+            failover_ban_duration_seconds=strategy_data.failover_ban_duration_seconds,
+        )
         strategy = LoadbalanceStrategy(
             id=strategy_id_allocator.take(),
             profile_id=profile_id,
@@ -275,6 +295,11 @@ async def execute_import_payload(
             failover_auth_error_cooldown_seconds=(
                 strategy_data.failover_auth_error_cooldown_seconds
             ),
+            failover_ban_mode=failover_ban_mode,
+            failover_max_cooldown_strikes_before_ban=(
+                failover_max_cooldown_strikes_before_ban
+            ),
+            failover_ban_duration_seconds=failover_ban_duration_seconds,
         )
         db.add(strategy)
         await db.flush()
@@ -284,6 +309,8 @@ async def execute_import_payload(
 
     connections_count = 0
     imported_connection_pairs: set[tuple[str, str]] = set()
+    proxy_target_specs: list[tuple[int, list[Any]]] = []
+    model_id_to_config_id: dict[str, int] = {}
 
     for model in data.models:
         is_proxy = model.model_type == "proxy"
@@ -294,7 +321,6 @@ async def execute_import_payload(
             model_id=model.model_id,
             display_name=model.display_name,
             model_type=cast(Literal["native", "proxy"], model.model_type),
-            redirect_to=model.redirect_to if is_proxy else None,
             loadbalance_strategy_id=(
                 None
                 if is_proxy
@@ -304,8 +330,10 @@ async def execute_import_payload(
         )
         db.add(model_config)
         await db.flush()
+        model_id_to_config_id[model.model_id] = model_config.id
 
         if is_proxy:
+            proxy_target_specs.append((model_config.id, model.proxy_targets))
             continue
 
         for normalized_priority, connection_data in enumerate(
@@ -340,10 +368,25 @@ async def execute_import_payload(
                 custom_headers=json.dumps(connection_data.custom_headers)
                 if connection_data.custom_headers
                 else None,
+                qps_limit=connection_data.qps_limit,
+                max_in_flight_non_stream=connection_data.max_in_flight_non_stream,
+                max_in_flight_stream=connection_data.max_in_flight_stream,
             )
             db.add(connection)
             connections_count += 1
             imported_connection_pairs.add((model.model_id, resolved_endpoint_name))
+
+    for source_model_config_id, proxy_targets in proxy_target_specs:
+        for proxy_target in proxy_targets:
+            db.add(
+                ModelProxyTarget(
+                    source_model_config_id=source_model_config_id,
+                    target_model_config_id=model_id_to_config_id[
+                        proxy_target.target_model_id
+                    ],
+                    position=proxy_target.position,
+                )
+            )
     await db.flush()
 
     user_settings = (

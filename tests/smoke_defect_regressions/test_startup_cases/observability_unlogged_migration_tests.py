@@ -65,7 +65,7 @@ async def _drop_database(database_url: str) -> None:
     await engine.dispose()
 
 
-async def _fetch_table_persistence(database_url: str, table_name: str) -> str:
+async def _fetch_table_persistence(database_url: str, table_name: str) -> str | None:
     engine = create_async_engine(database_url)
     async with engine.connect() as conn:
         persistence = (
@@ -75,8 +75,10 @@ async def _fetch_table_persistence(database_url: str, table_name: str) -> str:
                 ),
                 {"table_name": table_name},
             )
-        ).scalar_one()
+        ).scalar_one_or_none()
     await engine.dispose()
+    if persistence is None:
+        return None
     if isinstance(persistence, bytes):
         return persistence.decode()
     return str(persistence)
@@ -107,9 +109,14 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             "audit_logs",
             "loadbalance_events",
         )
+        limiter_tables = (
+            "connection_limiter_state",
+            "connection_limiter_leases",
+        )
         all_observability_tables = (
             *pre_current_state_tables,
             "loadbalance_current_state",
+            *limiter_tables,
         )
         current_head_revision = _get_current_head_revision(migration_database_url)
 

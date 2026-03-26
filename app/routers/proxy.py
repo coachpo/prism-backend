@@ -10,6 +10,10 @@ from app.services.loadbalancer.recovery import (
     record_connection_failure,
     record_connection_recovery,
 )
+from app.services.loadbalancer.limiter import (
+    acquire_connection_limit,
+    release_connection_lease,
+)
 from app.services.loadbalancer.state import clear_connection_state
 from app.services.proxy_service import (
     build_upstream_headers,
@@ -78,6 +82,7 @@ async def _handle_proxy(
         deps=ProxyRuntimeDependencies(
             build_upstream_headers_fn=build_upstream_headers,
             build_upstream_url_fn=build_upstream_url,
+            acquire_connection_limit_fn=acquire_connection_limit,
             claim_probe_eligible_fn=claim_probe_eligible,
             clear_connection_state_fn=clear_connection_state,
             filter_response_headers_fn=filter_response_headers,
@@ -86,6 +91,7 @@ async def _handle_proxy(
             record_connection_recovery_fn=record_connection_recovery,
             proxy_request_fn=proxy_request,
             record_audit_log_fn=record_audit_log,
+            release_connection_lease_fn=release_connection_lease,
             should_failover_fn=should_failover,
         ),
     )

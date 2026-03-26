@@ -13,6 +13,14 @@ from .types import AttemptPlan
 
 logger = logging.getLogger("app.services.loadbalancer")
 
+
+def _is_connection_banned(current_state, *, now_at: datetime) -> bool:
+    if current_state.ban_mode == "manual":
+        return True
+    banned_until_at = ensure_utc_datetime(current_state.banned_until_at)
+    return banned_until_at is not None and banned_until_at > now_at
+
+
 MODEL_CONFIG_WITH_CONNECTION_OPTIONS = (
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
@@ -163,6 +171,10 @@ async def build_attempt_plan(
         current_state = state_by_connection_id.get(connection.id)
         if current_state is None:
             attempt_plan.append(connection)
+            continue
+
+        if _is_connection_banned(current_state, now_at=normalized_now):
+            blocked_connection_ids.append(connection.id)
             continue
 
         blocked_until_at = ensure_utc_datetime(current_state.blocked_until_at)

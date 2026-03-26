@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+from datetime import datetime
 
 from app.services.background_tasks import background_task_manager
 from app.models.models import AuditLog, LoadbalanceEvent
@@ -180,6 +181,9 @@ async def record_loadbalance_event(
     failure_threshold: int | None = None,
     backoff_multiplier: float | None = None,
     max_cooldown_seconds: int | None = None,
+    max_cooldown_strikes: int | None = None,
+    ban_mode: str | None = None,
+    banned_until_at: datetime | None = None,
 ) -> None:
     """Record loadbalance event asynchronously (fire-and-forget)."""
     from app.core.database import AsyncSessionLocal
@@ -199,6 +203,9 @@ async def record_loadbalance_event(
             failure_threshold=failure_threshold,
             backoff_multiplier=backoff_multiplier,
             max_cooldown_seconds=max_cooldown_seconds,
+            max_cooldown_strikes=max_cooldown_strikes,
+            ban_mode=ban_mode,
+            banned_until_at=banned_until_at,
         )
         async with AsyncSessionLocal() as session:
             session.add(entry)

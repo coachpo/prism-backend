@@ -140,6 +140,7 @@ class _SseEventTokenUpdate:
     cache_read_input_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     reasoning_tokens: int | None = None
+    response_id: str | None = None
     usage_seen: bool = False
 
 
@@ -164,12 +165,20 @@ def _parse_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
     cache_read_input_tokens = None
     cache_creation_input_tokens = None
     reasoning_tokens = None
+    response_id = None
+
+    event_response_id = event.get("responseId")
+    if isinstance(event_response_id, str) and event_response_id:
+        response_id = event_response_id
 
     usage = _as_object_dict(event.get("usage"))
     if usage is None:
         response_payload = _as_object_dict(event.get("response"))
         if response_payload is not None:
             usage = _as_object_dict(response_payload.get("usage"))
+            nested_response_id = response_payload.get("responseId")
+            if response_id is None and isinstance(nested_response_id, str):
+                response_id = nested_response_id
 
     if usage is not None:
         usage_seen = True
@@ -245,6 +254,7 @@ def _parse_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
         cache_read_input_tokens=cache_read_input_tokens,
         cache_creation_input_tokens=cache_creation_input_tokens,
         reasoning_tokens=reasoning_tokens,
+        response_id=response_id,
         usage_seen=usage_seen,
     )
 
@@ -258,6 +268,7 @@ class _StreamingFinalizationBuffer:
     _partial_line: bytearray = field(default_factory=bytearray)
     _discard_until_newline: bool = False
     _payload_overflowed: bool = False
+    _provider_correlation_id: str | None = None
     _tokens: TokenUsage | None = None
     _usage_seen: bool = False
 
@@ -271,7 +282,7 @@ class _StreamingFinalizationBuffer:
         if self.parse_sse_tokens:
             self._append_sse_chunk(chunk)
 
-    def finalize(self) -> tuple[bytes | None, TokenUsage | None]:
+    def finalize(self) -> tuple[bytes | None, TokenUsage | None, str | None]:
         if (
             self.parse_sse_tokens
             and self._partial_line
@@ -285,7 +296,7 @@ class _StreamingFinalizationBuffer:
             payload = bytes(self._payload)
 
         if self._tokens is None:
-            return payload, None
+            return payload, None, self._provider_correlation_id
 
         finalized_tokens = dict(self._tokens)
         if finalized_tokens["total_tokens"] is None and (
@@ -305,7 +316,7 @@ class _StreamingFinalizationBuffer:
                 if finalized_tokens[field_name] is None:
                     finalized_tokens[field_name] = 0
 
-        return payload, finalized_tokens
+        return payload, finalized_tokens, self._provider_correlation_id
 
     def _append_payload(self, chunk: bytes) -> None:
         if self._payload_overflowed:
@@ -365,6 +376,8 @@ class _StreamingFinalizationBuffer:
             )
         if update.reasoning_tokens is not None:
             self._tokens["reasoning_tokens"] = update.reasoning_tokens
+        if self._provider_correlation_id is None and update.response_id is not None:
+            self._provider_correlation_id = update.response_id
         self._usage_seen = self._usage_seen or update.usage_seen
 
 
@@ -419,7 +432,9 @@ async def build_streaming_response(
             except BaseException:
                 pass
 
-            payload, token_usage = finalization_buffer.finalize()
+            payload, token_usage, provider_correlation_id = (
+                finalization_buffer.finalize()
+            )
             if token_usage is None and payload is not None:
                 token_usage = _extract_stream_tokens(payload)
 
@@ -431,6 +446,7 @@ async def build_streaming_response(
                 status_code=resp.status_code,
                 elapsed_ms=elapsed_ms,
                 payload=payload,
+                provider_correlation_id=provider_correlation_id,
                 token_usage=token_usage,
             )
 
@@ -457,6 +473,22 @@ async def build_streaming_response(
 
             if request_log_ready is not None and not stream_cancelled:
                 _ = await asyncio.shield(request_log_ready)
+
+            if target.limiter_lease_token is not None:
+                try:
+                    await deps.release_connection_lease_fn(
+                        profile_id=state.profile_id,
+                        lease_token=target.limiter_lease_token,
+                        now_at=None,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Failed to release streaming limiter lease: profile_id=%d connection_id=%d",
+                        state.profile_id,
+                        target.connection.id,
+                    )
 
     content_type_header = cast(str | None, upstream_resp.headers.get("content-type"))
     media_type = content_type_header or "text/event-stream"

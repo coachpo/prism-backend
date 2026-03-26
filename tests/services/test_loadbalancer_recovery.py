@@ -1,8 +1,21 @@
 from types import SimpleNamespace
 from typing import Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
+
+from app.core.database import AsyncSessionLocal
+from app.models.models import (
+    Connection,
+    Endpoint,
+    LoadbalanceCurrentState,
+    ModelConfig,
+    Profile,
+    Provider,
+)
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
 def _policy(**overrides):
@@ -34,7 +47,79 @@ def _policy(**overrides):
         failover_auth_error_cooldown_seconds=cast(
             int, overrides.get("failover_auth_error_cooldown_seconds", 1800)
         ),
+        failover_ban_mode=cast(
+            Literal["off", "temporary", "manual"],
+            overrides.get("failover_ban_mode", "off"),
+        ),
+        failover_max_cooldown_strikes_before_ban=cast(
+            int, overrides.get("failover_max_cooldown_strikes_before_ban", 0)
+        ),
+        failover_ban_duration_seconds=cast(
+            int, overrides.get("failover_ban_duration_seconds", 0)
+        ),
     )
+
+
+async def _get_or_create_provider(db, *, provider_type: str = "openai"):
+    provider = (
+        (
+            await db.execute(
+                select(Provider)
+                .where(Provider.provider_type == provider_type)
+                .order_by(Provider.id.asc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if provider is not None:
+        return provider
+
+    provider = Provider(name="OpenAI recovery", provider_type=provider_type)
+    db.add(provider)
+    await db.flush()
+    return provider
+
+
+async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
+    async with AsyncSessionLocal() as session:
+        provider = await _get_or_create_provider(session)
+        profile = Profile(name=f"Recovery Profile {suffix}", is_active=False, version=0)
+        strategy = make_loadbalance_strategy(
+            profile=profile,
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            name=f"recovery-strategy-{suffix}",
+        )
+        model = ModelConfig(
+            profile=profile,
+            provider_id=provider.id,
+            model_id=f"recovery-model-{suffix}",
+            model_type="native",
+            loadbalance_strategy=strategy,
+            is_enabled=True,
+        )
+        endpoint = Endpoint(
+            profile=profile,
+            name=f"recovery-endpoint-{suffix}",
+            base_url="https://recovery.example.com/v1",
+            api_key="sk-recovery",
+            position=0,
+        )
+        connection = Connection(
+            profile=profile,
+            model_config_rel=model,
+            endpoint_rel=endpoint,
+            is_active=True,
+            priority=0,
+            name=f"recovery-connection-{suffix}",
+        )
+        session.add_all([profile, strategy, model, endpoint, connection])
+        await session.commit()
+        await session.refresh(profile)
+        await session.refresh(connection)
+        return profile.id, connection.id
 
 
 class TestLoadbalancerRecovery:
@@ -76,10 +161,9 @@ class TestLoadbalancerRecovery:
         )
 
     def test_compute_base_cooldown_uses_effective_policy_values(self):
-        from app.services.loadbalancer.policy import EffectiveLoadbalancePolicy
         from app.services.loadbalancer.recovery import _compute_base_cooldown
 
-        policy = EffectiveLoadbalancePolicy(
+        policy = _policy(
             strategy_type="failover",
             failover_recovery_enabled=True,
             failover_cooldown_seconds=30.0,
@@ -153,10 +237,9 @@ class TestLoadbalancerRecovery:
         assert cooldown == 0.0
 
     def test_apply_jitter_uses_effective_policy_ratio(self):
-        from app.services.loadbalancer.policy import EffectiveLoadbalancePolicy
         from app.services.loadbalancer.recovery import _apply_jitter
 
-        policy = EffectiveLoadbalancePolicy(
+        policy = _policy(
             strategy_type="failover",
             failover_recovery_enabled=True,
             failover_cooldown_seconds=30.0,
@@ -231,3 +314,191 @@ class TestLoadbalancerRecovery:
             connection_id=9,
             now_at=None,
         )
+
+    @pytest.mark.asyncio
+    async def test_record_connection_failure_counts_max_cooldown_strike_once_per_capped_window(
+        self,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.loadbalancer.recovery import record_connection_failure
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+        start = datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+
+        with patch(
+            "app.services.loadbalancer.recovery.record_failed_transition"
+        ) as record_failed_transition:
+            await record_connection_failure(
+                profile_id=profile_id,
+                connection_id=connection_id,
+                base_cooldown_seconds=30.0,
+                failure_kind="transient_http",
+                policy=_policy(
+                    failover_failure_threshold=1,
+                    failover_max_cooldown_seconds=30,
+                    failover_jitter_ratio=0.0,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=300,
+                ),
+                now_at=start,
+            )
+            await record_connection_failure(
+                profile_id=profile_id,
+                connection_id=connection_id,
+                base_cooldown_seconds=30.0,
+                failure_kind="transient_http",
+                policy=_policy(
+                    failover_failure_threshold=1,
+                    failover_max_cooldown_seconds=30,
+                    failover_jitter_ratio=0.0,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=300,
+                ),
+                now_at=start + timedelta(seconds=1),
+            )
+
+        async with AsyncSessionLocal() as session:
+            current_state = (
+                await session.execute(
+                    select(LoadbalanceCurrentState).where(
+                        LoadbalanceCurrentState.profile_id == profile_id,
+                        LoadbalanceCurrentState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one()
+
+        assert current_state.max_cooldown_strikes == 1
+        assert current_state.ban_mode == "off"
+        assert current_state.banned_until_at is None
+        assert record_failed_transition.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_auth_like_failure_does_not_increment_max_cooldown_strikes(self):
+        from datetime import datetime, timezone
+
+        from app.services.loadbalancer.recovery import record_connection_failure
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+
+        await record_connection_failure(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            base_cooldown_seconds=30.0,
+            failure_kind="auth_like",
+            policy=_policy(
+                failover_failure_threshold=1,
+                failover_auth_error_cooldown_seconds=30,
+                failover_max_cooldown_seconds=30,
+                failover_jitter_ratio=0.0,
+                failover_ban_mode="temporary",
+                failover_max_cooldown_strikes_before_ban=2,
+                failover_ban_duration_seconds=300,
+            ),
+            now_at=datetime(2026, 3, 26, 13, 0, tzinfo=timezone.utc),
+        )
+
+        async with AsyncSessionLocal() as session:
+            current_state = (
+                await session.execute(
+                    select(LoadbalanceCurrentState).where(
+                        LoadbalanceCurrentState.profile_id == profile_id,
+                        LoadbalanceCurrentState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one()
+
+        assert current_state.max_cooldown_strikes == 0
+        assert current_state.ban_mode == "off"
+        assert current_state.banned_until_at is None
+
+    @pytest.mark.asyncio
+    async def test_record_connection_failure_transitions_to_temporary_ban_at_strike_threshold(
+        self,
+    ):
+        from datetime import datetime, timezone
+
+        from app.services.loadbalancer.recovery import record_connection_failure
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+        now_at = datetime(2026, 3, 26, 14, 0, tzinfo=timezone.utc)
+
+        await record_connection_failure(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            base_cooldown_seconds=30.0,
+            failure_kind="transient_http",
+            policy=_policy(
+                failover_failure_threshold=1,
+                failover_max_cooldown_seconds=30,
+                failover_jitter_ratio=0.0,
+                failover_ban_mode="temporary",
+                failover_max_cooldown_strikes_before_ban=1,
+                failover_ban_duration_seconds=300,
+            ),
+            now_at=now_at,
+        )
+
+        async with AsyncSessionLocal() as session:
+            current_state = (
+                await session.execute(
+                    select(LoadbalanceCurrentState).where(
+                        LoadbalanceCurrentState.profile_id == profile_id,
+                        LoadbalanceCurrentState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one()
+
+        assert current_state.max_cooldown_strikes == 1
+        assert current_state.ban_mode == "temporary"
+        assert current_state.banned_until_at is not None
+
+    @pytest.mark.asyncio
+    async def test_reset_connection_current_state_clears_ban_and_strike_state(self):
+        from datetime import datetime, timezone
+
+        from app.services.loadbalancer.admin import reset_connection_current_state
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+
+        async with AsyncSessionLocal() as session:
+            session.add(
+                LoadbalanceCurrentState(
+                    profile_id=profile_id,
+                    connection_id=connection_id,
+                    consecutive_failures=5,
+                    last_failure_kind="transient_http",
+                    last_cooldown_seconds=60,
+                    max_cooldown_strikes=2,
+                    ban_mode="manual",
+                    banned_until_at=None,
+                    blocked_until_at=datetime(2026, 3, 26, 15, 0, tzinfo=timezone.utc),
+                    probe_eligible_logged=False,
+                )
+            )
+            await session.commit()
+
+        response = await reset_connection_current_state(
+            profile_id=profile_id,
+            connection_id=connection_id,
+        )
+
+        async with AsyncSessionLocal() as session:
+            current_state = (
+                await session.execute(
+                    select(LoadbalanceCurrentState).where(
+                        LoadbalanceCurrentState.profile_id == profile_id,
+                        LoadbalanceCurrentState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+        assert response.connection_id == connection_id
+        assert response.cleared is True
+        assert current_state is None

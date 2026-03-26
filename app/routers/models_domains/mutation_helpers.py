@@ -1,13 +1,15 @@
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import (
     EndpointFxRateSetting,
     LoadbalanceStrategy,
     ModelConfig,
+    ModelProxyTarget,
     Provider,
 )
+from app.schemas.schemas import ProxyTargetReference
 
 from .query_helpers import list_proxy_referrers
 
@@ -90,7 +92,7 @@ def ensure_proxy_update_preconditions(
     *,
     config: ModelConfig,
     new_model_type: str,
-    new_redirect_to: str | None,
+    new_proxy_targets: list[ProxyTargetReference],
     new_model_id: str,
 ) -> None:
     if (
@@ -105,10 +107,13 @@ def ensure_proxy_update_preconditions(
                 "Delete connections first."
             ),
         )
-    if new_model_type == "proxy" and new_redirect_to == new_model_id:
+    if any(
+        proxy_target.target_model_id == new_model_id
+        for proxy_target in new_proxy_targets
+    ):
         raise HTTPException(
             status_code=400,
-            detail="Proxy model cannot redirect to itself",
+            detail="Proxy model cannot target itself",
         )
 
 
@@ -119,7 +124,6 @@ def build_model_create_values(
     model_id: str,
     display_name: str | None,
     model_type: str,
-    redirect_to: str | None,
     loadbalance_strategy_id: int | None,
     is_enabled: bool,
 ) -> dict[str, object]:
@@ -129,7 +133,6 @@ def build_model_create_values(
         "model_id": model_id,
         "display_name": display_name,
         "model_type": model_type,
-        "redirect_to": redirect_to if model_type == "proxy" else None,
         "loadbalance_strategy_id": (
             None if model_type == "proxy" else loadbalance_strategy_id
         ),
@@ -142,11 +145,8 @@ def apply_model_type_update_defaults(
     *,
     model_type: str,
 ) -> None:
-    if model_type == "native":
-        update_data["redirect_to"] = None
-        return
-
-    update_data["loadbalance_strategy_id"] = None
+    if model_type == "proxy":
+        update_data["loadbalance_strategy_id"] = None
 
 
 async def sync_renamed_model_references(
@@ -166,18 +166,28 @@ async def sync_renamed_model_references(
         )
         .values(model_id=new_model_id)
     )
-    if new_model_type != "native":
-        return
 
+
+async def replace_proxy_targets(
+    db: AsyncSession,
+    *,
+    config: ModelConfig,
+    target_models: list[ModelConfig],
+    proxy_targets: list[ProxyTargetReference],
+) -> None:
     await db.execute(
-        update(ModelConfig)
-        .where(
-            ModelConfig.profile_id == profile_id,
-            ModelConfig.redirect_to == original_model_id,
-            ModelConfig.id != config_id,
+        delete(ModelProxyTarget).where(
+            ModelProxyTarget.source_model_config_id == config.id
         )
-        .values(redirect_to=new_model_id)
     )
+    for proxy_target, target in zip(proxy_targets, target_models, strict=True):
+        db.add(
+            ModelProxyTarget(
+                source_model_config_id=config.id,
+                target_model_config_id=target.id,
+                position=proxy_target.position,
+            )
+        )
 
 
 async def load_model_config_or_404(
@@ -206,6 +216,7 @@ __all__ = [
     "ensure_proxy_update_preconditions",
     "ensure_valid_model_type",
     "load_model_config_or_404",
+    "replace_proxy_targets",
     "sync_renamed_model_references",
     "validate_native_model_update",
 ]

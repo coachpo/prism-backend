@@ -16,6 +16,100 @@ from app.services.stats_service import log_request
 
 class TestDEF024_ConfigImportExportRefRoundtrip:
     @pytest.mark.asyncio
+    async def test_create_and_update_connection_preserve_limiter_fields(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import Endpoint, ModelConfig, Profile, Provider
+        from app.routers.connections import create_connection, update_connection
+        from app.schemas.schemas import ConnectionCreate, ConnectionUpdate
+        from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF024 limiter profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            provider = (
+                await db.execute(
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                provider = Provider(
+                    name=f"DEF024 limiter OpenAI {suffix}",
+                    provider_type="openai",
+                )
+                db.add(provider)
+                await db.flush()
+
+            endpoint = Endpoint(
+                profile_id=profile.id,
+                name=f"def024-limiter-endpoint-{suffix}",
+                base_url="https://api.openai.com",
+                api_key="sk-limiter-test",
+                position=0,
+            )
+            model = ModelConfig(
+                profile_id=profile.id,
+                provider_id=provider.id,
+                model_id=f"def024-limiter-model-{suffix}",
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            db.add_all([endpoint, model])
+            await db.flush()
+
+            created = await create_connection(
+                model_config_id=model.id,
+                body=ConnectionCreate(
+                    endpoint_id=endpoint.id,
+                    name=f"def024-limiter-connection-{suffix}",
+                    qps_limit=3,
+                    max_in_flight_non_stream=5,
+                    max_in_flight_stream=2,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+
+            assert created.qps_limit == 3
+            assert created.max_in_flight_non_stream == 5
+            assert created.max_in_flight_stream == 2
+
+            updated = await update_connection(
+                connection_id=created.id,
+                body=ConnectionUpdate(
+                    qps_limit=4,
+                    max_in_flight_non_stream=None,
+                    max_in_flight_stream=6,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+
+            assert updated.qps_limit == 4
+            assert updated.max_in_flight_non_stream is None
+            assert updated.max_in_flight_stream == 6
+
+    @pytest.mark.asyncio
     async def test_import_export_roundtrip_omits_id_fields(self):
         from sqlalchemy import select
         from app.core.database import AsyncSessionLocal, get_engine
@@ -38,7 +132,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": endpoint_name,
@@ -64,6 +158,9 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                             {
                                 "endpoint_name": endpoint_name,
                                 "name": connection_name,
+                                "qps_limit": 3,
+                                "max_in_flight_non_stream": 5,
+                                "max_in_flight_stream": 2,
                             }
                         ],
                     }
@@ -144,6 +241,9 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             assert isinstance(endpoint.id, int) and endpoint.id > 0
             assert isinstance(connection.id, int) and connection.id > 0
             assert connection.endpoint_id == endpoint.id
+            assert connection.qps_limit == 3
+            assert connection.max_in_flight_non_stream == 5
+            assert connection.max_in_flight_stream == 2
             assert fx_row is not None
 
             export_response = await export_config(db=db, profile_id=profile_id)
@@ -164,6 +264,9 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         assert "endpoint_id" not in exported_connection
         assert "pricing_template_id" not in exported_connection
         assert exported_connection["endpoint_name"] == endpoint_name
+        assert exported_connection["qps_limit"] == 3
+        assert exported_connection["max_in_flight_non_stream"] == 5
+        assert exported_connection["max_in_flight_stream"] == 2
 
         exported_mapping = next(
             m
@@ -209,7 +312,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 5,
                 "endpoints": [
                     {
                         "name": endpoint_a_name,
@@ -240,10 +343,16 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                             {
                                 "endpoint_name": endpoint_a_name,
                                 "name": connection_a_name,
+                                "qps_limit": 7,
+                                "max_in_flight_non_stream": 3,
+                                "max_in_flight_stream": 1,
                             },
                             {
                                 "endpoint_name": endpoint_b_name,
                                 "name": connection_b_name,
+                                "qps_limit": 11,
+                                "max_in_flight_non_stream": 4,
+                                "max_in_flight_stream": 2,
                             },
                         ],
                     }
@@ -327,6 +436,23 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             "pricing_template_id" not in connection
             for connection in exported_connections
         )
+        assert [connection["qps_limit"] for connection in exported_connections] == [
+            7,
+            11,
+        ]
+        assert [
+            connection["max_in_flight_non_stream"]
+            for connection in exported_connections
+        ] == [
+            3,
+            4,
+        ]
+        assert [
+            connection["max_in_flight_stream"] for connection in exported_connections
+        ] == [
+            1,
+            2,
+        ]
 
 
 class TestDEF026_ConfigImportSystemRuleTimestamp:
@@ -356,7 +482,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 3,
+                    "version": 5,
                     "endpoints": [],
                     "models": [],
                     "pricing_templates": [],
@@ -385,3 +511,118 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             assert response.connections_imported == 0
 
             await db.rollback()
+
+
+class TestDEF082_ProxyTargetConfigRoundtrip:
+    @pytest.mark.asyncio
+    async def test_proxy_target_config_roundtrip_preserves_order(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, Profile, Provider
+        from app.routers.config import export_config, import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        target_a_model_id = f"def082-proxy-target-a-{suffix}"
+        target_b_model_id = f"def082-proxy-target-b-{suffix}"
+        proxy_model_id = f"def082-proxy-model-{suffix}"
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 5,
+                "endpoints": [],
+                "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                    }
+                ],
+                "models": [
+                    {
+                        "provider_type": "openai",
+                        "model_id": target_a_model_id,
+                        "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
+                        "connections": [],
+                    },
+                    {
+                        "provider_type": "openai",
+                        "model_id": target_b_model_id,
+                        "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
+                        "connections": [],
+                    },
+                    {
+                        "provider_type": "openai",
+                        "model_id": proxy_model_id,
+                        "model_type": "proxy",
+                        "proxy_targets": [
+                            {"target_model_id": target_a_model_id, "position": 0},
+                            {"target_model_id": target_b_model_id, "position": 1},
+                        ],
+                        "connections": [],
+                    },
+                ],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF082 Proxy Targets Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+            profile_id = profile.id
+
+            provider = (
+                await db.execute(
+                    select(Provider)
+                    .where(Provider.provider_type == "openai")
+                    .order_by(Provider.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if provider is None:
+                db.add(
+                    Provider(
+                        name=f"DEF082 Proxy Target OpenAI {suffix}",
+                        provider_type="openai",
+                    )
+                )
+                await db.flush()
+
+            response = await import_config(data=payload, db=db, profile_id=profile_id)
+            await db.commit()
+            assert response.models_imported == 3
+
+        async with AsyncSessionLocal() as db:
+            proxy_model = (
+                await db.execute(
+                    select(ModelConfig).where(
+                        ModelConfig.profile_id == profile_id,
+                        ModelConfig.model_id == proxy_model_id,
+                    )
+                )
+            ).scalar_one()
+
+            export_response = await export_config(db=db, profile_id=profile_id)
+            exported = json.loads(bytes(export_response.body).decode("utf-8"))
+
+        assert proxy_model.model_type == "proxy"
+        exported_proxy_model = next(
+            model for model in exported["models"] if model["model_id"] == proxy_model_id
+        )
+        assert exported_proxy_model["proxy_targets"] == [
+            {"target_model_id": target_a_model_id, "position": 0},
+            {"target_model_id": target_b_model_id, "position": 1},
+        ]
+        assert "redirect_to" not in exported_proxy_model
