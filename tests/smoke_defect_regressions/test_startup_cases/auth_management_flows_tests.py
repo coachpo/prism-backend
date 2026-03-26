@@ -26,7 +26,7 @@ from app.models.models import (
     Endpoint,
     ModelConfig,
     PasswordResetChallenge,
-    Provider,
+    Vendor,
     ProxyApiKey,
     RefreshToken,
 )
@@ -939,25 +939,26 @@ class TestDEF072_SecretSanitization:
 
         try:
             async with AsyncSessionLocal() as session:
-                provider = (
+                vendor = (
                     await session.execute(
-                        select(Provider)
-                        .where(Provider.provider_type == "openai")
-                        .order_by(Provider.id.asc())
+                        select(Vendor)
+                        .where(Vendor.key == "openai")
+                        .order_by(Vendor.id.asc())
                         .limit(1)
                     )
                 ).scalar_one_or_none()
-                if provider is None:
-                    provider = Provider(
+                if vendor is None:
+                    vendor = Vendor(
+                        key="openai",
                         name=f"DEF072 OpenAI {suffix}",
-                        provider_type="openai",
                     )
-                    session.add(provider)
+                    session.add(vendor)
                     await session.flush()
 
                 model = ModelConfig(
                     profile_id=profile_id,
-                    provider_id=provider.id,
+                    vendor_id=vendor.id,
+                    api_family="openai",
                     model_id=f"def072-model-{suffix}",
                     model_type="native",
                     loadbalance_strategy=make_loadbalance_strategy(

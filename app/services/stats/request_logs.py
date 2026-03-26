@@ -13,7 +13,7 @@ def _build_request_log_where(
     request_id: int | None = None,
     ingress_request_id: str | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     status_code: int | None = None,
     status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
@@ -29,8 +29,8 @@ def _build_request_log_where(
         filters.append(RequestLog.ingress_request_id == ingress_request_id)
     if model_id:
         filters.append(RequestLog.model_id == model_id)
-    if provider_type:
-        filters.append(RequestLog.provider_type == provider_type)
+    if api_family:
+        filters.append(RequestLog.api_family == api_family)
     if status_code is not None:
         filters.append(RequestLog.status_code == status_code)
     if status_family == "4xx":
@@ -69,7 +69,7 @@ async def get_request_logs(
     request_id: int | None = None,
     ingress_request_id: str | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     status_code: int | None = None,
     status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
@@ -85,7 +85,7 @@ async def get_request_logs(
         request_id=request_id,
         ingress_request_id=ingress_request_id,
         model_id=model_id,
-        provider_type=provider_type,
+        api_family=api_family,
         status_code=status_code,
         status_family=status_family,
         success=success,
@@ -114,7 +114,7 @@ async def get_operations_request_logs(
     request_id: int | None = None,
     ingress_request_id: str | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     status_code: int | None = None,
     status_family: Literal["4xx", "5xx"] | None = None,
     success: bool | None = None,
@@ -130,7 +130,7 @@ async def get_operations_request_logs(
         request_id=request_id,
         ingress_request_id=ingress_request_id,
         model_id=model_id,
-        provider_type=provider_type,
+        api_family=api_family,
         status_code=status_code,
         status_family=status_family,
         success=success,
@@ -145,7 +145,7 @@ async def get_operations_request_logs(
         select(
             RequestLog.id.label("id"),
             RequestLog.model_id.label("model_id"),
-            RequestLog.provider_type.label("provider_type"),
+            RequestLog.api_family.label("api_family"),
             RequestLog.status_code.label("status_code"),
             RequestLog.response_time_ms.label("response_time_ms"),
             RequestLog.input_tokens.label("input_tokens"),

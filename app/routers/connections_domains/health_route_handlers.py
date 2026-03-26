@@ -23,9 +23,7 @@ async def _load_health_check_connection_or_404(
     result = await db.execute(
         select(Connection)
         .options(
-            selectinload(Connection.model_config_rel).selectinload(
-                ModelConfig.provider
-            ),
+            selectinload(Connection.model_config_rel).selectinload(ModelConfig.vendor),
             selectinload(Connection.endpoint_rel),
         )
         .where(
@@ -75,13 +73,16 @@ async def perform_connection_health_check(
     if endpoint is None:
         raise HTTPException(status_code=400, detail="Connection endpoint is missing")
 
-    provider = connection.model_config_rel.provider
-    provider_type = provider.provider_type
+    api_family = connection.model_config_rel.api_family
     model_id = connection.model_config_rel.model_id
+    vendor_id = getattr(connection.model_config_rel, "vendor_id", None)
+    if not isinstance(vendor_id, int):
+        vendor = getattr(connection.model_config_rel, "vendor", None)
+        vendor_id = getattr(vendor, "id", None)
     blocklist_rules = await _load_enabled_blocklist_rules(db, profile_id=profile_id)
     headers = build_upstream_headers_fn(
         connection,
-        provider_type,
+        api_family,
         blocklist_rules=blocklist_rules,
         endpoint=endpoint,
     )
@@ -92,7 +93,7 @@ async def perform_connection_health_check(
         client=client,
         connection=connection,
         endpoint=endpoint,
-        provider_type=provider_type,
+        api_family=api_family,
         model_id=model_id,
         headers=headers,
     )
@@ -115,7 +116,7 @@ async def perform_connection_health_check(
             connection.id,
             model_id,
             connection.endpoint_id,
-            provider.id,
+            vendor_id,
         )
 
     await db.flush()

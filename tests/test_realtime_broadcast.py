@@ -51,7 +51,7 @@ def make_failover_policy(**overrides):
 
     return EffectiveLoadbalancePolicy(
         strategy_type=cast(
-            Literal["single", "failover"],
+            Literal["single", "fill-first", "failover"],
             overrides.get("strategy_type", "failover"),
         ),
         failover_recovery_enabled=cast(
@@ -280,7 +280,7 @@ async def test_log_request_enqueues_dashboard_broadcast_payload() -> None:
         "type": "dashboard.update",
         "request_log": {"id": 321},
         "stats_summary_24h": {"total_requests": 1},
-        "provider_summary_24h": {"total_requests": 1},
+        "api_family_summary_24h": {"total_requests": 1},
         "spending_summary_30d": {"summary": {"total_cost_micros": 0}},
         "throughput_24h": {"total_requests": 1},
         "routing_route_24h": None,
@@ -324,7 +324,7 @@ async def test_log_request_enqueues_dashboard_broadcast_payload() -> None:
         request_log_id = await log_request(
             model_id="gpt-4o-mini",
             profile_id=11,
-            provider_type="openai",
+            api_family="openai",
             endpoint_id=4,
             connection_id=8,
             endpoint_base_url="https://api.openai.com",
@@ -834,7 +834,7 @@ async def test_record_audit_log_enqueues_persistence_with_request_log_linkage() 
         await record_audit_log(
             request_log_id=55,
             profile_id=3,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             request_method="POST",
             request_url="https://api.openai.com/v1/chat/completions",
@@ -882,7 +882,7 @@ async def test_record_audit_log_returns_when_enqueue_fails() -> None:
         await record_audit_log(
             request_log_id=55,
             profile_id=3,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             request_method="POST",
             request_url="https://api.openai.com/v1/chat/completions",
@@ -918,7 +918,7 @@ async def test_record_audit_log_background_failure_stays_off_path() -> None:
         await record_audit_log(
             request_log_id=77,
             profile_id=4,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             request_method="POST",
             request_url="https://api.openai.com/v1/chat/completions",
@@ -973,7 +973,7 @@ async def test_record_audit_log_continues_after_terminal_failure() -> None:
         await record_audit_log(
             request_log_id=77,
             profile_id=4,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             request_method="POST",
             request_url="https://api.openai.com/v1/chat/completions",
@@ -989,7 +989,7 @@ async def test_record_audit_log_continues_after_terminal_failure() -> None:
         await record_audit_log(
             request_log_id=78,
             profile_id=4,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             request_method="POST",
             request_url="https://api.openai.com/v1/chat/completions",
@@ -1029,7 +1029,7 @@ async def test_record_attempt_audit_skips_when_request_log_id_missing() -> None:
     state = MagicMock()
     state.profile_id = 3
     state.setup.audit_enabled = True
-    state.setup.provider_id = 1
+    state.setup.vendor_id = 1
     state.setup.model_id = "gpt-4o-mini"
     state.setup.method = "POST"
     state.setup.audit_capture_bodies = True
@@ -1078,7 +1078,7 @@ async def test_record_loadbalance_event_commits_without_broadcasts():
             blocked_until_mono=99.5,
             model_id="gpt-4o-mini",
             endpoint_id=12,
-            provider_id=1,
+            vendor_id=1,
             failure_threshold=3,
             backoff_multiplier=2.0,
             max_cooldown_seconds=120,
@@ -1122,7 +1122,7 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
             blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             model_id="gpt-4o-mini",
             endpoint_id=12,
-            provider_id=1,
+            vendor_id=1,
         )
 
         enqueue.assert_called_once()
@@ -1145,7 +1145,7 @@ def test_record_failed_transition_enqueues_managed_loadbalance_event() -> None:
     assert float(event_entry.cooldown_seconds) == 30.0
     assert event_entry.model_id == "gpt-4o-mini"
     assert event_entry.endpoint_id == 12
-    assert event_entry.provider_id == 1
+    assert event_entry.vendor_id == 1
 
 
 @pytest.mark.asyncio
@@ -1175,7 +1175,7 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
             blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
             model_id="gpt-4o-mini",
             endpoint_id=12,
-            provider_id=1,
+            vendor_id=1,
         )
 
         await manager.wait_for_idle()
@@ -1224,7 +1224,7 @@ async def test_record_connection_failure_preserves_state_when_loadbalance_enqueu
             policy=make_failover_policy(),
             model_id="gpt-4o-mini",
             endpoint_id=12,
-            provider_id=1,
+            vendor_id=1,
         )
 
     assert current_state.profile_id == 4
@@ -1271,7 +1271,7 @@ async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_
             policy=make_failover_policy(),
             model_id="gpt-4o-mini",
             endpoint_id=12,
-            provider_id=1,
+            vendor_id=1,
         )
 
     mock_session.delete.assert_awaited_once_with(current_state)
@@ -1303,7 +1303,7 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
                     failover_recovery_enabled=True,
                 ),
                 model_id="gpt-4o-mini",
-                provider_id=1,
+                vendor_id=1,
             ),
         ),
     )
@@ -1362,7 +1362,7 @@ async def test_claim_probe_eligible_stays_off_path_when_loadbalance_enqueue_fail
             model_id="gpt-4o-mini",
             endpoint_id=12,
             policy=make_failover_policy(),
-            provider_id=1,
+            vendor_id=1,
             now_at=datetime(2025, 1, 2, tzinfo=timezone.utc),
         )
 
@@ -1412,7 +1412,7 @@ async def test_log_request_returns_id_when_dashboard_enqueue_fails() -> None:
         request_log_id = await log_request(
             model_id="gpt-4o-mini",
             profile_id=11,
-            provider_type="openai",
+            api_family="openai",
             endpoint_id=4,
             connection_id=8,
             endpoint_base_url="https://api.openai.com",
@@ -1478,7 +1478,7 @@ async def test_log_request_keeps_committed_id_when_background_build_fails() -> N
         request_log_id = await log_request(
             model_id="gpt-4o-mini",
             profile_id=11,
-            provider_type="openai",
+            api_family="openai",
             endpoint_id=4,
             connection_id=8,
             endpoint_base_url="https://api.openai.com",

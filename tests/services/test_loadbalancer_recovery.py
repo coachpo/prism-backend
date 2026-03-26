@@ -13,7 +13,7 @@ from app.models.models import (
     LoadbalanceCurrentState,
     ModelConfig,
     Profile,
-    Provider,
+    Vendor,
 )
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
@@ -23,7 +23,7 @@ def _policy(**overrides):
 
     return EffectiveLoadbalancePolicy(
         strategy_type=cast(
-            Literal["single", "failover"],
+            Literal["single", "fill-first", "failover"],
             overrides.get("strategy_type", "failover"),
         ),
         failover_recovery_enabled=cast(
@@ -60,31 +60,36 @@ def _policy(**overrides):
     )
 
 
-async def _get_or_create_provider(db, *, provider_type: str = "openai"):
-    provider = (
+def _vendor_key_for_api_family(api_family: str) -> str:
+    return "google" if api_family == "gemini" else api_family
+
+
+async def _get_or_create_vendor(db, *, api_family: str = "openai"):
+    vendor_key = _vendor_key_for_api_family(api_family)
+    vendor = (
         (
             await db.execute(
-                select(Provider)
-                .where(Provider.provider_type == provider_type)
-                .order_by(Provider.id.asc())
+                select(Vendor)
+                .where(Vendor.key == vendor_key)
+                .order_by(Vendor.id.asc())
                 .limit(1)
             )
         )
         .scalars()
         .first()
     )
-    if provider is not None:
-        return provider
+    if vendor is not None:
+        return vendor
 
-    provider = Provider(name="OpenAI recovery", provider_type=provider_type)
-    db.add(provider)
+    vendor = Vendor(key=vendor_key, name="OpenAI recovery")
+    db.add(vendor)
     await db.flush()
-    return provider
+    return vendor
 
 
 async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
     async with AsyncSessionLocal() as session:
-        provider = await _get_or_create_provider(session)
+        vendor = await _get_or_create_vendor(session)
         profile = Profile(name=f"Recovery Profile {suffix}", is_active=False, version=0)
         strategy = make_loadbalance_strategy(
             profile=profile,
@@ -94,7 +99,8 @@ async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
         )
         model = ModelConfig(
             profile=profile,
-            provider_id=provider.id,
+            vendor_id=vendor.id,
+            api_family="openai",
             model_id=f"recovery-model-{suffix}",
             model_type="native",
             loadbalance_strategy=strategy,
@@ -305,7 +311,7 @@ class TestLoadbalancerRecovery:
                 model_id="gpt-test",
                 endpoint_id=12,
                 policy=_policy(),
-                provider_id=1,
+                vendor_id=1,
                 now_at=None,
             )
 

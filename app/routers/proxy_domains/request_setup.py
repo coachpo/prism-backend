@@ -6,9 +6,10 @@ import httpx
 from fastapi import HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.time import utc_now
-from app.models.models import Connection, HeaderBlocklistRule, ModelConfig, Provider
+from app.models.models import Connection, HeaderBlocklistRule, ModelConfig, Vendor
 from app.services.costing_service import (
     CostFieldPayload,
     compute_cost_fields,
@@ -36,7 +37,7 @@ from .proxy_request_helpers import (
     resolve_model_id,
     rewrite_model_in_body,
     rewrite_model_in_path,
-    validate_provider_path_compatibility,
+    validate_api_family_path_compatibility,
 )
 
 
@@ -65,8 +66,10 @@ class ProxyRequestSetup:
     model_config: ModelConfig
     model_id: str
     resolved_target_model_id: str
-    provider_id: int
-    provider_type: str
+    vendor_id: int
+    vendor_key: str | None
+    vendor_name: str | None
+    api_family: str
     probe_eligible_connection_ids: list[int]
     raw_body: bytes | None
     recovery_active: bool
@@ -97,12 +100,52 @@ async def prepare_proxy_request(
             status_code=404, detail=f"Model '{model_id}' not configured or disabled"
         )
 
-    provider = cast(Provider, model_config.provider)
-    provider_type = provider.provider_type
-    validate_provider_path_compatibility(provider_type, request_path)
-    audit_enabled = provider.audit_enabled
-    audit_capture_bodies = provider.audit_capture_bodies
-    provider_id = provider.id
+    requested_model_config = (
+        (
+            await db.execute(
+                select(ModelConfig)
+                .options(selectinload(ModelConfig.vendor))
+                .where(
+                    ModelConfig.profile_id == profile_id,
+                    ModelConfig.model_id == model_id,
+                    ModelConfig.is_enabled.is_(True),
+                )
+            )
+        )
+        .scalars()
+        .one_or_none()
+    )
+
+    request_metadata_model = model_config
+    if requested_model_config is not None:
+        requested_vendor = getattr(requested_model_config, "vendor", None)
+        requested_vendor_id = getattr(requested_vendor, "id", None)
+        requested_audit_enabled = getattr(requested_vendor, "audit_enabled", None)
+        requested_audit_capture_bodies = getattr(
+            requested_vendor, "audit_capture_bodies", None
+        )
+        if (
+            isinstance(requested_vendor_id, int)
+            and isinstance(requested_audit_enabled, bool)
+            and isinstance(requested_audit_capture_bodies, bool)
+        ):
+            request_metadata_model = requested_model_config
+
+    vendor = cast(
+        Vendor,
+        getattr(request_metadata_model, "vendor", None),
+    )
+    if vendor is None:
+        raise HTTPException(status_code=500, detail="Model vendor metadata is missing")
+    api_family = model_config.api_family
+    validate_api_family_path_compatibility(api_family, request_path)
+    audit_enabled = vendor.audit_enabled
+    audit_capture_bodies = vendor.audit_capture_bodies
+    vendor_id = vendor.id
+    raw_vendor_key = getattr(vendor, "key", None)
+    raw_vendor_name = getattr(vendor, "name", None)
+    vendor_key = raw_vendor_key if isinstance(raw_vendor_key, str) else None
+    vendor_name = raw_vendor_name if isinstance(raw_vendor_name, str) else None
     app = cast(_RequestAppWithClientState, request.app)
     client = app.state.http_client
     is_streaming = (
@@ -118,7 +161,7 @@ async def prepare_proxy_request(
     if rewritten_body and is_streaming:
         rewritten_body = inject_openai_stream_usage_option(
             rewritten_body,
-            provider_type,
+            api_family,
             request_path,
         )
 
@@ -212,8 +255,10 @@ async def prepare_proxy_request(
         model_config=model_config,
         model_id=model_id,
         resolved_target_model_id=model_config.model_id,
-        provider_id=provider_id,
-        provider_type=provider_type,
+        vendor_id=vendor_id,
+        vendor_key=vendor_key,
+        vendor_name=vendor_name,
+        api_family=api_family,
         probe_eligible_connection_ids=attempt_plan.probe_eligible_connection_ids,
         raw_body=raw_body,
         recovery_active=failover_policy.failover_recovery_enabled,

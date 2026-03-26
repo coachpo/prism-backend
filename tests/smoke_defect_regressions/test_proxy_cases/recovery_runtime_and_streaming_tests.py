@@ -55,7 +55,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = SimpleNamespace(
-            provider_type="openai",
+            key="openai",
             audit_enabled=False,
             audit_capture_bodies=False,
             id=1,
@@ -73,6 +73,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             provider=provider,
+            vendor=provider,
+            api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=strategy,
         )
@@ -150,7 +152,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = SimpleNamespace(
-            provider_type="gemini",
+            key="google",
             audit_enabled=False,
             audit_capture_bodies=False,
             id=1,
@@ -168,6 +170,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             provider=provider,
+            vendor=provider,
+            api_family="gemini",
             model_id="gemini-3.1-pro-preview",
             loadbalance_strategy=strategy,
         )
@@ -204,6 +208,129 @@ class TestDEF062_NonFailover4xxRecoveryState:
             )
 
         assert setup.is_streaming is True
+
+    @pytest.mark.asyncio
+    async def test_prepare_proxy_request_keeps_requested_proxy_vendor_metadata_for_audit_and_logs(
+        self,
+    ):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        app = FastAPI()
+        app.state.http_client = object()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "proxy-model", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        proxy_vendor = SimpleNamespace(
+            key="openrouter",
+            name="OpenRouter",
+            audit_enabled=True,
+            audit_capture_bodies=True,
+            id=4,
+        )
+        native_vendor = SimpleNamespace(
+            key="openai",
+            name="OpenAI",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        strategy = SimpleNamespace(
+            strategy_type="fill-first",
+            failover_recovery_enabled=True,
+            failover_cooldown_seconds=45,
+            failover_failure_threshold=2,
+            failover_backoff_multiplier=2.0,
+            failover_max_cooldown_seconds=300,
+            failover_jitter_ratio=0.1,
+            failover_auth_error_cooldown_seconds=600,
+            failover_ban_mode="off",
+            failover_max_cooldown_strikes_before_ban=0,
+            failover_ban_duration_seconds=0,
+        )
+        connection = SimpleNamespace(endpoint_id=501)
+        resolved_model_config = SimpleNamespace(
+            vendor=native_vendor,
+            provider=native_vendor,
+            api_family="openai",
+            model_id="native-model",
+            loadbalance_strategy=strategy,
+        )
+        requested_proxy_model = SimpleNamespace(
+            vendor=proxy_vendor,
+            provider=proxy_vendor,
+            api_family="openai",
+            model_id="proxy-model",
+            is_enabled=True,
+        )
+
+        mock_requested_model_result = MagicMock()
+        mock_requested_model_result.scalars.return_value.one_or_none.return_value = (
+            requested_proxy_model
+        )
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(
+            side_effect=[mock_requested_model_result, mock_rules_result]
+        )
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=resolved_model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert setup.model_id == "proxy-model"
+        assert setup.resolved_target_model_id == "native-model"
+        assert setup.api_family == "openai"
+        assert setup.vendor_id == 4
+        assert setup.vendor_key == "openrouter"
+        assert setup.vendor_name == "OpenRouter"
+        assert setup.audit_enabled is True
+        assert setup.audit_capture_bodies is True
 
     @pytest.mark.asyncio
     async def test_non_failover_4xx_preserves_existing_recovery_state(self):
@@ -257,7 +384,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
@@ -276,6 +403,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="failover",
@@ -365,7 +494,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
                             failover_cooldown_seconds=17.5,
                         ),
                         model_id="gpt-4o-mini",
-                        provider_id=1,
+                        vendor_id=1,
                     ),
                 ),
             ),
@@ -462,7 +591,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
@@ -492,6 +621,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="failover",
@@ -606,7 +737,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
@@ -638,6 +769,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="failover",
@@ -767,7 +900,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
@@ -799,6 +932,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="failover",
@@ -924,7 +1059,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "openai"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
@@ -956,6 +1091,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="failover",
@@ -1070,7 +1207,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
             Endpoint,
             ModelConfig,
             Profile,
-            Provider,
+            Vendor,
         )
         from app.routers.proxy import _handle_proxy
         from app.services.loadbalancer.planner import (
@@ -1117,14 +1254,15 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     is_active=False,
                     version=0,
                 )
-                provider = Provider(
+                vendor = Vendor(
+                    key=f"def012-openai-{uuid4().hex[:8]}",
                     name=f"OpenAI DEF012 {uuid4().hex[:8]}",
-                    provider_type="openai",
                     audit_enabled=False,
                     audit_capture_bodies=False,
                 )
                 model = ModelConfig(
-                    provider=provider,
+                    vendor=vendor,
+                    api_family="openai",
                     profile=profile,
                     model_id="gpt-4o-mini-def012",
                     display_name="GPT-4o Mini DEF012",
@@ -1167,7 +1305,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 )
                 seed_db.add_all(
                     [
-                        provider,
+                        vendor,
                         profile,
                         model,
                         primary_endpoint,
@@ -1283,6 +1421,347 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
             pass
 
 
+class TestFillFirstRuntimeBehavior:
+    @staticmethod
+    def _build_request(app, raw_body: bytes):
+        from starlette.requests import Request
+
+        return Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+    @pytest.mark.asyncio
+    async def test_fill_first_runtime_packs_requests_on_highest_priority_then_spills_on_limiter_denial(
+        self,
+    ):
+        import httpx
+        from fastapi import FastAPI
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.sent_urls: list[str] = []
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                self.sent_urls.append(str(request.url))
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=b'{"id":"ok"}',
+                )
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = SimpleNamespace(
+            key="openai",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        primary_endpoint = SimpleNamespace(
+            id=501,
+            name="primary",
+            base_url="https://primary.example.com/v1",
+            api_key="sk-primary",
+        )
+        secondary_endpoint = SimpleNamespace(
+            id=502,
+            name="secondary",
+            base_url="https://secondary.example.com/v1",
+            api_key="sk-secondary",
+        )
+        primary_connection = SimpleNamespace(
+            id=1001,
+            endpoint_id=501,
+            endpoint_rel=primary_endpoint,
+            pricing_template_rel=None,
+            name="primary",
+            custom_headers=None,
+            auth_type=None,
+            qps_limit=3,
+            max_in_flight_non_stream=None,
+            max_in_flight_stream=None,
+            priority=0,
+            health_status="unhealthy",
+            is_active=True,
+        )
+        secondary_connection = SimpleNamespace(
+            id=1002,
+            endpoint_id=502,
+            endpoint_rel=secondary_endpoint,
+            pricing_template_rel=None,
+            name="secondary",
+            custom_headers=None,
+            auth_type=None,
+            qps_limit=None,
+            max_in_flight_non_stream=None,
+            max_in_flight_stream=None,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+        )
+        model_config = SimpleNamespace(
+            provider=provider,
+            vendor=provider,
+            api_family="openai",
+            model_id="gpt-4o-mini",
+            loadbalance_strategy=SimpleNamespace(
+                strategy_type="fill-first",
+                failover_recovery_enabled=False,
+            ),
+            connections=[secondary_connection, primary_connection],
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        primary_attempts = 0
+
+        async def acquire_limit(
+            *, profile_id, connection, lease_kind, lease_ttl_seconds, now_at
+        ):
+            nonlocal primary_attempts
+            if connection.id == primary_connection.id:
+                primary_attempts += 1
+                if primary_attempts <= 3:
+                    return LimiterAcquireResult(
+                        admitted=True,
+                        lease_token=f"primary-{primary_attempts}",
+                    )
+                return LimiterAcquireResult(
+                    admitted=False,
+                    deny_reason="qps_limit",
+                )
+            return LimiterAcquireResult(
+                admitted=True,
+                lease_token="secondary-1",
+            )
+
+        async def run_request():
+            request = self._build_request(app, raw_body)
+            return await _handle_proxy(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(return_value=True),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch(
+                "app.routers.proxy.acquire_connection_limit",
+                AsyncMock(side_effect=acquire_limit),
+            ),
+            patch("app.routers.proxy.release_connection_lease", AsyncMock()),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+            patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+        ):
+            responses = await asyncio.gather(*(run_request() for _ in range(4)))
+
+        assert [response.status_code for response in responses] == [200, 200, 200, 200]
+        assert (
+            app.state.http_client.sent_urls.count(
+                "https://primary.example.com/v1/v1/chat/completions"
+            )
+            == 3
+        )
+        assert (
+            app.state.http_client.sent_urls.count(
+                "https://secondary.example.com/v1/v1/chat/completions"
+            )
+            == 1
+        )
+
+    @pytest.mark.asyncio
+    async def test_fill_first_runtime_skips_disabled_highest_priority_connection(
+        self,
+    ):
+        import httpx
+        from fastapi import FastAPI
+
+        from app.routers.proxy import _handle_proxy
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.sent_urls: list[str] = []
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                self.sent_urls.append(str(request.url))
+                return httpx.Response(
+                    status_code=200,
+                    request=request,
+                    headers={"content-type": "application/json"},
+                    content=b'{"id":"ok"}',
+                )
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        raw_body = json.dumps(
+            {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        provider = SimpleNamespace(
+            key="openai",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        primary_endpoint = SimpleNamespace(
+            id=501,
+            name="primary",
+            base_url="https://primary.example.com/v1",
+            api_key="sk-primary",
+        )
+        secondary_endpoint = SimpleNamespace(
+            id=502,
+            name="secondary",
+            base_url="https://secondary.example.com/v1",
+            api_key="sk-secondary",
+        )
+        primary_connection = SimpleNamespace(
+            id=1001,
+            endpoint_id=501,
+            endpoint_rel=primary_endpoint,
+            pricing_template_rel=None,
+            name="primary",
+            custom_headers=None,
+            auth_type=None,
+            qps_limit=None,
+            max_in_flight_non_stream=None,
+            max_in_flight_stream=None,
+            priority=0,
+            health_status="healthy",
+            is_active=True,
+        )
+        secondary_connection = SimpleNamespace(
+            id=1002,
+            endpoint_id=502,
+            endpoint_rel=secondary_endpoint,
+            pricing_template_rel=None,
+            name="secondary",
+            custom_headers=None,
+            auth_type=None,
+            qps_limit=None,
+            max_in_flight_non_stream=None,
+            max_in_flight_stream=None,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+        )
+        model_config = SimpleNamespace(
+            provider=provider,
+            vendor=provider,
+            api_family="openai",
+            model_id="gpt-4o-mini",
+            loadbalance_strategy=SimpleNamespace(
+                strategy_type="fill-first",
+                failover_recovery_enabled=False,
+            ),
+            connections=[secondary_connection, primary_connection],
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        async def endpoint_is_active_now(db, connection_id):
+            return connection_id != primary_connection.id
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy._endpoint_is_active_now",
+                AsyncMock(side_effect=endpoint_is_active_now),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+            patch("app.routers.proxy.log_request", AsyncMock(return_value=901)),
+            patch("app.routers.proxy.record_audit_log", AsyncMock()),
+            patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+            patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+        ):
+            response = await _handle_proxy(
+                request=self._build_request(app, raw_body),
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert response.status_code == 200
+        assert app.state.http_client.sent_urls == [
+            "https://secondary.example.com/v1/v1/chat/completions"
+        ]
+
+
 class TestDEF021_StreamingCancellationResilience:
     @staticmethod
     def _build_request(
@@ -1328,11 +1807,11 @@ class TestDEF021_StreamingCancellationResilience:
     @staticmethod
     def _build_model_config_and_endpoint(
         *,
-        provider_type: str = "openai",
+        api_family: str = "openai",
         model_id: str = "gpt-4o-mini",
     ):
         provider = MagicMock()
-        provider.provider_type = provider_type
+        provider.key = "google" if api_family == "gemini" else api_family
         provider.audit_enabled = True
         provider.audit_capture_bodies = False
         provider.id = 11
@@ -1354,6 +1833,8 @@ class TestDEF021_StreamingCancellationResilience:
 
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = provider
+        model_config.api_family = api_family
         model_config.model_id = model_id
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="single",
@@ -1585,10 +2066,15 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         )
 
         provider = SimpleNamespace(
-            provider_type="openai",
+            key="anthropic",
             audit_enabled=False,
             audit_capture_bodies=False,
             id=1,
+        )
+        vendor = SimpleNamespace(
+            id=1,
+            audit_enabled=False,
+            audit_capture_bodies=False,
         )
         strategy = SimpleNamespace(
             strategy_type="single",
@@ -1597,6 +2083,8 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             provider=provider,
+            vendor=vendor,
+            api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=strategy,
         )
@@ -1633,6 +2121,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             )
 
         assert setup.rewritten_body is not None
+        assert setup.api_family == "openai"
         parsed = json.loads(setup.rewritten_body)
         assert parsed["stream_options"]["include_usage"] is True
 
@@ -1660,10 +2149,15 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         )
 
         provider = SimpleNamespace(
-            provider_type="openai",
+            key="anthropic",
             audit_enabled=False,
             audit_capture_bodies=False,
             id=1,
+        )
+        vendor = SimpleNamespace(
+            id=1,
+            audit_enabled=False,
+            audit_capture_bodies=False,
         )
         strategy = SimpleNamespace(
             strategy_type="single",
@@ -1672,6 +2166,8 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             provider=provider,
+            vendor=vendor,
+            api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=strategy,
         )
@@ -2656,7 +3152,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         )
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint(
-            provider_type="gemini",
+            api_family="gemini",
             model_id="gemini-2.5-flash",
         )
         model_config.provider.audit_capture_bodies = False

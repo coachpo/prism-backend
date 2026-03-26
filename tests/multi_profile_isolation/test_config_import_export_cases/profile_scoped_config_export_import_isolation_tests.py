@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 
 from app.models.models import (
     Profile,
-    Provider,
+    Vendor,
     ModelConfig,
     Endpoint,
     Connection,
@@ -83,7 +83,8 @@ class TestConfigExportImportIsolation:
         model = SimpleNamespace(
             id=20,
             profile_id=1,
-            provider_id=1,
+            vendor_id=1,
+            api_family="openai",
             model_id="gpt-4",
             display_name=None,
             model_type="native",
@@ -91,9 +92,9 @@ class TestConfigExportImportIsolation:
             loadbalance_strategy_id=11,
             loadbalance_strategy=SimpleNamespace(
                 id=11,
-                name="single-primary",
-                strategy_type="single",
-                failover_recovery_enabled=False,
+                name="fill-first-primary",
+                strategy_type="fill-first",
+                failover_recovery_enabled=True,
                 failover_cooldown_seconds=45,
                 failover_failure_threshold=4,
                 failover_backoff_multiplier=3.5,
@@ -128,7 +129,8 @@ class TestConfigExportImportIsolation:
         proxy_model = SimpleNamespace(
             id=21,
             profile_id=1,
-            provider_id=1,
+            vendor_id=1,
+            api_family="openai",
             model_id="gpt-4-proxy",
             display_name="GPT-4 Proxy",
             model_type="proxy",
@@ -167,15 +169,24 @@ class TestConfigExportImportIsolation:
         blocklist_result = MagicMock()
         blocklist_result.scalars.return_value.all.return_value = []
 
-        providers_result = MagicMock()
-        providers_result.scalars.return_value.all.return_value = []
+        vendors_result = MagicMock()
+        vendors_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                id=1,
+                key="openai",
+                name="OpenAI",
+                description="OpenAI API (GPT models)",
+                audit_enabled=False,
+                audit_capture_bodies=True,
+            )
+        ]
 
         mock_db.execute.side_effect = [
             endpoint_result,
             model_result,
             strategies_result,
             pricing_templates_result,
-            providers_result,
+            vendors_result,
             user_settings_result,
             fx_result,
             blocklist_result,
@@ -185,11 +196,22 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 5
+        assert payload["version"] == 6
+        assert payload["vendors"] == [
+            {
+                "key": "openai",
+                "name": "OpenAI",
+                "description": "OpenAI API (GPT models)",
+                "audit_enabled": False,
+                "audit_capture_bodies": True,
+            }
+        ]
         assert len(payload["endpoints"]) == 1
         assert len(payload["loadbalance_strategies"]) == 1
         assert len(payload["models"]) == 2
         strategy_payload = payload["loadbalance_strategies"][0]
+        assert strategy_payload["strategy_type"] == "fill-first"
+        assert strategy_payload["failover_recovery_enabled"] is True
         assert strategy_payload["failover_cooldown_seconds"] == 45
         assert strategy_payload["failover_failure_threshold"] == 4
         assert strategy_payload["failover_backoff_multiplier"] == 3.5
@@ -203,6 +225,8 @@ class TestConfigExportImportIsolation:
         assert exported_connection["qps_limit"] == 3
         assert exported_connection["max_in_flight_non_stream"] == 5
         assert exported_connection["max_in_flight_stream"] == 2
+        assert payload["models"][0]["vendor_key"] == "openai"
+        assert payload["models"][0]["api_family"] == "openai"
         exported_proxy = next(
             item for item in payload["models"] if item["model_type"] == "proxy"
         )
@@ -243,20 +267,38 @@ class TestConfigExportImportIsolation:
         new_rule_pattern = f"x-target-new-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
+            openai_vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"OpenAI {suffix}",
-                    provider_type="openai",
+            if openai_vendor is None:
+                openai_vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
                 )
-                db.add(provider)
+                db.add(openai_vendor)
+                await db.flush()
+
+            openrouter_vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openrouter")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if openrouter_vendor is None:
+                openrouter_vendor = Vendor(
+                    key="openrouter",
+                    name="OpenRouter Legacy",
+                    description="Legacy OpenRouter vendor row",
+                )
+                db.add(openrouter_vendor)
                 await db.flush()
 
             target_profile = Profile(
@@ -297,7 +339,8 @@ class TestConfigExportImportIsolation:
 
             target_model = ModelConfig(
                 profile_id=target_profile.id,
-                provider_id=provider.id,
+                vendor_id=openai_vendor.id,
+                api_family="openai",
                 model_id=old_target_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -308,7 +351,8 @@ class TestConfigExportImportIsolation:
             )
             other_model = ModelConfig(
                 profile_id=other_profile.id,
-                provider_id=provider.id,
+                vendor_id=openai_vendor.id,
+                api_family="openai",
                 model_id=other_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -382,10 +426,21 @@ class TestConfigExportImportIsolation:
 
             target_profile_id = target_profile.id
             other_profile_id = other_profile.id
+            openai_vendor_id = openai_vendor.id
+            openrouter_vendor_id = openrouter_vendor.id
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openrouter",
+                        "name": "OpenRouter",
+                        "description": "OpenRouter global catalog entry",
+                        "audit_enabled": True,
+                        "audit_capture_bodies": False,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": new_endpoint_name,
@@ -396,26 +451,27 @@ class TestConfigExportImportIsolation:
                 "pricing_templates": [],
                 "loadbalance_strategies": [
                     {
-                        "name": "single-primary",
-                        "strategy_type": "single",
-                        "failover_recovery_enabled": False,
+                        "name": "fill-first-primary",
+                        "strategy_type": "fill-first",
+                        "failover_recovery_enabled": True,
                         "failover_cooldown_seconds": 45,
                         "failover_failure_threshold": 4,
                         "failover_backoff_multiplier": 3.5,
                         "failover_max_cooldown_seconds": 720,
                         "failover_jitter_ratio": 0.35,
                         "failover_auth_error_cooldown_seconds": 2400,
-                        "failover_ban_mode": "manual",
+                        "failover_ban_mode": "temporary",
                         "failover_max_cooldown_strikes_before_ban": 2,
-                        "failover_ban_duration_seconds": 0,
+                        "failover_ban_duration_seconds": 600,
                     }
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openrouter",
+                        "api_family": "openai",
                         "model_id": new_model_id,
                         "model_type": "native",
-                        "loadbalance_strategy_name": "single-primary",
+                        "loadbalance_strategy_name": "fill-first-primary",
                         "connections": [
                             {
                                 "endpoint_name": new_endpoint_name,
@@ -599,6 +655,11 @@ class TestConfigExportImportIsolation:
                     )
                 )
             ).scalar_one()
+            vendors = (
+                (await db.execute(select(Vendor).order_by(Vendor.id.asc())))
+                .scalars()
+                .all()
+            )
 
         assert len(target_endpoints) == 1
         assert target_endpoints[0].name == new_endpoint_name
@@ -607,17 +668,21 @@ class TestConfigExportImportIsolation:
         assert len(target_models) == 1
         assert target_models[0].model_id == new_model_id
         assert target_models[0].model_id != old_target_model_id
+        assert target_models[0].vendor_id == openrouter_vendor_id
+        assert target_models[0].api_family == "openai"
 
         assert len(target_strategies) == 1
+        assert target_strategies[0].strategy_type == "fill-first"
+        assert target_strategies[0].failover_recovery_enabled is True
         assert target_strategies[0].failover_cooldown_seconds == 45
         assert target_strategies[0].failover_failure_threshold == 4
         assert target_strategies[0].failover_backoff_multiplier == 3.5
         assert target_strategies[0].failover_max_cooldown_seconds == 720
         assert target_strategies[0].failover_jitter_ratio == 0.35
         assert target_strategies[0].failover_auth_error_cooldown_seconds == 2400
-        assert target_strategies[0].failover_ban_mode == "off"
-        assert target_strategies[0].failover_max_cooldown_strikes_before_ban == 0
-        assert target_strategies[0].failover_ban_duration_seconds == 0
+        assert target_strategies[0].failover_ban_mode == "temporary"
+        assert target_strategies[0].failover_max_cooldown_strikes_before_ban == 2
+        assert target_strategies[0].failover_ban_duration_seconds == 600
 
         assert len(target_connections) == 1
         assert target_connections[0].name == new_connection_name
@@ -636,11 +701,20 @@ class TestConfigExportImportIsolation:
         assert target_settings.report_currency_code == "GBP"
         assert target_settings.report_currency_symbol == "GBP"
 
+        openrouter_rows = [vendor for vendor in vendors if vendor.key == "openrouter"]
+        assert len(openrouter_rows) == 1
+        assert openrouter_rows[0].id == openrouter_vendor_id
+        assert openrouter_rows[0].name == "OpenRouter"
+        assert openrouter_rows[0].audit_enabled is True
+        assert openrouter_rows[0].audit_capture_bodies is False
+
         assert len(other_endpoints) == 1
         assert other_endpoints[0].name == other_endpoint_name
 
         assert len(other_models) == 1
         assert other_models[0].model_id == other_model_id
+        assert other_models[0].vendor_id == openai_vendor_id
+        assert other_models[0].api_family == "openai"
 
         assert len(other_connections) == 1
         assert other_connections[0].name == other_connection_name

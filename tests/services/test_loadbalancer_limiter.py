@@ -16,7 +16,7 @@ from app.models.models import (
     Endpoint,
     ModelConfig,
     Profile,
-    Provider,
+    Vendor,
 )
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
@@ -30,9 +30,9 @@ async def _create_connection_fixture(
     suffix = uuid4().hex[:8]
 
     async with AsyncSessionLocal() as session:
-        provider = Provider(
-            name=f"Limiter Provider {suffix}",
-            provider_type=f"openai-limiter-{suffix}",
+        vendor = Vendor(
+            key=f"openai-limiter-{suffix}",
+            name=f"Limiter Vendor {suffix}",
             audit_enabled=False,
             audit_capture_bodies=False,
         )
@@ -45,8 +45,9 @@ async def _create_connection_fixture(
             position=0,
         )
         model = ModelConfig(
-            provider=provider,
+            vendor=vendor,
             profile=profile,
+            api_family="openai",
             model_id=f"model-{suffix}",
             model_type="native",
             loadbalance_strategy=make_loadbalance_strategy(
@@ -66,7 +67,7 @@ async def _create_connection_fixture(
             max_in_flight_stream=max_in_flight_stream,
             name=f"connection-{suffix}",
         )
-        session.add_all([provider, profile, endpoint, model, connection])
+        session.add_all([vendor, profile, endpoint, model, connection])
         await session.commit()
         await session.refresh(profile)
         await session.refresh(connection)

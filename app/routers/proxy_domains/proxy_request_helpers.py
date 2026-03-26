@@ -107,17 +107,15 @@ def _classify_request_path(request_path: str) -> str:
     return "generic"
 
 
-_PROVIDER_PATH_FAMILIES: dict[str, set[str]] = {
+_API_FAMILY_PATH_FAMILIES: dict[str, set[str]] = {
     "openai": {"generic"},
     "anthropic": {"anthropic_messages"},
     "gemini": {"gemini_native"},
 }
 
 
-def _validate_provider_path_compatibility(
-    provider_type: str, request_path: str
-) -> None:
-    allowed_path_families = _PROVIDER_PATH_FAMILIES.get(provider_type)
+def _validate_api_family_path_compatibility(api_family: str, request_path: str) -> None:
+    allowed_path_families = _API_FAMILY_PATH_FAMILIES.get(api_family)
     if allowed_path_families is None:
         return
 
@@ -128,14 +126,14 @@ def _validate_provider_path_compatibility(
     raise HTTPException(
         status_code=400,
         detail=(
-            f"Path '{request_path}' is incompatible with provider '{provider_type}'. "
-            "Use a provider-native path."
+            f"Path '{request_path}' is incompatible with api_family '{api_family}'. "
+            "Use an api-family-native path."
         ),
     )
 
 
-def validate_provider_path_compatibility(provider_type: str, request_path: str) -> None:
-    _validate_provider_path_compatibility(provider_type, request_path)
+def validate_api_family_path_compatibility(api_family: str, request_path: str) -> None:
+    _validate_api_family_path_compatibility(api_family, request_path)
 
 
 def _rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
@@ -159,10 +157,10 @@ def rewrite_model_in_body(raw_body: bytes, target_model_id: str) -> bytes:
 
 def _inject_openai_stream_usage_option(
     raw_body: bytes,
-    provider_type: str,
+    api_family: str,
     request_path: str,
 ) -> bytes:
-    if provider_type != "openai":
+    if api_family != "openai":
         return raw_body
 
     if not request_path.rstrip("/").endswith("/chat/completions"):
@@ -193,10 +191,10 @@ def _inject_openai_stream_usage_option(
 
 def inject_openai_stream_usage_option(
     raw_body: bytes,
-    provider_type: str,
+    api_family: str,
     request_path: str,
 ) -> bytes:
-    return _inject_openai_stream_usage_option(raw_body, provider_type, request_path)
+    return _inject_openai_stream_usage_option(raw_body, api_family, request_path)
 
 
 _AUTH_LIKE_ERROR_RE = re.compile(

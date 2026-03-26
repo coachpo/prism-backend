@@ -17,7 +17,7 @@ async def list_models_for_profile(
     result = await db.execute(
         select(ModelConfig)
         .options(
-            selectinload(ModelConfig.provider),
+            selectinload(ModelConfig.vendor),
             selectinload(ModelConfig.loadbalance_strategy),
             selectinload(ModelConfig.proxy_targets).selectinload(
                 ModelProxyTarget.target_model_config
@@ -63,9 +63,7 @@ async def get_models_by_endpoint_for_profile(
     result = await db.execute(
         select(Connection)
         .options(
-            selectinload(Connection.model_config_rel).selectinload(
-                ModelConfig.provider
-            ),
+            selectinload(Connection.model_config_rel).selectinload(ModelConfig.vendor),
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.loadbalance_strategy
             ),
@@ -121,9 +119,7 @@ async def get_models_by_endpoints_for_profile(
     result = await db.execute(
         select(Connection)
         .options(
-            selectinload(Connection.model_config_rel).selectinload(
-                ModelConfig.provider
-            ),
+            selectinload(Connection.model_config_rel).selectinload(ModelConfig.vendor),
             selectinload(Connection.model_config_rel).selectinload(
                 ModelConfig.loadbalance_strategy
             ),

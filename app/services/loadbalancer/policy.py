@@ -10,7 +10,7 @@ BanMode = Literal["off", "temporary", "manual"]
 
 @dataclass(slots=True, frozen=True)
 class EffectiveLoadbalancePolicy:
-    strategy_type: Literal["single", "failover"]
+    strategy_type: Literal["single", "fill-first", "failover"]
     failover_recovery_enabled: bool
     failover_cooldown_seconds: float
     failover_failure_threshold: int
@@ -23,8 +23,14 @@ class EffectiveLoadbalancePolicy:
     failover_ban_duration_seconds: int
 
 
-def _resolve_strategy_type(value: object) -> Literal["single", "failover"]:
-    return "failover" if value == "failover" else "single"
+def _resolve_strategy_type(
+    value: object,
+) -> Literal["single", "fill-first", "failover"]:
+    if value == "fill-first":
+        return "fill-first"
+    if value == "failover":
+        return "failover"
+    return "single"
 
 
 def _resolve_bool(value: object, *, default: bool) -> bool:
@@ -53,13 +59,13 @@ def _resolve_ban_mode(value: object, *, default: BanMode) -> BanMode:
 
 def validate_strategy_ban_policy(
     *,
-    strategy_type: Literal["single", "failover"],
+    strategy_type: Literal["single", "fill-first", "failover"],
     failover_recovery_enabled: bool,
     failover_ban_mode: BanMode,
     failover_max_cooldown_strikes_before_ban: int,
     failover_ban_duration_seconds: int,
 ) -> None:
-    if strategy_type != "failover" or not failover_recovery_enabled:
+    if strategy_type == "single" or not failover_recovery_enabled:
         return
 
     if failover_ban_mode == "off":
@@ -93,13 +99,13 @@ def validate_strategy_ban_policy(
 
 def normalize_strategy_ban_policy(
     *,
-    strategy_type: Literal["single", "failover"],
+    strategy_type: Literal["single", "fill-first", "failover"],
     failover_recovery_enabled: bool,
     failover_ban_mode: BanMode,
     failover_max_cooldown_strikes_before_ban: int,
     failover_ban_duration_seconds: int,
 ) -> tuple[BanMode, int, int]:
-    if strategy_type != "failover" or not failover_recovery_enabled:
+    if strategy_type == "single" or not failover_recovery_enabled:
         return ("off", 0, 0)
     if failover_ban_mode == "off":
         return ("off", 0, 0)
@@ -117,7 +123,7 @@ def resolve_effective_loadbalance_policy(
 ) -> EffectiveLoadbalancePolicy:
     settings = get_settings()
     strategy_type = _resolve_strategy_type(getattr(strategy, "strategy_type", "single"))
-    failover_recovery_enabled = strategy_type == "failover" and _resolve_bool(
+    failover_recovery_enabled = strategy_type != "single" and _resolve_bool(
         getattr(strategy, "failover_recovery_enabled", False),
         default=False,
     )

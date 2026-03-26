@@ -39,7 +39,7 @@ MODEL_CONFIG_WITH_CONNECTION_OPTIONS = (
     selectinload(ModelConfig.connections).selectinload(Connection.endpoint_rel),
     selectinload(ModelConfig.connections).selectinload(Connection.pricing_template_rel),
     selectinload(ModelConfig.loadbalance_strategy),
-    selectinload(ModelConfig.provider),
+    selectinload(ModelConfig.vendor),
 )
 
 
@@ -140,6 +140,53 @@ def _failover_sort_key(connection: Connection) -> tuple[bool, int, int]:
     return (connection.health_status == "unhealthy", connection.priority, connection.id)
 
 
+async def _filter_blocked_connections_preserving_order(
+    *,
+    db: AsyncSession,
+    profile_id: int,
+    ordered_connections: list[Connection],
+    now_at: datetime | None,
+) -> AttemptPlan:
+    normalized_now = ensure_utc_datetime(now_at) or utc_now()
+    state_by_connection_id = await get_current_states_for_connections(
+        db,
+        profile_id=profile_id,
+        connection_ids=[connection.id for connection in ordered_connections],
+    )
+
+    attempt_plan: list[Connection] = []
+    blocked_connection_ids: list[int] = []
+    probe_eligible_connection_ids: list[int] = []
+
+    for connection in ordered_connections:
+        current_state = state_by_connection_id.get(connection.id)
+        if current_state is None:
+            attempt_plan.append(connection)
+            continue
+
+        if _is_connection_banned(current_state, now_at=normalized_now):
+            blocked_connection_ids.append(connection.id)
+            continue
+
+        blocked_until_at = ensure_utc_datetime(current_state.blocked_until_at)
+        if blocked_until_at is not None and normalized_now < blocked_until_at:
+            blocked_connection_ids.append(connection.id)
+            continue
+
+        if blocked_until_at is not None and not getattr(
+            current_state, "probe_eligible_logged", False
+        ):
+            probe_eligible_connection_ids.append(connection.id)
+
+        attempt_plan.append(connection)
+
+    return AttemptPlan(
+        connections=attempt_plan,
+        blocked_connection_ids=blocked_connection_ids,
+        probe_eligible_connection_ids=probe_eligible_connection_ids,
+    )
+
+
 async def build_attempt_plan(
     db: AsyncSession,
     profile_id: int,
@@ -177,6 +224,35 @@ async def build_attempt_plan(
             probe_eligible_connection_ids=[],
         )
 
+    if strategy.strategy_type == "fill-first":
+        ordered_active = list(active)
+
+        if not strategy.failover_recovery_enabled:
+            logger.debug(
+                "build_attempt_plan: fill-first without recovery profile_id=%d trying %d connections",
+                profile_id,
+                len(ordered_active),
+            )
+            return AttemptPlan(
+                connections=ordered_active,
+                blocked_connection_ids=[],
+                probe_eligible_connection_ids=[],
+            )
+
+        plan = await _filter_blocked_connections_preserving_order(
+            db=db,
+            profile_id=profile_id,
+            ordered_connections=ordered_active,
+            now_at=now_at,
+        )
+        logger.debug(
+            "build_attempt_plan: profile_id=%d fill-first with recovery attempt_plan=%s blocked=%s",
+            profile_id,
+            [connection.id for connection in plan.connections],
+            plan.blocked_connection_ids,
+        )
+        return plan
+
     ordered_active = sorted(active, key=_failover_sort_key)
 
     if not strategy.failover_recovery_enabled:
@@ -191,50 +267,20 @@ async def build_attempt_plan(
             probe_eligible_connection_ids=[],
         )
 
-    normalized_now = ensure_utc_datetime(now_at) or utc_now()
-    state_by_connection_id = await get_current_states_for_connections(
-        db,
+    plan = await _filter_blocked_connections_preserving_order(
+        db=db,
         profile_id=profile_id,
-        connection_ids=[connection.id for connection in ordered_active],
+        ordered_connections=ordered_active,
+        now_at=now_at,
     )
-
-    attempt_plan: list[Connection] = []
-    blocked_connection_ids: list[int] = []
-    probe_eligible_connection_ids: list[int] = []
-
-    for connection in ordered_active:
-        current_state = state_by_connection_id.get(connection.id)
-        if current_state is None:
-            attempt_plan.append(connection)
-            continue
-
-        if _is_connection_banned(current_state, now_at=normalized_now):
-            blocked_connection_ids.append(connection.id)
-            continue
-
-        blocked_until_at = ensure_utc_datetime(current_state.blocked_until_at)
-        if blocked_until_at is not None and normalized_now < blocked_until_at:
-            blocked_connection_ids.append(connection.id)
-            continue
-
-        if blocked_until_at is not None and not getattr(
-            current_state, "probe_eligible_logged", False
-        ):
-            probe_eligible_connection_ids.append(connection.id)
-
-        attempt_plan.append(connection)
 
     logger.debug(
         "build_attempt_plan: profile_id=%d failover with recovery attempt_plan=%s blocked=%s",
         profile_id,
-        [connection.id for connection in attempt_plan],
-        blocked_connection_ids,
+        [connection.id for connection in plan.connections],
+        plan.blocked_connection_ids,
     )
-    return AttemptPlan(
-        connections=attempt_plan,
-        blocked_connection_ids=blocked_connection_ids,
-        probe_eligible_connection_ids=probe_eligible_connection_ids,
-    )
+    return plan
 
 
 __all__ = [

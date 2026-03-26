@@ -87,7 +87,7 @@ async def _record_connection_recovery_if_needed(
         state.setup.failover_policy,
         state.setup.model_id,
         target.connection.endpoint_id,
-        state.setup.provider_id,
+        state.setup.vendor_id,
     )
 
 
@@ -115,7 +115,7 @@ async def _record_connection_failure_if_needed(
         state.setup.failover_policy,
         state.setup.model_id,
         target.connection.endpoint_id,
-        state.setup.provider_id,
+        state.setup.vendor_id,
         now_at=None,
     )
 

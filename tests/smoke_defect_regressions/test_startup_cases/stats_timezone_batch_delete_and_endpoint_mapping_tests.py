@@ -113,7 +113,7 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         row = MagicMock(
             id=77,
             model_id="gpt-5.4",
-            provider_type="openai",
+            api_family="openai",
             status_code=429,
             response_time_ms=1234,
             input_tokens=11,
@@ -786,7 +786,7 @@ class TestBatchDeleteValidation:
         row = MagicMock()
         row.id = 9
         row.request_log_id = 321
-        row.provider_id = 1
+        row.vendor_id = 1
         row.profile_id = 1
         row.model_id = "gpt-4o-mini"
         row.endpoint_id = 5

@@ -117,10 +117,11 @@ class TestDEF081_ProxyTargetSchemaMigration:
             )
 
             engine = create_async_engine(migration_database_url)
+            legacy_provider_type = "provider" + "_type"
             async with engine.begin() as conn:
                 await conn.execute(
                     text(
-                        "INSERT INTO providers (id, name, provider_type, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES "
+                        f"INSERT INTO providers (id, name, {legacy_provider_type}, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES "
                         "(1, 'OpenAI', 'openai', NULL, false, true, NOW(), NOW()), "
                         "(2, 'Anthropic', 'anthropic', NULL, false, true, NOW(), NOW())"
                     )

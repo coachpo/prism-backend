@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 
 def _build_health_check_request(
-    provider_type: str, model_id: str
+    api_family: str, model_id: str
 ) -> tuple[str, dict[str, object]]:
-    if provider_type == "openai":
+    if api_family == "openai":
         return "/v1/responses", {
             "model": model_id,
             "input": [
@@ -24,13 +24,13 @@ def _build_health_check_request(
             ],
             "max_output_tokens": 1,
         }
-    if provider_type == "anthropic":
+    if api_family == "anthropic":
         return "/v1/messages", {
             "model": model_id,
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "hi"}],
         }
-    if provider_type == "gemini":
+    if api_family == "gemini":
         return f"/v1beta/models/{model_id}:generateContent", {
             "contents": [
                 {
@@ -40,7 +40,7 @@ def _build_health_check_request(
             ],
             "generationConfig": {"maxOutputTokens": 1},
         }
-    raise ValueError(f"Unsupported provider type '{provider_type}' for health check")
+    raise ValueError(f"Unsupported api_family '{api_family}' for health check")
 
 
 def _build_openai_legacy_health_check_request(
@@ -67,12 +67,12 @@ async def _probe_connection_health(
     client: httpx.AsyncClient,
     connection: Connection,
     endpoint: Endpoint,
-    provider_type: str,
+    api_family: str,
     model_id: str,
     headers: dict[str, str],
     execute_health_check_request_fn=_execute_health_check_request,
 ) -> tuple[str, str, int, str]:
-    request_path, body = _build_health_check_request(provider_type, model_id)
+    request_path, body = _build_health_check_request(api_family, model_id)
     upstream_url = build_upstream_url(connection, request_path, endpoint=endpoint)
     health_status, detail, response_time_ms = await execute_health_check_request_fn(
         client,
@@ -82,7 +82,7 @@ async def _probe_connection_health(
     )
     log_url = upstream_url
 
-    if provider_type == "openai" and health_status != "healthy":
+    if api_family == "openai" and health_status != "healthy":
         responses_basic_path, responses_basic_body = (
             _build_openai_responses_basic_health_check_request(model_id)
         )

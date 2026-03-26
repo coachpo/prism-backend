@@ -5,7 +5,7 @@ from tests.smoke_defect_regressions.test_proxy import (
     TestDEF005_GeminiPathModelRewrite,
     TestDEF059_HealthCheckRequestBuilder,
     TestDEF066_OpenAIHealthCheckFallback,
-    TestDEF060_ProxyProviderPathValidation,
+    TestDEF060_ProxyApiFamilyPathValidation,
     TestDEF011_RuntimeEndpointActivityCheck,
     TestDEF012_RuntimeEndpointToggleFailoverE2E,
     TestDEF021_StreamingCancellationResilience,
@@ -56,6 +56,7 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF076_BatchPageFetchRoutes,
     TestDEF077_ThroughputRPMContract,
     TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence,
+    TestDEF080_VendorApiFamilySchemaSplit,
 )
 
 __all__ = [
@@ -89,7 +90,7 @@ __all__ = [
     "TestDEF032_ProxyModelUpdateInvariants",
     "TestDEF058_StatsTimezoneFilterNormalization",
     "TestDEF059_HealthCheckRequestBuilder",
-    "TestDEF060_ProxyProviderPathValidation",
+    "TestDEF060_ProxyApiFamilyPathValidation",
     "TestDEF061_ConnectionResponseEndpointMapping",
     "TestDEF065_ModelDetailEndpointEagerLoad",
     "TestDEF066_OpenAIHealthCheckFallback",
@@ -105,6 +106,7 @@ __all__ = [
     "TestDEF076_BatchPageFetchRoutes",
     "TestDEF077_ThroughputRPMContract",
     "TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence",
+    "TestDEF080_VendorApiFamilySchemaSplit",
     "TestEndpointOwnerRoute",
     "TestLoadbalanceStrategyFieldValidation",
     "TestHeaderBlocklist",

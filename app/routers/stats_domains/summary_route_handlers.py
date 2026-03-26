@@ -15,7 +15,7 @@ async def stats_summary(
     to_time: datetime | None = None,
     group_by: str | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     endpoint_id: int | None = None,
     connection_id: int | None = None,
     *,
@@ -31,7 +31,7 @@ async def stats_summary(
         to_time=normalized_to_time,
         group_by=group_by,
         model_id=model_id,
-        provider_type=provider_type,
+        api_family=api_family,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
     )

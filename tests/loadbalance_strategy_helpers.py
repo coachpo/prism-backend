@@ -12,12 +12,12 @@ def make_loadbalance_strategy(
     *,
     profile_id: int | None = None,
     profile: object | None = None,
-    strategy_type: Literal["single", "failover"] = "single",
+    strategy_type: Literal["single", "fill-first", "failover"] = "single",
     failover_recovery_enabled: bool | None = None,
     name: str | None = None,
 ) -> LoadbalanceStrategy:
     if failover_recovery_enabled is None:
-        failover_recovery_enabled = strategy_type == "failover"
+        failover_recovery_enabled = strategy_type != "single"
 
     payload: dict[str, object] = {
         "name": name or f"{strategy_type}-strategy-{next(_strategy_counter)}",

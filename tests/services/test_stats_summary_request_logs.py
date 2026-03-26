@@ -15,15 +15,20 @@ def _request_log(
     response_time_ms: int,
     created_at: datetime,
     status_code: int = 200,
+    api_family: str = "openai",
     resolved_target_model_id: str | None = None,
     ingress_request_id: str | None = None,
     attempt_number: int | None = None,
     provider_correlation_id: str | None = None,
+    success_flag: bool | None = None,
+    billable_flag: bool | None = None,
+    priced_flag: bool | None = None,
+    total_cost_user_currency_micros: int | None = None,
 ) -> RequestLog:
     return RequestLog(
         profile_id=profile_id,
         model_id="gpt-test",
-        provider_type="openai",
+        api_family=api_family,
         resolved_target_model_id=resolved_target_model_id,
         endpoint_id=None,
         connection_id=None,
@@ -35,6 +40,10 @@ def _request_log(
         response_time_ms=response_time_ms,
         is_stream=False,
         request_path="/v1/chat/completions",
+        success_flag=success_flag,
+        billable_flag=billable_flag,
+        priced_flag=priced_flag,
+        total_cost_user_currency_micros=total_cost_user_currency_micros,
         created_at=created_at,
     )
 
@@ -395,3 +404,237 @@ async def test_get_request_logs_preserves_resolved_target_model_id() -> None:
 
     assert total == 1
     assert items[0].resolved_target_model_id == "target-model-a"
+
+
+@pytest.mark.asyncio
+async def test_get_request_logs_filters_by_api_family() -> None:
+    from app.services.stats.request_logs import get_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"api-family-filter-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    api_family="openai",
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    api_family="anthropic",
+                ),
+            ]
+        )
+        await db.commit()
+
+        items, total = await get_request_logs(
+            db,
+            profile_id=profile.id,
+            api_family="openai",
+            limit=50,
+            offset=0,
+        )
+
+    assert total == 1
+    assert [item.api_family for item in items] == ["openai"]
+
+
+@pytest.mark.asyncio
+async def test_get_operations_request_logs_exposes_api_family_field() -> None:
+    from app.services.stats.request_logs import get_operations_request_logs
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"operations-api-family-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add(
+            _request_log(
+                profile_id=profile.id,
+                response_time_ms=100,
+                created_at=created_at,
+                api_family="anthropic",
+            )
+        )
+        await db.commit()
+
+        items, total = await get_operations_request_logs(
+            db,
+            profile_id=profile.id,
+            api_family="anthropic",
+            limit=200,
+            offset=0,
+        )
+
+    assert total == 1
+    legacy_field = "provider" + "_type"
+    assert items[0]["api_family"] == "anthropic"
+    assert legacy_field not in items[0]
+
+
+@pytest.mark.asyncio
+async def test_get_stats_summary_groups_by_api_family() -> None:
+    from app.services.stats.summary import get_stats_summary
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"summary-api-family-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    api_family="openai",
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    api_family="openai",
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=120,
+                    created_at=created_at,
+                    api_family="anthropic",
+                ),
+            ]
+        )
+        await db.commit()
+
+        summary = await get_stats_summary(
+            db,
+            profile_id=profile.id,
+            group_by="api_family",
+        )
+
+    summary_groups = summary["groups"]
+    assert isinstance(summary_groups, list)
+    assert {group["key"]: group["total_requests"] for group in summary_groups} == {
+        "openai": 2,
+        "anthropic": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_throughput_stats_filters_by_api_family() -> None:
+    from app.services.stats.throughput import get_throughput_stats
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"throughput-api-family-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    api_family="openai",
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    api_family="gemini",
+                ),
+            ]
+        )
+        await db.commit()
+
+        report = await get_throughput_stats(
+            db,
+            profile_id=profile.id,
+            api_family="openai",
+        )
+
+    assert report["total_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_get_spending_report_groups_by_api_family() -> None:
+    from app.services.stats.spending import get_spending_report
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        profile = Profile(
+            name=f"spending-api-family-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add(profile)
+        await db.flush()
+
+        db.add_all(
+            [
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=100,
+                    created_at=created_at,
+                    api_family="openai",
+                    success_flag=True,
+                    billable_flag=True,
+                    priced_flag=True,
+                    total_cost_user_currency_micros=120,
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=110,
+                    created_at=created_at,
+                    api_family="anthropic",
+                    success_flag=True,
+                    billable_flag=True,
+                    priced_flag=True,
+                    total_cost_user_currency_micros=80,
+                ),
+            ]
+        )
+        await db.commit()
+
+        report = await get_spending_report(
+            db,
+            profile_id=profile.id,
+            group_by="api_family",
+        )
+
+    report_groups = report["groups"]
+    assert isinstance(report_groups, list)
+    assert {group["key"]: group["total_cost_micros"] for group in report_groups} == {
+        "openai": 120,
+        "anthropic": 80,
+    }

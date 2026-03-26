@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # ruff: noqa: F821,F401
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any
 
 from sqlalchemy import (
     Boolean,
@@ -23,10 +23,6 @@ from app.core.crypto import decrypt_secret, mask_secret
 from app.core.database import Base
 from app.core.time import utc_now
 
-if TYPE_CHECKING:
-    from app.models.domains.identity import Profile, Provider
-
-
 _UNREADABLE_SECRET_MASK = "********"
 
 
@@ -44,11 +40,11 @@ class LoadbalanceStrategy(Base):
             name="uq_loadbalance_strategies_profile_id_id",
         ),
         CheckConstraint(
-            "strategy_type IN ('single', 'failover')",
+            "strategy_type IN ('single', 'fill-first', 'failover')",
             name="chk_loadbalance_strategies_type",
         ),
         CheckConstraint(
-            "strategy_type = 'failover' OR failover_recovery_enabled = false",
+            "strategy_type <> 'single' OR failover_recovery_enabled = false",
             name="chk_loadbalance_strategies_recovery",
         ),
         CheckConstraint(
@@ -101,9 +97,11 @@ class LoadbalanceStrategy(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship()
-    model_configs: Mapped[list["ModelConfig"]] = relationship(
-        back_populates="loadbalance_strategy", overlaps="model_configs,profile"
+    profile: Mapped[Any] = relationship("Profile")
+    model_configs: Mapped[list[Any]] = relationship(
+        "ModelConfig",
+        back_populates="loadbalance_strategy",
+        overlaps="model_configs,profile",
     )
 
 
@@ -139,7 +137,8 @@ class ModelConfig(Base):
     profile_id: Mapped[int] = mapped_column(
         ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    provider_id: Mapped[int] = mapped_column(ForeignKey("providers.id"), nullable=False)
+    vendor_id: Mapped[int] = mapped_column(ForeignKey("vendors.id"), nullable=False)
+    api_family: Mapped[str] = mapped_column(String(50), nullable=False)
     model_id: Mapped[str] = mapped_column(String(200), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     model_type: Mapped[str] = mapped_column(
@@ -157,23 +156,27 @@ class ModelConfig(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(
-        back_populates="model_configs", overlaps="model_configs"
+    profile: Mapped[Any] = relationship(
+        "Profile", back_populates="model_configs", overlaps="model_configs"
     )
-    provider: Mapped["Provider"] = relationship(back_populates="model_configs")
-    loadbalance_strategy: Mapped["LoadbalanceStrategy | None"] = relationship(
-        back_populates="model_configs", overlaps="model_configs,profile"
+    vendor: Mapped[Any] = relationship("Vendor", back_populates="model_configs")
+    loadbalance_strategy: Mapped[Any] = relationship(
+        "LoadbalanceStrategy",
+        back_populates="model_configs",
+        overlaps="model_configs,profile",
     )
-    connections: Mapped[list["Connection"]] = relationship(
-        back_populates="model_config_rel", cascade="all, delete-orphan"
+    connections: Mapped[list[Any]] = relationship(
+        "Connection", back_populates="model_config_rel", cascade="all, delete-orphan"
     )
-    proxy_targets: Mapped[list["ModelProxyTarget"]] = relationship(
+    proxy_targets: Mapped[list[Any]] = relationship(
+        "ModelProxyTarget",
         back_populates="source_model_config",
         cascade="all, delete-orphan",
         foreign_keys="ModelProxyTarget.source_model_config_id",
         order_by="ModelProxyTarget.position",
     )
-    referenced_by_proxy_targets: Mapped[list["ModelProxyTarget"]] = relationship(
+    referenced_by_proxy_targets: Mapped[list[Any]] = relationship(
+        "ModelProxyTarget",
         back_populates="target_model_config",
         foreign_keys="ModelProxyTarget.target_model_config_id",
     )
@@ -212,11 +215,13 @@ class ModelProxyTarget(Base):
     )
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
-    source_model_config: Mapped["ModelConfig"] = relationship(
+    source_model_config: Mapped[Any] = relationship(
+        "ModelConfig",
         back_populates="proxy_targets",
         foreign_keys=[source_model_config_id],
     )
-    target_model_config: Mapped["ModelConfig"] = relationship(
+    target_model_config: Mapped[Any] = relationship(
+        "ModelConfig",
         back_populates="referenced_by_proxy_targets",
         foreign_keys=[target_model_config_id],
     )
@@ -248,9 +253,9 @@ class Endpoint(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="endpoints")
-    connections: Mapped[list["Connection"]] = relationship(
-        back_populates="endpoint_rel"
+    profile: Mapped[Any] = relationship("Profile", back_populates="endpoints")
+    connections: Mapped[list[Any]] = relationship(
+        "Connection", back_populates="endpoint_rel"
     )
 
     @property
@@ -307,9 +312,9 @@ class PricingTemplate(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="pricing_templates")
-    connections: Mapped[list["Connection"]] = relationship(
-        back_populates="pricing_template_rel"
+    profile: Mapped[Any] = relationship("Profile", back_populates="pricing_templates")
+    connections: Mapped[list[Any]] = relationship(
+        "Connection", back_populates="pricing_template_rel"
     )
 
 
@@ -350,9 +355,7 @@ class Connection(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
-    auth_type: Mapped[str | None] = mapped_column(
-        String(50), nullable=True
-    )  # null=use provider default; "openai", "anthropic" to override
+    auth_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     custom_headers: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # JSON object of custom HTTP headers
@@ -370,11 +373,13 @@ class Connection(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="connections")
-    model_config_rel: Mapped["ModelConfig"] = relationship(back_populates="connections")
-    endpoint_rel: Mapped["Endpoint"] = relationship(back_populates="connections")
-    pricing_template_rel: Mapped["PricingTemplate | None"] = relationship(
-        back_populates="connections"
+    profile: Mapped[Any] = relationship("Profile", back_populates="connections")
+    model_config_rel: Mapped[Any] = relationship(
+        "ModelConfig", back_populates="connections"
+    )
+    endpoint_rel: Mapped[Any] = relationship("Endpoint", back_populates="connections")
+    pricing_template_rel: Mapped[Any] = relationship(
+        "PricingTemplate", back_populates="connections"
     )
 
     @property

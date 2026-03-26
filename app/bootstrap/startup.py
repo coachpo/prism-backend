@@ -14,7 +14,7 @@ from app.models.models import (
     Endpoint,
     HeaderBlocklistRule,
     Profile,
-    Provider,
+    Vendor,
     UserSetting,
 )
 from app.services.profile_invariants import ensure_profile_invariants
@@ -23,25 +23,25 @@ logger = logging.getLogger(__name__)
 
 SKIP_STARTUP_SEQUENCE_ENV = "PRISM_SKIP_STARTUP_SEQUENCE"
 
-DEFAULT_PROVIDERS = [
+DEFAULT_VENDORS = [
     {
+        "key": "openai",
         "name": "OpenAI",
-        "provider_type": "openai",
         "description": "OpenAI API (GPT models)",
     },
     {
+        "key": "anthropic",
         "name": "Anthropic",
-        "provider_type": "anthropic",
         "description": "Anthropic API (Claude models)",
     },
     {
-        "name": "Gemini",
-        "provider_type": "gemini",
-        "description": "Gemini API (Google)",
+        "key": "google",
+        "name": "Google",
+        "description": "Google Gemini API",
     },
 ]
 
-SYSTEM_BLOCKLIST_DEFAULTS: list[dict] = [
+SYSTEM_BLOCKLIST_DEFAULTS: list[dict[str, str]] = [
     {"name": "Cloudflare headers", "match_type": "prefix", "pattern": "cf-"},
     {"name": "Cloudflare extended headers", "match_type": "prefix", "pattern": "x-cf-"},
     {
@@ -82,15 +82,25 @@ SYSTEM_BLOCKLIST_DEFAULTS: list[dict] = [
 ]
 
 
-async def seed_providers() -> None:
+async def seed_vendors() -> None:
     async with database_core.AsyncSessionLocal() as session:
-        result = await session.execute(select(Provider))
-        existing = result.scalars().all()
-        if not existing:
-            for provider_data in DEFAULT_PROVIDERS:
-                session.add(Provider(**provider_data))
+        existing_vendors = (
+            (await session.execute(select(Vendor).order_by(Vendor.id.asc())))
+            .scalars()
+            .all()
+        )
+        existing_keys = {vendor.key for vendor in existing_vendors}
+
+        created_count = 0
+        for vendor_data in DEFAULT_VENDORS:
+            if vendor_data["key"] in existing_keys:
+                continue
+            session.add(Vendor(**vendor_data))
+            created_count += 1
+
+        if created_count > 0:
             await session.commit()
-            logger.info("Seeded default providers")
+            logger.info("Seeded %d default vendors", created_count)
 
 
 async def seed_profile_invariants() -> None:
@@ -225,7 +235,7 @@ async def run_startup_sequence() -> None:
         return
 
     await run_startup_migrations()
-    await seed_providers()
+    await seed_vendors()
     await seed_profile_invariants()
     await seed_user_settings()
     await seed_app_auth_settings()
@@ -248,7 +258,7 @@ def build_http_client() -> httpx.AsyncClient:
 
 
 __all__ = [
-    "DEFAULT_PROVIDERS",
+    "DEFAULT_VENDORS",
     "SKIP_STARTUP_SEQUENCE_ENV",
     "SYSTEM_BLOCKLIST_DEFAULTS",
     "build_http_client",
@@ -258,6 +268,6 @@ __all__ = [
     "seed_app_auth_settings",
     "seed_header_blocklist_rules",
     "seed_profile_invariants",
-    "seed_providers",
+    "seed_vendors",
     "seed_user_settings",
 ]

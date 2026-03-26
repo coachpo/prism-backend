@@ -1,6 +1,6 @@
 # ruff: noqa: F821,F401
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -21,9 +21,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 from app.core.time import utc_now
 
-if TYPE_CHECKING:
-    from app.models.domains.identity import Profile, Provider
-
 
 class RequestLog(Base):
     __tablename__ = "request_logs"
@@ -39,7 +36,10 @@ class RequestLog(Base):
         ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
-    provider_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    api_family: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    vendor_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    vendor_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    vendor_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     resolved_target_model_id: Mapped[str | None] = mapped_column(
         String(200), nullable=True
     )
@@ -117,7 +117,7 @@ class RequestLog(Base):
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="request_logs")
+    profile: Mapped[Any] = relationship("Profile", back_populates="request_logs")
 
 
 class UserSetting(Base):
@@ -144,7 +144,7 @@ class UserSetting(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="user_settings")
+    profile: Mapped[Any] = relationship("Profile", back_populates="user_settings")
 
 
 class EndpointFxRateSetting(Base):
@@ -181,8 +181,8 @@ class EndpointFxRateSetting(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile"] = relationship(
-        back_populates="endpoint_fx_rate_settings"
+    profile: Mapped[Any] = relationship(
+        "Profile", back_populates="endpoint_fx_rate_settings"
     )
 
 
@@ -229,8 +229,8 @@ class HeaderBlocklistRule(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    profile: Mapped["Profile | None"] = relationship(
-        back_populates="header_blocklist_rules"
+    profile: Mapped[Any] = relationship(
+        "Profile", back_populates="header_blocklist_rules"
     )
 
 
@@ -252,8 +252,8 @@ class AuditLog(Base):
         unique=True,
         index=True,
     )
-    provider_id: Mapped[int] = mapped_column(
-        ForeignKey("providers.id"), nullable=False, index=True
+    vendor_id: Mapped[int] = mapped_column(
+        ForeignKey("vendors.id"), nullable=False, index=True
     )
     model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
@@ -275,7 +275,7 @@ class AuditLog(Base):
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="audit_logs")
+    profile: Mapped[Any] = relationship("Profile", back_populates="audit_logs")
 
 
 class ConnectionLimiterState(Base):
@@ -398,8 +398,8 @@ class LoadbalanceEvent(Base):
     )
     model_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    provider_id: Mapped[int | None] = mapped_column(
-        ForeignKey("providers.id"), nullable=True
+    vendor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vendors.id"), nullable=True
     )
     failure_threshold: Mapped[int | None] = mapped_column(Integer, nullable=True)
     backoff_multiplier: Mapped[float | None] = mapped_column(
@@ -415,8 +415,8 @@ class LoadbalanceEvent(Base):
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
-    profile: Mapped["Profile"] = relationship(back_populates="loadbalance_events")
-    provider: Mapped["Provider"] = relationship()
+    profile: Mapped[Any] = relationship("Profile", back_populates="loadbalance_events")
+    vendor: Mapped[Any] = relationship("Vendor")
 
 
 class LoadbalanceCurrentState(Base):
@@ -480,6 +480,6 @@ class LoadbalanceCurrentState(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
     )
 
-    profile: Mapped["Profile"] = relationship(
-        back_populates="loadbalance_current_states"
+    profile: Mapped[Any] = relationship(
+        "Profile", back_populates="loadbalance_current_states"
     )

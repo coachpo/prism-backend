@@ -37,7 +37,7 @@ class TestDEF007_EndpointIdentityInLogs:
             result = await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -66,7 +66,7 @@ class TestDEF007_EndpointIdentityInLogs:
             result = await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -91,7 +91,7 @@ class TestDEF007_EndpointIdentityInLogs:
             result = await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -114,7 +114,7 @@ class TestDEF007_EndpointIdentityInLogs:
             await record_audit_log(
                 request_log_id=1,
                 profile_id=1,
-                provider_id=1,
+                vendor_id=1,
                 model_id="gpt-4o-mini",
                 request_method="POST",
                 request_url="https://api.openai.com/v1/responses",
@@ -162,7 +162,7 @@ class TestDEF007_EndpointIdentityInLogs:
             await record_audit_log(
                 request_log_id=2,
                 profile_id=1,
-                provider_id=1,
+                vendor_id=1,
                 model_id="gpt-4o-mini",
                 request_method="POST",
                 request_url="https://api.openai.com/v1/responses",
@@ -219,7 +219,7 @@ class TestDEF007_EndpointIdentityInLogs:
             await record_audit_log(
                 request_log_id=3,
                 profile_id=1,
-                provider_id=1,
+                vendor_id=1,
                 model_id="gpt-4o-mini",
                 request_method="POST",
                 request_url="https://api.openai.com/v1/responses",
@@ -350,7 +350,7 @@ class TestDEF009_ConnectionDefaultsPersist:
 
         model = ModelConfig(
             id=77,
-            provider_id=1,
+            vendor_id=1,
             model_id="gpt-4o-mini",
             model_type="native",
         )

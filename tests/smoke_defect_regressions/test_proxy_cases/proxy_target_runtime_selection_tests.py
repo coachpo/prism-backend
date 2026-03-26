@@ -71,8 +71,8 @@ class TestDEF083_ProxyTargetRuntimeSelection:
             {"model": "proxy-model", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = SimpleNamespace(
-            provider_type="openai",
+        vendor = SimpleNamespace(
+            key="openai",
             audit_enabled=False,
             audit_capture_bodies=False,
             id=1,
@@ -102,7 +102,9 @@ class TestDEF083_ProxyTargetRuntimeSelection:
         selected_connection.auth_type = None
 
         resolved_target_model = SimpleNamespace(
-            provider=provider,
+            provider=vendor,
+            vendor=vendor,
+            api_family="openai",
             model_id="target-model-a",
             loadbalance_strategy=strategy,
             connections=[selected_connection],

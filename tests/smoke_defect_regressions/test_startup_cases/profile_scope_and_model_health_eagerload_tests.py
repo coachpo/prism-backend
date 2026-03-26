@@ -22,16 +22,24 @@ class TestDEF022_ProfileIsolationRuntimeDependencies:
         from app.routers import proxy as proxy_router
 
         route_by_path = {
-            route.path: route
+            cast(str, getattr(route, "path")): route
             for route in proxy_router.router.routes
-            if hasattr(route, "dependant")
+            if getattr(route, "dependant", None) is not None
         }
 
         v1_route = route_by_path["/v1/{path:path}"]
         v1beta_route = route_by_path["/v1beta/{path:path}"]
 
-        v1_dependencies = {dep.call for dep in v1_route.dependant.dependencies}
-        v1beta_dependencies = {dep.call for dep in v1beta_route.dependant.dependencies}
+        v1_dependant = cast(object, getattr(v1_route, "dependant"))
+        v1beta_dependant = cast(object, getattr(v1beta_route, "dependant"))
+        v1_dependencies = {
+            getattr(dep, "call")
+            for dep in cast(list[object], getattr(v1_dependant, "dependencies"))
+        }
+        v1beta_dependencies = {
+            getattr(dep, "call")
+            for dep in cast(list[object], getattr(v1beta_dependant, "dependencies"))
+        }
 
         assert get_active_profile_id in v1_dependencies
         assert get_active_profile_id in v1beta_dependencies
@@ -52,7 +60,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             Endpoint,
             ModelConfig,
             Profile,
-            Provider,
+            Vendor,
         )
         from app.routers.models import get_model
         from app.schemas.schemas import ModelConfigResponse
@@ -63,21 +71,21 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
         model_id = f"def065-model-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
+            if vendor is None:
+                vendor = Vendor(
+                    key="openai",
                     name=f"DEF065 OpenAI {suffix}",
-                    provider_type="openai",
                     description="DEF065 provider",
                 )
-                db.add(provider)
+                db.add(vendor)
                 await db.flush()
 
             profile = Profile(
@@ -90,7 +98,8 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
 
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -141,7 +150,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
 
         from app.core.config import get_settings
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, Profile, Provider
+        from app.models.models import ModelConfig, Profile, Vendor
         from app.routers.models import get_model, list_models
         from app.schemas.schemas import ModelConfigResponse
 
@@ -152,21 +161,21 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
         settings = get_settings()
 
         async with AsyncSessionLocal() as db:
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
+            if vendor is None:
+                vendor = Vendor(
+                    key="openai",
                     name=f"DEF065 Legacy OpenAI {suffix}",
-                    provider_type="openai",
                     description="DEF065 legacy provider",
                 )
-                db.add(provider)
+                db.add(vendor)
                 await db.flush()
 
             profile = Profile(
@@ -191,7 +200,8 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
 
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=model_id,
                 model_type="native",
                 loadbalance_strategy=strategy,

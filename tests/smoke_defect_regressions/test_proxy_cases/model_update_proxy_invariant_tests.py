@@ -17,13 +17,25 @@ from app.services.proxy_service import (
 from app.services.stats_service import log_request
 
 
+def _make_vendor(*, key: str, name: str, description: str):
+    from app.models.models import Vendor
+
+    return Vendor(
+        key=key,
+        name=name,
+        description=description,
+    )
+
+
 class TestDEF032_ProxyModelUpdateInvariants:
     @pytest.mark.asyncio
-    async def test_create_proxy_model_persists_ordered_proxy_targets(self):
+    async def test_create_proxy_model_allows_cross_vendor_redirect_when_api_family_matches(
+        self,
+    ):
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, Profile, Provider
+        from app.models.models import ModelConfig, Profile
         from app.routers.models import create_model
         from app.schemas.schemas import ModelConfigCreate, ProxyTargetReference
 
@@ -35,22 +47,23 @@ class TestDEF032_ProxyModelUpdateInvariants:
         proxy_model_id = f"def032-proxy-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
-                await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"DEF032 OpenAI {suffix}",
-                    provider_type="openai",
-                    description="DEF032 provider",
-                )
-                db.add(provider)
-                await db.flush()
+            target_vendor = _make_vendor(
+                key=f"def032-openai-target-{suffix}",
+                name=f"DEF032 OpenAI Target {suffix}",
+                description="DEF032 target vendor",
+            )
+            secondary_target_vendor = _make_vendor(
+                key=f"def032-openai-secondary-{suffix}",
+                name=f"DEF032 OpenAI Secondary {suffix}",
+                description="DEF032 secondary target vendor",
+            )
+            proxy_vendor = _make_vendor(
+                key=f"def032-openrouter-{suffix}",
+                name=f"DEF032 OpenRouter {suffix}",
+                description="DEF032 proxy vendor",
+            )
+            db.add_all([target_vendor, secondary_target_vendor, proxy_vendor])
+            await db.flush()
 
             profile = Profile(
                 name=f"DEF032 Create Profile {suffix}",
@@ -62,7 +75,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             target_a = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=target_vendor.id,
+                api_family="openai",
                 model_id=target_a_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -73,7 +87,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
             )
             target_b = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=secondary_target_vendor.id,
+                api_family="openai",
                 model_id=target_b_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -87,7 +102,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             response = await create_model(
                 body=ModelConfigCreate(
-                    provider_id=provider.id,
+                    vendor_id=proxy_vendor.id,
+                    api_family="openai",
                     model_id=proxy_model_id,
                     model_type="proxy",
                     proxy_targets=[
@@ -117,11 +133,81 @@ class TestDEF032_ProxyModelUpdateInvariants:
             ).scalar_one()
 
             assert response.model_type == "proxy"
+            assert response.api_family == "openai"
+            assert response.vendor_id == proxy_vendor.id
             assert [target.target_model_id for target in response.proxy_targets] == [
                 target_a_model_id,
                 target_b_model_id,
             ]
+            assert proxy_model.vendor_id != target_a.vendor_id
+            assert target_a.vendor_id != target_b.vendor_id
             assert proxy_model.id > 0
+
+    @pytest.mark.asyncio
+    async def test_create_proxy_model_rejects_redirect_when_api_family_differs_even_if_vendor_matches(
+        self,
+    ):
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, Profile
+        from app.routers.models import create_model
+        from app.schemas.schemas import ModelConfigCreate, ProxyTargetReference
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        native_model_id = f"def032-native-mismatch-{suffix}"
+        proxy_model_id = f"def032-proxy-mismatch-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            shared_vendor = _make_vendor(
+                key=f"def032-shared-vendor-{suffix}",
+                name=f"DEF032 Shared Vendor {suffix}",
+                description="DEF032 shared vendor",
+            )
+            profile = Profile(
+                name=f"DEF032 Family Mismatch Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add_all([shared_vendor, profile])
+            await db.flush()
+
+            native_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=shared_vendor.id,
+                api_family="anthropic",
+                model_id=native_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            db.add(native_model)
+            await db.flush()
+
+            with pytest.raises(HTTPException) as exc_info:
+                await create_model(
+                    body=ModelConfigCreate(
+                        vendor_id=shared_vendor.id,
+                        api_family="openai",
+                        model_id=proxy_model_id,
+                        model_type="proxy",
+                        proxy_targets=[
+                            ProxyTargetReference(
+                                target_model_id=native_model_id,
+                                position=0,
+                            )
+                        ],
+                        is_enabled=True,
+                    ),
+                    db=db,
+                    profile_id=profile.id,
+                )
+
+            assert exc_info.value.status_code == 400
+            assert "same api_family" in exc_info.value.detail
 
     @pytest.mark.asyncio
     async def test_update_model_renaming_native_keeps_proxy_target_resolution(self):
@@ -129,7 +215,7 @@ class TestDEF032_ProxyModelUpdateInvariants:
         from sqlalchemy.orm import selectinload
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, ModelProxyTarget, Profile, Provider
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
         from app.routers.models import update_model
         from app.schemas.schemas import ModelConfigUpdate
 
@@ -141,22 +227,13 @@ class TestDEF032_ProxyModelUpdateInvariants:
         proxy_model_id = f"def032-proxy-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
-                await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"DEF032 OpenAI {suffix}",
-                    provider_type="openai",
-                    description="DEF032 provider",
-                )
-                db.add(provider)
-                await db.flush()
+            vendor = _make_vendor(
+                key=f"def032-openai-rename-{suffix}",
+                name=f"DEF032 OpenAI Rename {suffix}",
+                description="DEF032 rename vendor",
+            )
+            db.add(vendor)
+            await db.flush()
 
             profile = Profile(
                 name=f"DEF032 Profile {suffix}",
@@ -168,7 +245,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             native_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=native_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -179,7 +257,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
             )
             proxy_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=proxy_model_id,
                 model_type="proxy",
                 is_enabled=True,
@@ -220,6 +299,77 @@ class TestDEF032_ProxyModelUpdateInvariants:
             )
 
     @pytest.mark.asyncio
+    async def test_update_native_model_rejects_api_family_change_while_proxy_models_point_to_it(
+        self,
+    ):
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
+        from app.routers.models import update_model
+        from app.schemas.schemas import ModelConfigUpdate
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        native_model_id = f"def032-native-family-{suffix}"
+        proxy_model_id = f"def032-proxy-family-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            vendor = _make_vendor(
+                key=f"def032-openai-family-{suffix}",
+                name=f"DEF032 OpenAI Family {suffix}",
+                description="DEF032 family vendor",
+            )
+            profile = Profile(
+                name=f"DEF032 Family Guard Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add_all([vendor, profile])
+            await db.flush()
+
+            native_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=native_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            proxy_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=proxy_model_id,
+                model_type="proxy",
+                is_enabled=True,
+            )
+            db.add_all([native_model, proxy_model])
+            await db.flush()
+            db.add(
+                ModelProxyTarget(
+                    source_model_config_id=proxy_model.id,
+                    target_model_config_id=native_model.id,
+                    position=0,
+                )
+            )
+            await db.flush()
+
+            with pytest.raises(HTTPException) as exc_info:
+                await update_model(
+                    model_config_id=native_model.id,
+                    body=ModelConfigUpdate(api_family="anthropic"),
+                    db=db,
+                    profile_id=profile.id,
+                )
+
+            assert exc_info.value.status_code == 400
+            assert "Cannot change api_family" in exc_info.value.detail
+
+    @pytest.mark.asyncio
     async def test_update_model_rejects_converting_connected_native_model_to_proxy(
         self,
     ):
@@ -231,7 +381,6 @@ class TestDEF032_ProxyModelUpdateInvariants:
             Endpoint,
             ModelConfig,
             Profile,
-            Provider,
         )
         from app.routers.models import update_model
         from app.schemas.schemas import ModelConfigUpdate, ProxyTargetReference
@@ -243,22 +392,13 @@ class TestDEF032_ProxyModelUpdateInvariants:
         target_model_id = f"def032-target-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
-                await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"DEF032 OpenAI {suffix}",
-                    provider_type="openai",
-                    description="DEF032 provider",
-                )
-                db.add(provider)
-                await db.flush()
+            vendor = _make_vendor(
+                key=f"def032-openai-connected-{suffix}",
+                name=f"DEF032 OpenAI Connected {suffix}",
+                description="DEF032 connected vendor",
+            )
+            db.add(vendor)
+            await db.flush()
 
             profile = Profile(
                 name=f"DEF032 Profile Connected {suffix}",
@@ -270,7 +410,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             source_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=source_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -281,7 +422,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
             )
             target_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=target_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -335,10 +477,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
     @pytest.mark.asyncio
     async def test_update_model_rejects_proxy_self_redirect(self):
-        from sqlalchemy import select
-
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, Profile, Provider
+        from app.models.models import ModelConfig, Profile
         from app.routers.models import update_model
         from app.schemas.schemas import ModelConfigUpdate, ProxyTargetReference
 
@@ -348,22 +488,13 @@ class TestDEF032_ProxyModelUpdateInvariants:
         model_id = f"def032-self-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
-                await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"DEF032 OpenAI {suffix}",
-                    provider_type="openai",
-                    description="DEF032 provider",
-                )
-                db.add(provider)
-                await db.flush()
+            vendor = _make_vendor(
+                key=f"def032-openai-self-{suffix}",
+                name=f"DEF032 OpenAI Self {suffix}",
+                description="DEF032 self vendor",
+            )
+            db.add(vendor)
+            await db.flush()
 
             profile = Profile(
                 name=f"DEF032 Profile Self {suffix}",
@@ -375,7 +506,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             source_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -408,10 +540,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
     @pytest.mark.asyncio
     async def test_delete_native_model_rejects_attached_proxy_target(self):
-        from sqlalchemy import select
-
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, ModelProxyTarget, Profile, Provider
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
         from app.routers.models import delete_model
 
         await get_engine().dispose()
@@ -421,22 +551,13 @@ class TestDEF032_ProxyModelUpdateInvariants:
         proxy_model_id = f"def032-delete-proxy-{suffix}"
 
         async with AsyncSessionLocal() as db:
-            provider = (
-                await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
-                    name=f"DEF032 OpenAI {suffix}",
-                    provider_type="openai",
-                    description="DEF032 provider",
-                )
-                db.add(provider)
-                await db.flush()
+            vendor = _make_vendor(
+                key=f"def032-openai-delete-{suffix}",
+                name=f"DEF032 OpenAI Delete {suffix}",
+                description="DEF032 delete vendor",
+            )
+            db.add(vendor)
+            await db.flush()
 
             profile = Profile(
                 name=f"DEF032 Delete Profile {suffix}",
@@ -448,7 +569,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             native_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=native_model_id,
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -459,7 +581,8 @@ class TestDEF032_ProxyModelUpdateInvariants:
             )
             proxy_model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=proxy_model_id,
                 model_type="proxy",
                 is_enabled=True,

@@ -6,7 +6,7 @@ import re
 from app.core.crypto import decrypt_secret
 from app.models.models import Connection, Endpoint, HeaderBlocklistRule
 
-from .constants import CLIENT_AUTH_HEADERS, HOP_BY_HOP_HEADERS, PROVIDER_AUTH
+from .constants import API_FAMILY_AUTH, CLIENT_AUTH_HEADERS, HOP_BY_HOP_HEADERS
 
 logger = logging.getLogger("app.services.proxy_service")
 
@@ -61,14 +61,14 @@ def sanitize_headers(
 
 def build_upstream_headers(
     connection: Connection | Endpoint,
-    provider_type: str,
+    api_family: str,
     client_headers: dict[str, str] | None = None,
     blocklist_rules: list[HeaderBlocklistRule] | None = None,
     endpoint: Endpoint | None = None,
     request_compressed: bool = True,
 ) -> dict[str, str]:
-    auth_key = getattr(connection, "auth_type", None) or provider_type
-    config = PROVIDER_AUTH.get(auth_key)
+    auth_key = getattr(connection, "auth_type", None) or api_family
+    config = API_FAMILY_AUTH.get(auth_key)
     if config is None:
         raise ValueError(f"Unsupported auth_type: {auth_key}")
     endpoint_obj = endpoint or connection

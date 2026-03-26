@@ -18,13 +18,13 @@ from app.services.loadbalancer.policy import (
     validate_strategy_ban_policy,
 )
 
-from .common import AuthType
+from .common import ApiFamily, AuthType
 from .endpoint_pricing import (
     ConnectionPricingTemplateSummary,
     EndpointCreate,
     EndpointResponse,
 )
-from .profile_provider import ProviderResponse
+from .profile_provider import VendorResponse
 
 
 class ConnectionBase(BaseModel):
@@ -168,7 +168,7 @@ class ModelConnectionsBatchResponse(BaseModel):
 
 class LoadbalanceStrategyBase(BaseModel):
     name: str
-    strategy_type: Literal["single", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
@@ -208,7 +208,7 @@ class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
 
 class LoadbalanceStrategyUpdate(BaseModel):
     name: str | None = None
-    strategy_type: Literal["single", "failover"] | None = None
+    strategy_type: Literal["single", "fill-first", "failover"] | None = None
     failover_recovery_enabled: bool | None = None
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
@@ -246,7 +246,7 @@ class LoadbalanceStrategySummary(BaseModel):
 
     id: int
     name: str
-    strategy_type: Literal["single", "failover"]
+    strategy_type: Literal["single", "fill-first", "failover"]
     failover_recovery_enabled: bool
     failover_cooldown_seconds: int
     failover_failure_threshold: int
@@ -316,7 +316,8 @@ class ProxyTargetReference(BaseModel):
 
 
 class ModelConfigBase(BaseModel):
-    provider_id: int
+    vendor_id: int
+    api_family: ApiFamily
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
@@ -343,7 +344,8 @@ class ModelConfigCreate(ModelConfigBase):
 
 
 class ModelConfigUpdate(BaseModel):
-    provider_id: int | None = None
+    vendor_id: int | None = None
+    api_family: ApiFamily | None = None
     model_id: str | None = None
     display_name: str | None = None
     model_type: Literal["native", "proxy"] | None = None
@@ -365,8 +367,9 @@ class ModelConfigResponse(BaseModel):
 
     id: int
     profile_id: int
-    provider_id: int
-    provider: ProviderResponse
+    vendor_id: int
+    vendor: VendorResponse
+    api_family: ApiFamily
     model_id: str
     display_name: str | None
     model_type: Literal["native", "proxy"]
@@ -384,8 +387,9 @@ class ModelConfigListResponse(BaseModel):
 
     id: int
     profile_id: int
-    provider_id: int
-    provider: ProviderResponse
+    vendor_id: int
+    vendor: VendorResponse
+    api_family: ApiFamily
     model_id: str
     display_name: str | None
     model_type: Literal["native", "proxy"]

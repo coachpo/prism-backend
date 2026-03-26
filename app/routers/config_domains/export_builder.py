@@ -16,8 +16,8 @@ from app.models.models import (
     ModelConfig,
     ModelProxyTarget,
     PricingTemplate,
-    Provider,
     UserSetting,
+    Vendor,
 )
 from app.schemas.schemas import (
     ConfigConnectionExport,
@@ -29,6 +29,7 @@ from app.schemas.schemas import (
     ConfigProxyTargetExport,
     ConfigPricingTemplateExport,
     ConfigUserSettingsExport,
+    ConfigVendorExport,
     HeaderBlocklistRuleExport,
 )
 from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
@@ -115,17 +116,15 @@ async def build_export_payload(
         .all()
     )
 
-    provider_ids = {model.provider_id for model in model_configs}
-    provider_type_map: dict[int, str] = {}
-    if provider_ids:
-        providers = (
-            (await db.execute(select(Provider).where(Provider.id.in_(provider_ids))))
+    vendor_ids = {model.vendor_id for model in model_configs}
+    vendors_by_id: dict[int, Vendor] = {}
+    if vendor_ids:
+        vendors = (
+            (await db.execute(select(Vendor).where(Vendor.id.in_(vendor_ids))))
             .scalars()
             .all()
         )
-        provider_type_map = {
-            provider.id: provider.provider_type for provider in providers
-        }
+        vendors_by_id = {vendor.id: vendor for vendor in vendors}
 
     exported_endpoints = [
         ConfigEndpointExport(
@@ -183,6 +182,17 @@ async def build_export_payload(
         template.id: template.name for template in pricing_templates
     }
 
+    exported_vendors = [
+        ConfigVendorExport(
+            key=vendor.key,
+            name=vendor.name,
+            description=vendor.description,
+            audit_enabled=vendor.audit_enabled,
+            audit_capture_bodies=vendor.audit_capture_bodies,
+        )
+        for vendor in sorted(vendors_by_id.values(), key=lambda vendor: vendor.key)
+    ]
+
     exported_models: list[ConfigModelExport] = []
     for model in model_configs:
         sorted_connections = sorted(
@@ -234,7 +244,10 @@ async def build_export_payload(
             )
         exported_models.append(
             ConfigModelExport(
-                provider_type=provider_type_map.get(model.provider_id, ""),
+                vendor_key=vendors_by_id[model.vendor_id].key,
+                api_family=cast(
+                    Literal["openai", "anthropic", "gemini"], model.api_family
+                ),
                 model_id=model.model_id,
                 display_name=model.display_name,
                 model_type=cast(Literal["native", "proxy"], model.model_type),
@@ -302,8 +315,9 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=5,
+        version=6,
         exported_at=utc_now(),
+        vendors=exported_vendors,
         endpoints=exported_endpoints,
         pricing_templates=exported_pricing_templates,
         loadbalance_strategies=exported_loadbalance_strategies,

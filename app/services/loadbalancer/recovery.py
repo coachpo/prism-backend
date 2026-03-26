@@ -144,7 +144,7 @@ async def claim_probe_eligible(
     model_id: str,
     endpoint_id: int | None,
     policy: EffectiveLoadbalancePolicy,
-    provider_id: int,
+    vendor_id: int,
     now_at: datetime | None = None,
 ) -> None:
     claimed_state = await mark_probe_eligible_logged(
@@ -162,7 +162,7 @@ async def claim_probe_eligible(
         state=claimed_state,
         model_id=model_id,
         endpoint_id=endpoint_id,
-        provider_id=provider_id,
+        vendor_id=vendor_id,
     )
 
 
@@ -174,7 +174,7 @@ async def record_connection_failure(
     policy: EffectiveLoadbalancePolicy,
     model_id: str | None = None,
     endpoint_id: int | None = None,
-    provider_id: int | None = None,
+    vendor_id: int | None = None,
     now_at: datetime | None = None,
 ) -> None:
     normalized_now = ensure_utc_datetime(now_at) or utc_now()
@@ -266,7 +266,7 @@ async def record_connection_failure(
                 blocked_until_at=None,
                 model_id=model_id,
                 endpoint_id=endpoint_id,
-                provider_id=provider_id,
+                vendor_id=vendor_id,
             )
             return
 
@@ -290,7 +290,7 @@ async def record_connection_failure(
             state=snapshot,
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
         )
 
     record_failed_transition(
@@ -304,7 +304,7 @@ async def record_connection_failure(
         blocked_until_at=snapshot["blocked_until_at"],
         model_id=model_id,
         endpoint_id=endpoint_id,
-        provider_id=provider_id,
+        vendor_id=vendor_id,
         max_cooldown_strikes=snapshot["max_cooldown_strikes"],
         ban_mode=snapshot["ban_mode"],
         banned_until_at=snapshot["banned_until_at"],
@@ -320,7 +320,7 @@ async def record_connection_failure(
             state=snapshot,
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
         )
 
 
@@ -330,7 +330,7 @@ async def record_connection_recovery(
     policy: EffectiveLoadbalancePolicy,
     model_id: str | None = None,
     endpoint_id: int | None = None,
-    provider_id: int | None = None,
+    vendor_id: int | None = None,
 ) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -357,7 +357,7 @@ async def record_connection_recovery(
         state=state,
         model_id=model_id,
         endpoint_id=endpoint_id,
-        provider_id=provider_id,
+        vendor_id=vendor_id,
     )
 
 

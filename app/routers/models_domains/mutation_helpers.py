@@ -7,7 +7,7 @@ from app.models.models import (
     LoadbalanceStrategy,
     ModelConfig,
     ModelProxyTarget,
-    Provider,
+    Vendor,
 )
 from app.schemas.schemas import ProxyTargetReference
 
@@ -34,10 +34,10 @@ async def ensure_loadbalance_strategy_exists(
     return strategy
 
 
-async def ensure_provider_exists(db: AsyncSession, provider_id: int) -> None:
-    provider = await db.get(Provider, provider_id)
-    if provider is None:
-        raise HTTPException(status_code=400, detail="Provider not found")
+async def ensure_vendor_exists(db: AsyncSession, vendor_id: int) -> None:
+    vendor = await db.get(Vendor, vendor_id)
+    if vendor is None:
+        raise HTTPException(status_code=400, detail="Vendor not found")
 
 
 def ensure_valid_model_type(model_type: str) -> str:
@@ -55,7 +55,7 @@ async def validate_native_model_update(
     config: ModelConfig,
     profile_id: int,
     new_model_type: str,
-    new_provider_id: int,
+    new_api_family: str,
 ) -> None:
     if config.model_type != "native":
         return
@@ -78,11 +78,11 @@ async def validate_native_model_update(
                 f"[{ids}] point to it"
             ),
         )
-    if new_provider_id != config.provider_id:
+    if new_api_family != config.api_family:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Cannot change provider for native model while proxy models "
+                "Cannot change api_family for native model while proxy models "
                 f"[{ids}] point to it"
             ),
         )
@@ -120,7 +120,8 @@ def ensure_proxy_update_preconditions(
 def build_model_create_values(
     *,
     profile_id: int,
-    provider_id: int,
+    vendor_id: int,
+    api_family: str,
     model_id: str,
     display_name: str | None,
     model_type: str,
@@ -129,7 +130,8 @@ def build_model_create_values(
 ) -> dict[str, object]:
     return {
         "profile_id": profile_id,
-        "provider_id": provider_id,
+        "vendor_id": vendor_id,
+        "api_family": api_family,
         "model_id": model_id,
         "display_name": display_name,
         "model_type": model_type,
@@ -212,7 +214,7 @@ __all__ = [
     "apply_model_type_update_defaults",
     "build_model_create_values",
     "ensure_loadbalance_strategy_exists",
-    "ensure_provider_exists",
+    "ensure_vendor_exists",
     "ensure_proxy_update_preconditions",
     "ensure_valid_model_type",
     "load_model_config_or_404",

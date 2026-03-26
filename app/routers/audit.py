@@ -24,7 +24,7 @@ async def list_audit_logs(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
     request_log_id: int | None = None,
-    provider_id: int | None = None,
+    vendor_id: int | None = None,
     model_id: str | None = None,
     status_code: int | None = None,
     endpoint_id: int | None = None,
@@ -40,8 +40,8 @@ async def list_audit_logs(
     filters = [AuditLog.profile_id == profile_id]
     if request_log_id is not None:
         filters.append(AuditLog.request_log_id == request_log_id)
-    if provider_id is not None:
-        filters.append(AuditLog.provider_id == provider_id)
+    if vendor_id is not None:
+        filters.append(AuditLog.vendor_id == vendor_id)
     if model_id:
         filters.append(AuditLog.model_id == model_id)
     if status_code is not None:
@@ -78,7 +78,7 @@ async def list_audit_logs(
             AuditLogListItem(
                 id=row.id,
                 request_log_id=row.request_log_id,
-                provider_id=row.provider_id,
+                vendor_id=row.vendor_id,
                 profile_id=row.profile_id,
                 model_id=row.model_id,
                 endpoint_id=row.endpoint_id,

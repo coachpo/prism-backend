@@ -16,6 +16,7 @@ Tests comprehensive profile isolation across all functional requirements:
 import pytest
 import json
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from sqlalchemy import select, func
@@ -23,7 +24,6 @@ from datetime import datetime, timezone
 
 from app.models.models import (
     Profile,
-    Provider,
     ModelConfig,
     Endpoint,
     Connection,
@@ -87,11 +87,11 @@ class TestProfileScopedDataIsolation:
         mock_db = AsyncMock()
 
         now = datetime.now(timezone.utc)
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             id=1,
+            key="openai",
             name="OpenAI",
-            provider_type="openai",
-            description="OpenAI provider",
+            description="OpenAI vendor",
             audit_enabled=True,
             audit_capture_bodies=False,
             created_at=now,
@@ -100,8 +100,9 @@ class TestProfileScopedDataIsolation:
         model1 = SimpleNamespace(
             id=1,
             profile_id=1,
-            provider_id=1,
-            provider=provider,
+            vendor_id=1,
+            vendor=vendor,
+            api_family="openai",
             model_id="gpt-4",
             display_name=None,
             model_type="native",
@@ -121,8 +122,9 @@ class TestProfileScopedDataIsolation:
         model2 = SimpleNamespace(
             id=2,
             profile_id=1,
-            provider_id=1,
-            provider=provider,
+            vendor_id=1,
+            vendor=vendor,
+            api_family="openai",
             model_id="gpt-3.5-turbo",
             display_name=None,
             model_type="native",
@@ -278,7 +280,10 @@ class TestCrossProfileLeakagePrevention:
             limit=100,
             offset=0,
         )
+        report_payload = cast(dict[str, object], report)
 
-        assert report["summary"]["successful_request_count"] == 2
-        assert report["summary"]["total_cost_micros"] == 3000000
-        assert report["report_currency_code"] == "USD"
+        summary = cast(dict[str, object], report_payload["summary"])
+
+        assert summary["successful_request_count"] == 2
+        assert summary["total_cost_micros"] == 3000000
+        assert report_payload["report_currency_code"] == "USD"

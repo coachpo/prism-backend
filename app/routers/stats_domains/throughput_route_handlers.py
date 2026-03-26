@@ -14,7 +14,7 @@ async def get_throughput(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     endpoint_id: int | None = None,
     connection_id: int | None = None,
     *,
@@ -29,7 +29,7 @@ async def get_throughput(
         from_time=normalized_from_time,
         to_time=normalized_to_time,
         model_id=model_id,
-        provider_type=provider_type,
+        api_family=api_family,
         endpoint_id=endpoint_id,
         connection_id=connection_id,
     )

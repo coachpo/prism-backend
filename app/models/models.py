@@ -2,9 +2,9 @@ from app.models.domains.identity import (
     AppAuthSettings,
     PasswordResetChallenge,
     Profile,
-    Provider,
     ProxyApiKey,
     RefreshToken,
+    Vendor,
     WebAuthnChallenge,
     WebAuthnCredential,
 )
@@ -45,11 +45,11 @@ __all__ = [
     "PasswordResetChallenge",
     "PricingTemplate",
     "Profile",
-    "Provider",
     "ProxyApiKey",
     "RefreshToken",
     "RequestLog",
     "UserSetting",
+    "Vendor",
     "WebAuthnChallenge",
     "WebAuthnCredential",
 ]

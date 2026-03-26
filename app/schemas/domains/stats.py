@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.services.loadbalance_event_summary import describe_loadbalance_event
-from app.schemas.domains.core import _CURRENCY_CODE_RE
+from app.schemas.domains.core import ApiFamily, _CURRENCY_CODE_RE
 
 # --- Statistics Schemas ---
 
@@ -16,7 +16,10 @@ class RequestLogResponse(BaseModel):
     id: int
     profile_id: int
     model_id: str
-    provider_type: str
+    api_family: ApiFamily
+    vendor_id: int | None = None
+    vendor_key: str | None = None
+    vendor_name: str | None = None
     resolved_target_model_id: str | None = None
     endpoint_id: int | None
     connection_id: int | None
@@ -75,7 +78,7 @@ class OperationsRequestLogResponse(BaseModel):
 
     id: int
     model_id: str
-    provider_type: str
+    api_family: ApiFamily
     status_code: int
     response_time_ms: int
     input_tokens: int | None
@@ -368,7 +371,7 @@ class LoadbalanceEventListItem(BaseModel):
     blocked_until_mono: float | None
     model_id: str | None
     endpoint_id: int | None
-    provider_id: int | None
+    vendor_id: int | None
     max_cooldown_strikes: int | None = None
     ban_mode: str | None = None
     banned_until_at: datetime | None = None
@@ -494,7 +497,7 @@ class DashboardRouteSnapshotResponse(BaseModel):
 class DashboardRealtimeUpdateResponse(BaseModel):
     request_log: RequestLogResponse
     stats_summary_24h: StatsSummaryResponse
-    provider_summary_24h: StatsSummaryResponse
+    api_family_summary_24h: StatsSummaryResponse
     spending_summary_30d: SpendingReportResponse
     throughput_24h: ThroughputStatsResponse
     routing_route_24h: DashboardRouteSnapshotResponse | None = None

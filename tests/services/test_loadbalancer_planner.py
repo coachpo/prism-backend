@@ -59,7 +59,8 @@ class TestLoadbalancerPlanner:
         model_config = ModelConfig(
             id=1,
             profile_id=1,
-            provider_id=1,
+            vendor_id=1,
+            api_family="openai",
             model_id="gpt-test",
             model_type="native",
             loadbalance_strategy=make_loadbalance_strategy(
@@ -73,6 +74,180 @@ class TestLoadbalancerPlanner:
         ordered = get_active_connections(model_config)
 
         assert [connection.id for connection in ordered] == [7, 9, 11]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_fill_first_preserves_priority_order_while_failover_remains_health_aware(
+        self,
+    ):
+        from app.models.models import ModelConfig
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        unhealthy_primary = SimpleNamespace(
+            id=7,
+            priority=0,
+            health_status="unhealthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=12,
+        )
+        healthy_lower_id = SimpleNamespace(
+            id=11,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=13,
+        )
+        healthy_higher_id = SimpleNamespace(
+            id=13,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=14,
+        )
+
+        fill_first_model_config = cast(
+            ModelConfig,
+            cast(
+                object,
+                SimpleNamespace(
+                    connections=[
+                        healthy_higher_id,
+                        unhealthy_primary,
+                        healthy_lower_id,
+                    ],
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="fill-first",
+                        failover_recovery_enabled=False,
+                    ),
+                    model_id="gpt-4o-mini",
+                    vendor_id=1,
+                ),
+            ),
+        )
+        failover_model_config = cast(
+            ModelConfig,
+            cast(
+                object,
+                SimpleNamespace(
+                    connections=[
+                        healthy_higher_id,
+                        unhealthy_primary,
+                        healthy_lower_id,
+                    ],
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="failover",
+                        failover_recovery_enabled=False,
+                    ),
+                    model_id="gpt-4o-mini",
+                    vendor_id=1,
+                ),
+            ),
+        )
+
+        fill_first_plan = await build_attempt_plan(
+            db=AsyncMock(),
+            profile_id=5,
+            model_config=fill_first_model_config,
+            now_at=None,
+        )
+        failover_plan = await build_attempt_plan(
+            db=AsyncMock(),
+            profile_id=5,
+            model_config=failover_model_config,
+            now_at=None,
+        )
+
+        assert [connection.id for connection in fill_first_plan.connections] == [
+            7,
+            11,
+            13,
+        ]
+        assert [connection.id for connection in failover_plan.connections] == [
+            11,
+            13,
+            7,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_fill_first_with_recovery_filters_blocked_connections_preserving_priority_order(
+        self,
+    ):
+        from datetime import datetime, timezone
+
+        from app.models.models import ModelConfig
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        blocked_primary = SimpleNamespace(
+            id=21,
+            priority=0,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=31,
+        )
+        unhealthy_secondary = SimpleNamespace(
+            id=22,
+            priority=1,
+            health_status="unhealthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=32,
+        )
+        probe_eligible_tertiary = SimpleNamespace(
+            id=23,
+            priority=2,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=33,
+        )
+        model_config = cast(
+            ModelConfig,
+            cast(
+                object,
+                SimpleNamespace(
+                    connections=[
+                        probe_eligible_tertiary,
+                        unhealthy_secondary,
+                        blocked_primary,
+                    ],
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="fill-first",
+                        failover_recovery_enabled=True,
+                    ),
+                    model_id="gpt-4o-mini",
+                    vendor_id=1,
+                ),
+            ),
+        )
+        now_at = datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+        state_by_connection_id = {
+            21: SimpleNamespace(
+                blocked_until_at=datetime(2026, 3, 26, 12, 5, tzinfo=timezone.utc),
+                probe_eligible_logged=False,
+            ),
+            23: SimpleNamespace(
+                blocked_until_at=datetime(2026, 3, 26, 11, 55, tzinfo=timezone.utc),
+                probe_eligible_logged=False,
+            ),
+        }
+
+        with patch(
+            "app.services.loadbalancer.planner.get_current_states_for_connections",
+            AsyncMock(return_value=state_by_connection_id),
+        ):
+            plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=model_config,
+                now_at=now_at,
+            )
+
+        assert [connection.id for connection in plan.connections] == [22, 23]
+        assert plan.blocked_connection_ids == [21]
+        assert plan.probe_eligible_connection_ids == [23]
 
     @pytest.mark.asyncio
     async def test_get_model_config_with_connections_selects_first_available_proxy_target(
@@ -215,7 +390,7 @@ class TestLoadbalancerPlanner:
                         failover_recovery_enabled=True,
                     ),
                     model_id="gpt-4o-mini",
-                    provider_id=1,
+                    vendor_id=1,
                 ),
             ),
         )
@@ -267,7 +442,7 @@ class TestLoadbalancerPlanner:
                         failover_recovery_enabled=True,
                     ),
                     model_id="gpt-4o-mini",
-                    provider_id=1,
+                    vendor_id=1,
                 ),
             ),
         )

@@ -40,7 +40,7 @@ from app.routers.proxy_domains.proxy_request_helpers import (
     rewrite_model_in_body,
     rewrite_model_in_path,
     track_detached_task,
-    validate_provider_path_compatibility,
+    validate_api_family_path_compatibility,
 )
 
 router = APIRouter(tags=["proxy"])
@@ -55,7 +55,7 @@ _resolve_model_id = resolve_model_id
 _rewrite_model_in_body = rewrite_model_in_body
 _rewrite_model_in_path = rewrite_model_in_path
 _track_detached_task = track_detached_task
-_validate_provider_path_compatibility = validate_provider_path_compatibility
+_validate_api_family_path_compatibility = validate_api_family_path_compatibility
 
 
 async def _handle_proxy(

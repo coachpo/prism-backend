@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from types import SimpleNamespace
 from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -17,7 +18,7 @@ from app.services.stats_service import log_request
 
 
 class TestDEF059_HealthCheckRequestBuilder:
-    """DEF-059 (P0): health checks must use provider-native paths and payloads."""
+    """DEF-059 (P0): health checks must use api-family-native paths and payloads."""
 
     def test_openai_health_check_uses_responses_endpoint(self):
         from app.routers.connections import _build_health_check_request
@@ -74,13 +75,95 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert parts[0]["text"] == "hi"
         assert generation_config["maxOutputTokens"] == 1
 
-    def test_cross_provider_model_id_still_uses_provider_native_path(self):
+    def test_cross_vendor_model_id_still_uses_api_family_native_path(self):
         from app.routers.connections import _build_health_check_request
 
         path, body = _build_health_check_request("anthropic", "gemini-3.1-pro-preview")
 
         assert path == "/v1/messages"
         assert body["model"] == "gemini-3.1-pro-preview"
+
+    @pytest.mark.asyncio
+    async def test_health_route_uses_model_api_family_even_when_vendor_metadata_differs(
+        self,
+    ):
+        from fastapi import FastAPI
+        from starlette.requests import Request
+
+        from app.routers.connections_domains.health_route_handlers import (
+            perform_connection_health_check,
+        )
+
+        app = FastAPI()
+        app.state.http_client = AsyncMock()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/api/connections/1/health-check",
+                "raw_path": b"/api/connections/1/health-check",
+                "query_string": b"",
+                "headers": [(b"host", b"testserver")],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        vendor = MagicMock()
+        vendor.id = 19
+        legacy_provider = MagicMock()
+        legacy_provider.id = 19
+        legacy_provider.key = "openai"
+
+        endpoint = MagicMock()
+        endpoint.id = 501
+
+        connection = MagicMock()
+        connection.id = 1001
+        connection.endpoint_id = 501
+        connection.endpoint_rel = endpoint
+        connection.model_config_rel = MagicMock(
+            api_family="anthropic",
+            model_id="claude-sonnet-4-5",
+            vendor=vendor,
+            provider=legacy_provider,
+        )
+
+        build_upstream_headers_fn = MagicMock(return_value={"x-api-key": "sk-test"})
+        probe_connection_health_fn = AsyncMock(
+            return_value=("healthy", "ok", 7, "https://api.anthropic.com/v1/messages")
+        )
+        record_connection_recovery_fn = AsyncMock()
+        db = AsyncMock()
+        db.flush = AsyncMock()
+
+        with (
+            patch(
+                "app.routers.connections_domains.health_route_handlers._load_health_check_connection_or_404",
+                AsyncMock(return_value=connection),
+            ),
+            patch(
+                "app.routers.connections_domains.health_route_handlers._load_enabled_blocklist_rules",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            response = await perform_connection_health_check(
+                connection_id=connection.id,
+                request=request,
+                db=db,
+                profile_id=1,
+                build_upstream_headers_fn=build_upstream_headers_fn,
+                probe_connection_health_fn=probe_connection_health_fn,
+                record_connection_recovery_fn=record_connection_recovery_fn,
+            )
+
+        assert response.health_status == "healthy"
+        assert build_upstream_headers_fn.call_args.args[1] == "anthropic"
+        assert probe_connection_health_fn.await_args is not None
+        assert probe_connection_health_fn.await_args.kwargs["api_family"] == "anthropic"
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
@@ -110,7 +193,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 client=AsyncMock(),
                 connection=cast(Connection, cast(object, connection)),
                 endpoint=cast(Endpoint, cast(object, endpoint)),
-                provider_type="openai",
+                api_family="openai",
                 model_id="gpt-4o-mini",
                 headers={},
             )
@@ -148,7 +231,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 client=AsyncMock(),
                 connection=cast(Connection, cast(object, connection)),
                 endpoint=cast(Endpoint, cast(object, endpoint)),
-                provider_type="openai",
+                api_family="openai",
                 model_id="gpt-4o-mini",
                 headers={},
             )
@@ -205,7 +288,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 client=AsyncMock(),
                 connection=cast(Connection, cast(object, connection)),
                 endpoint=cast(Endpoint, cast(object, endpoint)),
-                provider_type="openai",
+                api_family="openai",
                 model_id="gpt-4o-mini",
                 headers={},
             )
@@ -253,7 +336,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 client=AsyncMock(),
                 connection=cast(Connection, cast(object, connection)),
                 endpoint=cast(Endpoint, cast(object, endpoint)),
-                provider_type="anthropic",
+                api_family="anthropic",
                 model_id="claude-sonnet-4",
                 headers={},
             )
@@ -265,8 +348,8 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_count == 1
 
 
-class TestDEF060_ProxyProviderPathValidation:
-    """DEF-060 (P0): proxy must fail fast on provider/path mismatch."""
+class TestDEF060_ProxyApiFamilyPathValidation:
+    """DEF-060 (P0): proxy must fail fast on api-family/path mismatch."""
 
     @staticmethod
     def _build_request(path: str):
@@ -295,80 +378,156 @@ class TestDEF060_ProxyProviderPathValidation:
         )
 
     def test_validation_rejects_gemini_native_path_for_anthropic(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
         with pytest.raises(HTTPException) as exc_info:
-            _validate_provider_path_compatibility(
+            _validate_api_family_path_compatibility(
                 "anthropic",
                 "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
             )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+        assert "incompatible with api_family 'anthropic'" in exc_info.value.detail
 
     def test_validation_rejects_anthropic_messages_path_for_openai(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
         with pytest.raises(HTTPException) as exc_info:
-            _validate_provider_path_compatibility(
+            _validate_api_family_path_compatibility(
                 "openai",
                 "/v1/messages",
             )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'openai'" in exc_info.value.detail
+        assert "incompatible with api_family 'openai'" in exc_info.value.detail
 
     def test_validation_rejects_generic_openai_path_for_anthropic(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
         with pytest.raises(HTTPException) as exc_info:
-            _validate_provider_path_compatibility(
+            _validate_api_family_path_compatibility(
                 "anthropic",
                 "/v1/chat/completions",
             )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+        assert "incompatible with api_family 'anthropic'" in exc_info.value.detail
 
     def test_validation_rejects_generic_openai_path_for_gemini(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
         with pytest.raises(HTTPException) as exc_info:
-            _validate_provider_path_compatibility(
+            _validate_api_family_path_compatibility(
                 "gemini",
                 "/v1/chat/completions",
             )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'gemini'" in exc_info.value.detail
+        assert "incompatible with api_family 'gemini'" in exc_info.value.detail
 
     def test_validation_rejects_non_beta_gemini_native_path_for_gemini(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
         with pytest.raises(HTTPException) as exc_info:
-            _validate_provider_path_compatibility(
+            _validate_api_family_path_compatibility(
                 "gemini",
                 "/v1/models/gemini-3.1-pro-preview:generateContent",
             )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'gemini'" in exc_info.value.detail
+        assert "incompatible with api_family 'gemini'" in exc_info.value.detail
 
     def test_validation_allows_gemini_native_path_for_gemini(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
-        _validate_provider_path_compatibility(
+        _validate_api_family_path_compatibility(
             "gemini",
             "/v1beta/models/gemini-3.1-pro-preview:streamGenerateContent",
         )
 
     def test_validation_allows_other_gemini_model_scoped_path_for_gemini(self):
-        from app.routers.proxy import _validate_provider_path_compatibility
+        from app.routers.proxy import _validate_api_family_path_compatibility
 
-        _validate_provider_path_compatibility(
+        _validate_api_family_path_compatibility(
             "gemini",
             "/v1beta/models/gemini-3.1-pro-preview:countTokens",
         )
+
+    @pytest.mark.asyncio
+    async def test_prepare_proxy_request_uses_model_api_family_not_vendor_metadata_for_path_compatibility(
+        self,
+    ):
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        request_path = "/v1/messages"
+        request = self._build_request(request_path)
+        raw_body = json.dumps(
+            {
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        provider = MagicMock()
+        provider.key = "openai"
+        provider.audit_enabled = False
+        provider.audit_capture_bodies = False
+        provider.id = 1
+
+        vendor = MagicMock()
+        vendor.id = 99
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+
+        connection = SimpleNamespace(endpoint_id=501)
+        model_config = MagicMock()
+        model_config.provider = provider
+        model_config.vendor = vendor
+        model_config.api_family = "anthropic"
+        model_config.model_id = "claude-sonnet-4-5"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="single",
+            failover_recovery_enabled=False,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(
+                    return_value=SimpleNamespace(
+                        connections=[connection], probe_eligible_connection_ids=[]
+                    )
+                ),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path=request_path,
+                profile_id=1,
+            )
+
+        assert setup.api_family == "anthropic"
+        assert setup.effective_request_path == request_path
 
     @pytest.mark.asyncio
     async def test_handle_proxy_fails_before_upstream_attempt_on_mismatch(self):
@@ -381,14 +540,25 @@ class TestDEF060_ProxyProviderPathValidation:
         ).encode("utf-8")
 
         provider = MagicMock()
-        provider.provider_type = "anthropic"
+        provider.key = "openai"
         provider.audit_enabled = False
         provider.audit_capture_bodies = False
         provider.id = 1
 
+        vendor = MagicMock()
+        vendor.id = 99
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+
         model_config = MagicMock()
         model_config.provider = provider
+        model_config.vendor = vendor
+        model_config.api_family = "anthropic"
         model_config.model_id = "gemini-3.1-pro-preview"
+        requested_model_result = MagicMock()
+        requested_model_result.scalars.return_value.one_or_none.return_value = None
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=requested_model_result)
 
         with (
             patch(
@@ -402,14 +572,14 @@ class TestDEF060_ProxyProviderPathValidation:
             with pytest.raises(HTTPException) as exc_info:
                 await _handle_proxy(
                     request=request,
-                    db=AsyncMock(),
+                    db=mock_db,
                     raw_body=raw_body,
                     request_path=request_path,
                     profile_id=1,
                 )
 
         assert exc_info.value.status_code == 400
-        assert "incompatible with provider 'anthropic'" in exc_info.value.detail
+        assert "incompatible with api_family 'anthropic'" in exc_info.value.detail
         attempt_plan_mock.assert_not_called()
 
 

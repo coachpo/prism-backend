@@ -264,7 +264,10 @@ async def update_loadbalance_strategy(
         recovery_enabled=next_recovery_enabled,
     )
     validate_strategy_ban_policy(
-        strategy_type=cast(Literal["single", "failover"], next_strategy_type),
+        strategy_type=cast(
+            Literal["single", "fill-first", "failover"],
+            next_strategy_type,
+        ),
         failover_recovery_enabled=next_recovery_enabled,
         failover_ban_mode=cast(Literal["off", "temporary", "manual"], next_ban_mode),
         failover_max_cooldown_strikes_before_ban=next_ban_strikes,
@@ -283,7 +286,10 @@ async def update_loadbalance_strategy(
             update_data["failover_max_cooldown_strikes_before_ban"],
             update_data["failover_ban_duration_seconds"],
         ) = normalize_strategy_ban_policy(
-            strategy_type=cast(Literal["single", "failover"], next_strategy_type),
+            strategy_type=cast(
+                Literal["single", "fill-first", "failover"],
+                next_strategy_type,
+            ),
             failover_recovery_enabled=next_recovery_enabled,
             failover_ban_mode=cast(
                 Literal["off", "temporary", "manual"], next_ban_mode

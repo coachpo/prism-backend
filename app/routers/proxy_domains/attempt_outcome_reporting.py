@@ -60,7 +60,7 @@ def _extract_gemini_response_id_from_sse(raw_body: bytes | None) -> str | None:
 
 def extract_provider_correlation_id(
     *,
-    provider_type: str,
+    api_family: str,
     response_headers: dict[str, str] | None,
     response_body: bytes | None,
     request_headers: dict[str, str] | None,
@@ -68,12 +68,12 @@ def extract_provider_correlation_id(
     normalized_response_headers = _lower_header_map(response_headers)
     normalized_request_headers = _lower_header_map(request_headers)
 
-    if provider_type == "openai":
+    if api_family == "openai":
         return normalized_response_headers.get(
             "x-request-id"
         ) or normalized_request_headers.get("x-client-request-id")
 
-    if provider_type == "anthropic":
+    if api_family == "anthropic":
         header_request_id = normalized_response_headers.get("request-id")
         if header_request_id:
             return header_request_id
@@ -81,7 +81,7 @@ def extract_provider_correlation_id(
         body_request_id = payload.get("request_id") if payload is not None else None
         return body_request_id if isinstance(body_request_id, str) else None
 
-    if provider_type == "gemini":
+    if api_family == "gemini":
         payload = _parse_json_object(response_body)
         if payload is not None:
             response_id = payload.get("responseId")
@@ -116,14 +116,17 @@ async def record_request_log(
     return await deps.log_request_fn(
         model_id=state.setup.model_id,
         profile_id=state.profile_id,
-        provider_type=state.setup.provider_type,
+        api_family=state.setup.api_family,
+        vendor_id=state.setup.vendor_id,
+        vendor_key=state.setup.vendor_key,
+        vendor_name=state.setup.vendor_name,
         resolved_target_model_id=state.setup.resolved_target_model_id,
         endpoint_id=target.connection.endpoint_id,
         connection_id=target.connection.id,
         ingress_request_id=state.setup.ingress_request_id,
         attempt_number=target.attempt_number,
         provider_correlation_id=extract_provider_correlation_id(
-            provider_type=state.setup.provider_type,
+            api_family=state.setup.api_family,
             response_headers=response_headers,
             response_body=response_body,
             request_headers=target.headers,
@@ -163,7 +166,7 @@ async def record_attempt_audit(
     await deps.record_audit_log_fn(
         request_log_id=request_log_id,
         profile_id=state.profile_id,
-        provider_id=state.setup.provider_id,
+        vendor_id=state.setup.vendor_id,
         endpoint_id=target.connection.endpoint_id,
         connection_id=target.connection.id,
         endpoint_base_url=endpoint.base_url,
@@ -237,9 +240,11 @@ class StreamFinalizationSnapshot:
     model_id: str
     payload: bytes | None
     profile_id: int
-    provider_id: int
+    vendor_id: int
+    vendor_key: str | None
+    vendor_name: str | None
     provider_correlation_id: str | None
-    provider_type: str
+    api_family: str
     resolved_target_model_id: str | None
     record_audit_log_fn: RecordAuditLogFn
     request_body: bytes | None
@@ -286,9 +291,11 @@ def build_stream_finalization_snapshot(
         model_id=state.setup.model_id,
         payload=payload,
         profile_id=state.profile_id,
-        provider_id=state.setup.provider_id,
+        vendor_id=state.setup.vendor_id,
+        vendor_key=state.setup.vendor_key,
+        vendor_name=state.setup.vendor_name,
         provider_correlation_id=provider_correlation_id,
-        provider_type=state.setup.provider_type,
+        api_family=state.setup.api_family,
         resolved_target_model_id=state.setup.resolved_target_model_id,
         record_audit_log_fn=deps.record_audit_log_fn,
         request_body=bytes(target.endpoint_body)
@@ -312,7 +319,10 @@ async def _persist_stream_request_log(
     return await snapshot.log_request_fn(
         model_id=snapshot.model_id,
         profile_id=snapshot.profile_id,
-        provider_type=snapshot.provider_type,
+        api_family=snapshot.api_family,
+        vendor_id=snapshot.vendor_id,
+        vendor_key=snapshot.vendor_key,
+        vendor_name=snapshot.vendor_name,
         resolved_target_model_id=snapshot.resolved_target_model_id,
         endpoint_id=snapshot.endpoint_id,
         connection_id=snapshot.connection_id,
@@ -320,7 +330,7 @@ async def _persist_stream_request_log(
         attempt_number=snapshot.attempt_number,
         provider_correlation_id=snapshot.provider_correlation_id
         or extract_provider_correlation_id(
-            provider_type=snapshot.provider_type,
+            api_family=snapshot.api_family,
             response_headers=snapshot.response_headers,
             response_body=snapshot.payload,
             request_headers=snapshot.request_headers,
@@ -350,7 +360,7 @@ async def _queue_stream_audit_follow_up(
     await snapshot.record_audit_log_fn(
         request_log_id=request_log_id,
         profile_id=snapshot.profile_id,
-        provider_id=snapshot.provider_id,
+        vendor_id=snapshot.vendor_id,
         endpoint_id=snapshot.endpoint_id,
         connection_id=snapshot.connection_id,
         endpoint_base_url=snapshot.endpoint_base_url,

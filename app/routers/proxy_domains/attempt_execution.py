@@ -62,7 +62,7 @@ def _build_attempt_target(
         endpoint_body=setup.rewritten_body,
         headers=deps.build_upstream_headers_fn(
             connection,
-            setup.provider_type,
+            setup.api_family,
             setup.client_headers,
             setup.blocklist_rules,
             endpoint=connection.endpoint_rel,
@@ -118,7 +118,7 @@ async def execute_proxy_attempts(
                 model_id=setup.model_id,
                 endpoint_id=connection.endpoint_id,
                 policy=setup.failover_policy,
-                provider_id=setup.provider_id,
+                vendor_id=setup.vendor_id,
                 now_at=None,
             )
 

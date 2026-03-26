@@ -163,8 +163,8 @@ class TestAuthHotPathCache:
             ) as client:
                 client.cookies.set(get_settings().auth_cookie_name, access_token)
 
-                first_response = await client.get("/api/providers")
-                second_response = await client.get("/api/providers")
+                first_response = await client.get("/api/vendors")
+                second_response = await client.get("/api/vendors")
 
             assert first_response.status_code == 200
             assert second_response.status_code == 200
@@ -182,7 +182,7 @@ class TestAuthHotPathCache:
             async with AsyncClient(
                 transport=transport, base_url="http://testserver"
             ) as client:
-                first_response = await client.get("/api/providers")
+                first_response = await client.get("/api/vendors")
                 assert first_response.status_code == 401
 
             async with AsyncSessionLocal() as session:
@@ -199,7 +199,7 @@ class TestAuthHotPathCache:
             async with AsyncClient(
                 transport=transport, base_url="http://testserver"
             ) as client:
-                second_response = await client.get("/api/providers")
+                second_response = await client.get("/api/vendors")
 
             assert second_response.status_code == 200
         finally:
@@ -218,7 +218,7 @@ class TestAuthHotPathCache:
                 transport=transport, base_url="http://testserver"
             ) as client:
                 client.cookies.set(get_settings().auth_cookie_name, access_token)
-                first_response = await client.get("/api/providers")
+                first_response = await client.get("/api/vendors")
                 assert first_response.status_code == 200
 
                 async with AsyncSessionLocal() as session:
@@ -235,7 +235,7 @@ class TestAuthHotPathCache:
                     )
                     await session.commit()
 
-                stale_response = await client.get("/api/providers")
+                stale_response = await client.get("/api/vendors")
 
             assert stale_response.status_code == 401
             assert stale_response.json() == {"detail": "Authentication required"}

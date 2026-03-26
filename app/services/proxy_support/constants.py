@@ -1,4 +1,13 @@
-PROVIDER_AUTH = {
+from typing import TypedDict
+
+
+class ApiFamilyAuthConfig(TypedDict):
+    auth_header: str
+    auth_prefix: str
+    extra_headers: dict[str, str]
+
+
+API_FAMILY_AUTH: dict[str, ApiFamilyAuthConfig] = {
     "openai": {
         "auth_header": "Authorization",
         "auth_prefix": "Bearer ",
@@ -51,8 +60,8 @@ AUTO_DECOMPRESSED_RESPONSE_HEADERS = frozenset(
 
 __all__ = [
     "AUTO_DECOMPRESSED_RESPONSE_HEADERS",
+    "API_FAMILY_AUTH",
     "CLIENT_AUTH_HEADERS",
     "FAILOVER_STATUS_CODES",
     "HOP_BY_HOP_HEADERS",
-    "PROVIDER_AUTH",
 ]

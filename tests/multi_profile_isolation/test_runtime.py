@@ -27,7 +27,7 @@ from uuid import uuid4
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
     Profile,
-    Provider,
+    Vendor,
     ModelConfig,
     Endpoint,
     Connection,
@@ -148,9 +148,9 @@ class TestFailoverRecoveryStateIsolation:
         suffix = uuid4().hex[:8]
 
         async with AsyncSessionLocal() as session:
-            provider = Provider(
+            vendor = Vendor(
+                key=f"openai-isolation-{suffix}",
                 name=f"OpenAI Isolation {suffix}",
-                provider_type="openai",
                 audit_enabled=False,
                 audit_capture_bodies=False,
             )
@@ -161,8 +161,9 @@ class TestFailoverRecoveryStateIsolation:
                 name=f"Isolation Two {suffix}", is_active=False, version=0
             )
             model_one = ModelConfig(
-                provider=provider,
+                vendor=vendor,
                 profile=profile_one,
+                api_family="openai",
                 model_id=f"iso-model-one-{suffix}",
                 display_name="Isolation Model One",
                 model_type="native",
@@ -173,8 +174,9 @@ class TestFailoverRecoveryStateIsolation:
                 is_enabled=True,
             )
             model_two = ModelConfig(
-                provider=provider,
+                vendor=vendor,
                 profile=profile_two,
+                api_family="openai",
                 model_id=f"iso-model-two-{suffix}",
                 display_name="Isolation Model Two",
                 model_type="native",
@@ -217,7 +219,7 @@ class TestFailoverRecoveryStateIsolation:
 
             session.add_all(
                 [
-                    provider,
+                    vendor,
                     profile_one,
                     profile_two,
                     model_one,

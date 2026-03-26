@@ -9,12 +9,12 @@ from app.models.models import Connection, ModelConfig, ModelProxyTarget
 from app.schemas.schemas import (
     LoadbalanceStrategySummary,
     ModelConfigListResponse,
-    ProviderResponse,
     ProxyTargetReference,
+    VendorResponse,
 )
 
 MODEL_CONFIG_DETAIL_OPTIONS = (
-    selectinload(ModelConfig.provider),
+    selectinload(ModelConfig.vendor),
     selectinload(ModelConfig.loadbalance_strategy),
     selectinload(ModelConfig.proxy_targets).selectinload(
         ModelProxyTarget.target_model_config
@@ -42,8 +42,9 @@ def build_model_list_response(
     return ModelConfigListResponse(
         id=config.id,
         profile_id=config.profile_id,
-        provider_id=config.provider_id,
-        provider=ProviderResponse.model_validate(config.provider),
+        vendor_id=config.vendor_id,
+        vendor=VendorResponse.model_validate(config.vendor),
+        api_family=cast(Literal["openai", "anthropic", "gemini"], config.api_family),
         model_id=config.model_id,
         display_name=config.display_name,
         model_type=cast(Literal["native", "proxy"], config.model_type),
@@ -148,7 +149,7 @@ async def validate_proxy_model(
     profile_id: int,
     model_type: str,
     proxy_targets: list[ProxyTargetReference],
-    provider_id: int,
+    api_family: str,
     exclude_model_id: str | None = None,
 ) -> list[ModelConfig]:
     if model_type == "proxy":
@@ -165,7 +166,7 @@ async def validate_proxy_model(
             )
         target_result = await db.execute(
             select(ModelConfig)
-            .options(selectinload(ModelConfig.provider))
+            .options(selectinload(ModelConfig.vendor))
             .where(
                 ModelConfig.profile_id == profile_id,
                 ModelConfig.model_id.in_(target_model_ids),
@@ -190,10 +191,10 @@ async def validate_proxy_model(
                         "(chained proxies not allowed)"
                     ),
                 )
-            if target.provider_id != provider_id:
+            if target.api_family != api_family:
                 raise HTTPException(
                     status_code=400,
-                    detail="Proxy targets must use the same provider as the proxy model",
+                    detail="Proxy targets must use the same api_family as the proxy model",
                 )
             ordered_targets.append(target)
         return ordered_targets

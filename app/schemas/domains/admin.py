@@ -3,7 +3,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.domains.core import AuthType, _HEADER_TOKEN_RE
+from app.schemas.domains.core import ApiFamily, AuthType, _HEADER_TOKEN_RE
 from app.services.loadbalancer.policy import validate_strategy_ban_policy
 
 # --- Config Export/Import Schemas ---
@@ -46,7 +46,7 @@ class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
 
 class ConfigLoadbalanceStrategyExport(BaseModel):
     name: str
-    strategy_type: Literal["single", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
@@ -63,7 +63,7 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    strategy_type: Literal["single", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
@@ -98,6 +98,40 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
             failover_ban_duration_seconds=value,
         )
         return value
+
+
+class ConfigVendorExport(BaseModel):
+    key: str
+    name: str
+    description: str | None = None
+    audit_enabled: bool = False
+    audit_capture_bodies: bool = True
+
+
+class ConfigVendorImport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    description: str | None = None
+    audit_enabled: bool = False
+    audit_capture_bodies: bool = True
+
+    @field_validator("key")
+    @classmethod
+    def validate_key(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("key must not be empty")
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("name must not be empty")
+        return normalized
 
 
 class ConfigConnectionExport(BaseModel):
@@ -141,7 +175,8 @@ class ConfigProxyTargetImport(BaseModel):
 
 
 class ConfigModelExport(BaseModel):
-    provider_type: str
+    vendor_key: str
+    api_family: ApiFamily
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
@@ -154,7 +189,8 @@ class ConfigModelExport(BaseModel):
 class ConfigModelImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    provider_type: str
+    vendor_key: str
+    api_family: ApiFamily
     model_id: str
     display_name: str | None = None
     model_type: Literal["native", "proxy"] = "native"
@@ -193,8 +229,9 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[5] = 5
+    version: Literal[6] = 6
     exported_at: datetime
+    vendors: list[ConfigVendorExport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
     pricing_templates: list[ConfigPricingTemplateExport]
     loadbalance_strategies: list[ConfigLoadbalanceStrategyExport]
@@ -210,6 +247,7 @@ class ConfigImportRequest(BaseModel):
 
     version: int
     exported_at: datetime | None = None
+    vendors: list[ConfigVendorImport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]
     pricing_templates: list[ConfigPricingTemplateImport]
     loadbalance_strategies: list[ConfigLoadbalanceStrategyImport]
@@ -237,7 +275,7 @@ class AuditLogListItem(BaseModel):
     id: int
     request_log_id: int | None
     profile_id: int
-    provider_id: int
+    vendor_id: int
     model_id: str
     endpoint_id: int | None = None
     connection_id: int | None = None
@@ -259,7 +297,7 @@ class AuditLogDetail(BaseModel):
     id: int
     request_log_id: int | None
     profile_id: int
-    provider_id: int
+    vendor_id: int
     model_id: str
     endpoint_id: int | None = None
     connection_id: int | None = None

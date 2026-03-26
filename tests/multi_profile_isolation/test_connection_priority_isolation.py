@@ -12,30 +12,33 @@ def _unique_suffix() -> str:
     return f"{int(asyncio.get_running_loop().time() * 1_000_000)}-{uuid4().hex[:8]}"
 
 
-async def _get_or_create_provider(db, *, provider_type: str = "openai"):
-    from app.models.models import Provider
+def _vendor_key_for_api_family(api_family: str) -> str:
+    return "google" if api_family == "gemini" else api_family
 
-    provider = (
+
+async def _get_or_create_vendor(db, *, api_family: str = "openai"):
+    from app.models.models import Vendor
+
+    vendor_key = _vendor_key_for_api_family(api_family)
+    vendor = (
         (
             await db.execute(
-                select(Provider)
-                .where(Provider.provider_type == provider_type)
-                .order_by(Provider.id.asc())
+                select(Vendor)
+                .where(Vendor.key == vendor_key)
+                .order_by(Vendor.id.asc())
                 .limit(1)
             )
         )
         .scalars()
         .first()
     )
-    if provider is not None:
-        return provider
+    if vendor is not None:
+        return vendor
 
-    provider = Provider(
-        name=f"{provider_type.title()} {_unique_suffix()}", provider_type=provider_type
-    )
-    db.add(provider)
+    vendor = Vendor(key=vendor_key, name=f"{vendor_key.title()} {_unique_suffix()}")
+    db.add(vendor)
     await db.flush()
-    return provider
+    return vendor
 
 
 @pytest.mark.asyncio
@@ -50,7 +53,7 @@ async def test_connection_priority_move_respects_profile_and_model_ownership():
     suffix = _unique_suffix()
 
     async with AsyncSessionLocal() as db:
-        provider = await _get_or_create_provider(db)
+        vendor = await _get_or_create_vendor(db)
 
         profile_a = Profile(
             name=f"DEF069 Profile A {suffix}",
@@ -71,7 +74,8 @@ async def test_connection_priority_move_respects_profile_and_model_ownership():
 
         model_a = ModelConfig(
             profile_id=profile_a.id,
-            provider_id=provider.id,
+            vendor_id=vendor.id,
+            api_family="openai",
             model_id=f"def069-model-a-{suffix}",
             model_type="native",
             loadbalance_strategy=make_loadbalance_strategy(
@@ -82,7 +86,8 @@ async def test_connection_priority_move_respects_profile_and_model_ownership():
         )
         model_b = ModelConfig(
             profile_id=profile_b.id,
-            provider_id=provider.id,
+            vendor_id=vendor.id,
+            api_family="openai",
             model_id=f"def069-model-b-{suffix}",
             model_type="native",
             loadbalance_strategy=make_loadbalance_strategy(

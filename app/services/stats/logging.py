@@ -245,13 +245,13 @@ async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict[str, 
             to_time=window_end,
         )
     )
-    provider_summary = StatsSummaryResponse.model_validate(
+    api_family_summary = StatsSummaryResponse.model_validate(
         await get_stats_summary(
             db,
             profile_id=entry.profile_id,
             from_time=window_start_24h,
             to_time=window_end,
-            group_by="provider",
+            group_by="api_family",
         )
     )
     spending_summary = SpendingReportResponse.model_validate(
@@ -280,7 +280,7 @@ async def build_dashboard_update_message(*, db, entry: RequestLog) -> dict[str, 
     update = DashboardRealtimeUpdateResponse(
         request_log=request_log,
         stats_summary_24h=stats_summary,
-        provider_summary_24h=provider_summary,
+        api_family_summary_24h=api_family_summary,
         spending_summary_30d=spending_summary,
         throughput_24h=throughput,
         routing_route_24h=routing_route,
@@ -410,7 +410,10 @@ async def log_request(
     *,
     model_id: str,
     profile_id: int,
-    provider_type: str,
+    api_family: str,
+    vendor_id: int | None = None,
+    vendor_key: str | None = None,
+    vendor_name: str | None = None,
     resolved_target_model_id: str | None = None,
     endpoint_id: int | None,
     connection_id: int | None,
@@ -461,7 +464,10 @@ async def log_request(
         entry = RequestLog(
             profile_id=profile_id,
             model_id=model_id,
-            provider_type=provider_type,
+            api_family=api_family,
+            vendor_id=vendor_id,
+            vendor_key=vendor_key,
+            vendor_name=vendor_name,
             resolved_target_model_id=resolved_target_model_id,
             endpoint_id=endpoint_id,
             connection_id=connection_id,

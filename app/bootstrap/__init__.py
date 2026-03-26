@@ -1,6 +1,6 @@
 from .auth_middleware import build_auth_error_response, handle_authentication
 from .startup import (
-    DEFAULT_PROVIDERS,
+    DEFAULT_VENDORS,
     SYSTEM_BLOCKLIST_DEFAULTS,
     build_http_client,
     encrypt_endpoint_secrets,
@@ -9,12 +9,12 @@ from .startup import (
     seed_app_auth_settings,
     seed_header_blocklist_rules,
     seed_profile_invariants,
-    seed_providers,
+    seed_vendors,
     seed_user_settings,
 )
 
 __all__ = [
-    "DEFAULT_PROVIDERS",
+    "DEFAULT_VENDORS",
     "SYSTEM_BLOCKLIST_DEFAULTS",
     "build_auth_error_response",
     "build_http_client",
@@ -25,6 +25,6 @@ __all__ = [
     "seed_app_auth_settings",
     "seed_header_blocklist_rules",
     "seed_profile_invariants",
-    "seed_providers",
+    "seed_vendors",
     "seed_user_settings",
 ]

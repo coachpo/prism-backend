@@ -16,7 +16,7 @@ async def get_spending_report(
     preset: str | None = None,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     model_id: str | None = None,
     endpoint_id: int | None = None,
     connection_id: int | None = None,
@@ -24,7 +24,7 @@ async def get_spending_report(
     limit: int = 50,
     offset: int = 0,
     top_n: int = 5,
-) -> dict:
+) -> dict[str, object]:
     from_time, to_time = resolve_time_preset(preset, from_time, to_time)
 
     filters = [RequestLog.profile_id == profile_id]
@@ -32,8 +32,8 @@ async def get_spending_report(
         filters.append(RequestLog.created_at >= from_time)
     if to_time is not None:
         filters.append(RequestLog.created_at <= to_time)
-    if provider_type:
-        filters.append(RequestLog.provider_type == provider_type)
+    if api_family:
+        filters.append(RequestLog.api_family == api_family)
     if model_id:
         filters.append(RequestLog.model_id == model_id)
     if endpoint_id is not None:
@@ -122,8 +122,8 @@ async def get_spending_report(
         )
     elif group_by == "month":
         group_expr = func.to_char(RequestLog.created_at, "YYYY-MM")
-    elif group_by == "provider":
-        group_expr = RequestLog.provider_type
+    elif group_by == "api_family":
+        group_expr = RequestLog.api_family
     elif group_by == "model":
         group_expr = RequestLog.model_id
     elif group_by == "endpoint":
@@ -139,7 +139,7 @@ async def get_spending_report(
             func.coalesce(cast(RequestLog.endpoint_id, String), literal("-1")),
         )
 
-    groups: list[dict] = []
+    groups: list[dict[str, int | str]] = []
     groups_total = 0
     if group_expr is not None:
         groups_total = (

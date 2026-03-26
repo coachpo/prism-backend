@@ -14,10 +14,10 @@ async def get_stats_summary(
     to_time: datetime | None = None,
     group_by: str | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     endpoint_id: int | None = None,
     connection_id: int | None = None,
-) -> dict:
+) -> dict[str, object]:
     time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
@@ -25,8 +25,8 @@ async def get_stats_summary(
         time_filters.append(RequestLog.created_at <= to_time)
     if model_id:
         time_filters.append(RequestLog.model_id == model_id)
-    if provider_type:
-        time_filters.append(RequestLog.provider_type == provider_type)
+    if api_family:
+        time_filters.append(RequestLog.api_family == api_family)
     if endpoint_id is not None:
         time_filters.append(RequestLog.endpoint_id == endpoint_id)
     if connection_id is not None:
@@ -65,10 +65,10 @@ async def get_stats_summary(
     p95 = int(row.p95_response_time_ms or 0)
 
     groups = []
-    if group_by in ("model", "provider", "endpoint"):
+    if group_by in ("model", "api_family", "endpoint"):
         col_map = {
             "model": RequestLog.model_id,
-            "provider": RequestLog.provider_type,
+            "api_family": RequestLog.api_family,
             "endpoint": RequestLog.endpoint_base_url,
         }
         group_col = col_map[group_by]
@@ -121,7 +121,7 @@ async def get_connection_success_rates(
     profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
-) -> list[dict]:
+) -> list[dict[str, int | float | None]]:
     time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)
@@ -170,7 +170,7 @@ async def get_endpoint_success_rates(
     profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
-) -> list[dict]:
+) -> list[dict[str, int | float | None]]:
     return await get_connection_success_rates(
         db,
         profile_id=profile_id,
@@ -185,7 +185,7 @@ async def get_model_health_stats(
     profile_id: int,
     from_time: datetime | None = None,
     to_time: datetime | None = None,
-) -> dict[str, dict]:
+) -> dict[str, dict[str, int | float | None]]:
     time_filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
         time_filters.append(RequestLog.created_at >= from_time)

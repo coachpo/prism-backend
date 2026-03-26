@@ -16,8 +16,8 @@ from app.models.models import (
     ModelConfig,
     ModelProxyTarget,
     PricingTemplate,
-    Provider,
     UserSetting,
+    Vendor,
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
@@ -46,6 +46,7 @@ async def _lock_import_target_tables(db: AsyncSession) -> None:
             "loadbalance_strategies, "
             "model_configs, "
             "pricing_templates, "
+            "vendors, "
             "user_settings, "
             "header_blocklist_rules "
             "IN SHARE ROW EXCLUSIVE MODE"
@@ -167,32 +168,39 @@ async def execute_import_payload(
     )
     await db.flush()
 
-    provider_types_needed = sorted({model.provider_type for model in data.models})
-    provider_map: dict[str, int] = {}
-    if provider_types_needed:
-        providers = (
+    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendors}
+    vendor_map: dict[str, int] = {}
+    if vendor_payloads_by_key:
+        existing_vendors = (
             (
                 await db.execute(
-                    select(Provider).where(
-                        Provider.provider_type.in_(provider_types_needed)
-                    )
+                    select(Vendor).where(Vendor.key.in_(vendor_payloads_by_key.keys()))
                 )
             )
             .scalars()
             .all()
         )
-        provider_map = {provider.provider_type: provider.id for provider in providers}
-        missing_provider_types = [
-            provider_type
-            for provider_type in provider_types_needed
-            if provider_type not in provider_map
-        ]
-        if missing_provider_types:
-            missing = ", ".join(sorted(missing_provider_types))
-            raise HTTPException(
-                status_code=400,
-                detail=f"Missing provider types in system: {missing}",
-            )
+        existing_vendors_by_key = {vendor.key: vendor for vendor in existing_vendors}
+
+        for vendor_key, vendor_data in vendor_payloads_by_key.items():
+            existing_vendor = existing_vendors_by_key.get(vendor_key)
+            if existing_vendor is None:
+                existing_vendor = Vendor(
+                    key=vendor_data.key,
+                    name=vendor_data.name,
+                    description=vendor_data.description,
+                    audit_enabled=vendor_data.audit_enabled,
+                    audit_capture_bodies=vendor_data.audit_capture_bodies,
+                )
+                db.add(existing_vendor)
+                await db.flush()
+                existing_vendors_by_key[vendor_key] = existing_vendor
+            else:
+                existing_vendor.name = vendor_data.name
+                existing_vendor.description = vendor_data.description
+                existing_vendor.audit_enabled = vendor_data.audit_enabled
+                existing_vendor.audit_capture_bodies = vendor_data.audit_capture_bodies
+            vendor_map[vendor_key] = existing_vendor.id
 
     endpoint_id_allocator = await _build_id_allocator(db, Endpoint)
     template_id_allocator = await _build_id_allocator(db, PricingTemplate)
@@ -267,7 +275,8 @@ async def execute_import_payload(
             failover_ban_duration_seconds,
         ) = normalize_strategy_ban_policy(
             strategy_type=cast(
-                Literal["single", "failover"], strategy_data.strategy_type
+                Literal["single", "fill-first", "failover"],
+                strategy_data.strategy_type,
             ),
             failover_recovery_enabled=strategy_data.failover_recovery_enabled,
             failover_ban_mode=cast(
@@ -284,7 +293,8 @@ async def execute_import_payload(
             profile_id=profile_id,
             name=strategy_name,
             strategy_type=cast(
-                Literal["single", "failover"], strategy_data.strategy_type
+                Literal["single", "fill-first", "failover"],
+                strategy_data.strategy_type,
             ),
             failover_recovery_enabled=strategy_data.failover_recovery_enabled,
             failover_cooldown_seconds=strategy_data.failover_cooldown_seconds,
@@ -316,8 +326,9 @@ async def execute_import_payload(
         is_proxy = model.model_type == "proxy"
         model_config = ModelConfig(
             id=model_config_id_allocator.take(),
-            provider_id=provider_map[model.provider_type],
+            vendor_id=vendor_map[model.vendor_key],
             profile_id=profile_id,
+            api_family=model.api_family,
             model_id=model.model_id,
             display_name=model.display_name,
             model_type=cast(Literal["native", "proxy"], model.model_type),

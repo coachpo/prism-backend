@@ -21,7 +21,8 @@ class TestLoadbalanceStrategyFieldValidation:
 
         with pytest.raises(ValidationError) as exc_info:
             ModelConfigBase(
-                provider_id=1,
+                vendor_id=1,
+                api_family="openai",
                 model_id="gpt-4",
                 display_name="GPT-4",
                 model_type="native",
@@ -31,15 +32,18 @@ class TestLoadbalanceStrategyFieldValidation:
         )
 
     def test_proxy_model_rejects_strategy_id(self):
-        from app.schemas.schemas import ModelConfigBase
+        from app.schemas.schemas import ModelConfigBase, ProxyTargetReference
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
             ModelConfigBase(
-                provider_id=1,
+                vendor_id=1,
+                api_family="openai",
                 model_id="gpt-4-proxy",
                 model_type="proxy",
-                redirect_to="gpt-4",
+                proxy_targets=[
+                    ProxyTargetReference(target_model_id="gpt-4", position=0)
+                ],
                 loadbalance_strategy_id=7,
             )
         assert "loadbalance_strategy_id must be null for proxy models" in str(
@@ -73,7 +77,8 @@ class TestLoadbalanceStrategyFieldValidation:
             failover_recovery_enabled=False,
         )
         model = ConfigModelExport(
-            provider_type="openai",
+            vendor_key="openai",
+            api_family="openai",
             model_id="gpt-4",
             display_name="GPT-4",
             model_type="native",
@@ -119,12 +124,62 @@ class TestLoadbalanceStrategyFieldValidation:
         assert exported["failover_max_cooldown_strikes_before_ban"] == 3
         assert exported["failover_ban_duration_seconds"] == 600
 
+    def test_config_export_version_6_allows_fill_first_strategy(self):
+        from datetime import datetime, timezone
+
+        from app.schemas.schemas import (
+            ConfigExportResponse,
+            ConfigLoadbalanceStrategyExport,
+            ConfigVendorExport,
+        )
+
+        config = ConfigExportResponse(
+            exported_at=datetime.now(timezone.utc),
+            vendors=[
+                ConfigVendorExport(
+                    key="openai",
+                    name="OpenAI",
+                    description=None,
+                    audit_enabled=False,
+                    audit_capture_bodies=True,
+                )
+            ],
+            endpoints=[],
+            pricing_templates=[],
+            loadbalance_strategies=[
+                ConfigLoadbalanceStrategyExport(
+                    name="fill-first-primary",
+                    strategy_type="fill-first",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=600,
+                )
+            ],
+            models=[],
+        )
+
+        exported = config.model_dump(mode="json")
+
+        assert exported["version"] == 6
+        assert exported["loadbalance_strategies"][0]["strategy_type"] == "fill-first"
+        assert (
+            exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
+        )
+
     def test_config_import_accepts_minimal_payload(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 4,
+                "version": 6,
+                "vendors": [],
                 "endpoints": [],
                 "pricing_templates": [],
                 "loadbalance_strategies": [],
@@ -140,7 +195,16 @@ class TestLoadbalanceStrategyFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 3,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -158,7 +222,8 @@ class TestLoadbalanceStrategyFieldValidation:
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
                         "loadbalance_strategy_name": "failover-primary",
@@ -181,7 +246,16 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 4,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -194,7 +268,8 @@ class TestLoadbalanceStrategyFieldValidation:
                 "loadbalance_strategies": [],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": "gpt-4",
                         "display_name": "GPT-4",
                         "model_type": "native",
@@ -221,7 +296,16 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 4,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": "openai-main",
@@ -240,7 +324,8 @@ class TestLoadbalanceStrategyFieldValidation:
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
@@ -251,7 +336,8 @@ class TestLoadbalanceStrategyFieldValidation:
                         ],
                     },
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": "gpt-4.1",
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
@@ -275,11 +361,21 @@ class TestLoadbalanceStrategyFieldValidation:
             ConfigImportRequest,
             ConfigLoadbalanceStrategyExport,
             ConfigModelExport,
+            ConfigVendorExport,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
             exported_at=datetime.now(timezone.utc),
+            vendors=[
+                ConfigVendorExport(
+                    key="openai",
+                    name="OpenAI",
+                    description=None,
+                    audit_enabled=False,
+                    audit_capture_bodies=True,
+                )
+            ],
             endpoints=[
                 ConfigEndpointExport(
                     name="openai-main",
@@ -307,7 +403,8 @@ class TestLoadbalanceStrategyFieldValidation:
             ],
             models=[
                 ConfigModelExport(
-                    provider_type="openai",
+                    vendor_key="openai",
+                    api_family="openai",
                     model_id="gpt-4o",
                     display_name="GPT-4o",
                     model_type="native",

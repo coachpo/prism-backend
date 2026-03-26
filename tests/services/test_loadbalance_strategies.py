@@ -2,6 +2,7 @@ from typing import cast
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
@@ -11,7 +12,7 @@ from app.models.models import (
     LoadbalanceCurrentState,
     ModelConfig,
     Profile,
-    Provider,
+    Vendor,
 )
 from app.routers.loadbalance import (
     create_strategy,
@@ -23,26 +24,31 @@ from app.schemas.schemas import LoadbalanceStrategyCreate, LoadbalanceStrategyUp
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
-async def _get_or_create_provider(db, *, provider_type: str = "openai"):
-    provider = (
+def _vendor_key_for_api_family(api_family: str) -> str:
+    return "google" if api_family == "gemini" else api_family
+
+
+async def _get_or_create_vendor(db, *, api_family: str = "openai"):
+    vendor_key = _vendor_key_for_api_family(api_family)
+    vendor = (
         (
             await db.execute(
-                select(Provider)
-                .where(Provider.provider_type == provider_type)
-                .order_by(Provider.id.asc())
+                select(Vendor)
+                .where(Vendor.key == vendor_key)
+                .order_by(Vendor.id.asc())
                 .limit(1)
             )
         )
         .scalars()
         .first()
     )
-    if provider is not None:
-        return provider
+    if vendor is not None:
+        return vendor
 
-    provider = Provider(name="OpenAI strategies", provider_type=provider_type)
-    db.add(provider)
+    vendor = Vendor(key=vendor_key, name="OpenAI strategies")
+    db.add(vendor)
     await db.flush()
-    return provider
+    return vendor
 
 
 class TestLoadbalanceStrategies:
@@ -143,9 +149,124 @@ class TestLoadbalanceStrategies:
             assert deleted == {"deleted": True}
 
     @pytest.mark.asyncio
+    async def test_fill_first_strategy_crud_roundtrip(self):
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name="Fill-First Strategy CRUD Profile",
+                is_active=False,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            created = await create_strategy(
+                body=LoadbalanceStrategyCreate(
+                    name="fill-first-primary",
+                    strategy_type="fill-first",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=600,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            assert created.name == "fill-first-primary"
+            assert created.strategy_type == "fill-first"
+            assert created.failover_recovery_enabled is True
+            assert created.failover_cooldown_seconds == 45
+            assert created.failover_failure_threshold == 4
+            assert created.failover_backoff_multiplier == pytest.approx(3.5)
+            assert created.failover_max_cooldown_seconds == 720
+            assert created.failover_jitter_ratio == pytest.approx(0.35)
+            assert created.failover_auth_error_cooldown_seconds == 2400
+            assert created.failover_ban_mode == "temporary"
+            assert created.failover_max_cooldown_strikes_before_ban == 3
+            assert created.failover_ban_duration_seconds == 600
+
+            listed = await list_strategies(db=db, profile_id=profile.id)
+
+            assert [strategy.name for strategy in listed] == ["fill-first-primary"]
+            assert listed[0].strategy_type == "fill-first"
+            assert listed[0].failover_recovery_enabled is True
+
+            updated = await update_strategy(
+                strategy_id=created.id,
+                body=LoadbalanceStrategyUpdate(
+                    name="fill-first-secondary",
+                    strategy_type="fill-first",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=90,
+                    failover_failure_threshold=5,
+                    failover_backoff_multiplier=4.0,
+                    failover_max_cooldown_seconds=1440,
+                    failover_jitter_ratio=0.5,
+                    failover_auth_error_cooldown_seconds=3600,
+                    failover_ban_mode="manual",
+                    failover_max_cooldown_strikes_before_ban=2,
+                    failover_ban_duration_seconds=0,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            assert updated.name == "fill-first-secondary"
+            assert updated.strategy_type == "fill-first"
+            assert updated.failover_recovery_enabled is True
+            assert updated.failover_cooldown_seconds == 90
+            assert updated.failover_failure_threshold == 5
+            assert updated.failover_backoff_multiplier == pytest.approx(4.0)
+            assert updated.failover_max_cooldown_seconds == 1440
+            assert updated.failover_jitter_ratio == pytest.approx(0.5)
+            assert updated.failover_auth_error_cooldown_seconds == 3600
+            assert updated.failover_ban_mode == "manual"
+            assert updated.failover_max_cooldown_strikes_before_ban == 2
+            assert updated.failover_ban_duration_seconds == 0
+
+    def test_fill_first_strategy_allows_recovery_fields_while_single_still_rejects_them(
+        self,
+    ):
+        with pytest.raises(ValidationError):
+            LoadbalanceStrategyCreate(
+                name="single-with-recovery",
+                strategy_type="single",
+                failover_recovery_enabled=True,
+            )
+
+        created = LoadbalanceStrategyCreate(
+            name="fill-first-with-recovery",
+            strategy_type="fill-first",
+            failover_recovery_enabled=True,
+            failover_cooldown_seconds=45,
+            failover_failure_threshold=4,
+            failover_backoff_multiplier=3.5,
+            failover_max_cooldown_seconds=720,
+            failover_jitter_ratio=0.35,
+            failover_auth_error_cooldown_seconds=2400,
+            failover_ban_mode="temporary",
+            failover_max_cooldown_strikes_before_ban=3,
+            failover_ban_duration_seconds=600,
+        )
+
+        assert created.strategy_type == "fill-first"
+        assert created.failover_recovery_enabled is True
+        assert created.failover_ban_mode == "temporary"
+        assert created.failover_max_cooldown_strikes_before_ban == 3
+        assert created.failover_ban_duration_seconds == 600
+
+    @pytest.mark.asyncio
     async def test_delete_strategy_rejects_attached_models(self):
         async with AsyncSessionLocal() as db:
-            provider = await _get_or_create_provider(db)
+            vendor = await _get_or_create_vendor(db)
             profile = Profile(
                 name="Strategy Attach Profile", is_active=False, version=0
             )
@@ -159,7 +280,8 @@ class TestLoadbalanceStrategies:
             )
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id="attached-model",
                 model_type="native",
                 loadbalance_strategy=strategy,
@@ -182,7 +304,7 @@ class TestLoadbalanceStrategies:
     @pytest.mark.asyncio
     async def test_updating_strategy_behavior_clears_attached_model_state(self):
         async with AsyncSessionLocal() as db:
-            provider = await _get_or_create_provider(db)
+            vendor = await _get_or_create_vendor(db)
             profile = Profile(name="Strategy State Profile", is_active=False, version=0)
             db.add(profile)
             await db.flush()
@@ -195,7 +317,8 @@ class TestLoadbalanceStrategies:
             )
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id="stateful-model",
                 model_type="native",
                 loadbalance_strategy=strategy,
@@ -262,7 +385,7 @@ class TestLoadbalanceStrategies:
     @pytest.mark.asyncio
     async def test_updating_strategy_failover_policy_clears_attached_model_state(self):
         async with AsyncSessionLocal() as db:
-            provider = await _get_or_create_provider(db)
+            vendor = await _get_or_create_vendor(db)
             profile = Profile(
                 name="Strategy Policy State Profile", is_active=False, version=0
             )
@@ -277,7 +400,8 @@ class TestLoadbalanceStrategies:
             )
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id="policy-stateful-model",
                 model_type="native",
                 loadbalance_strategy=strategy,
@@ -340,6 +464,94 @@ class TestLoadbalanceStrategies:
             assert updated.failover_cooldown_seconds == 120
             assert state_rows == []
 
+    @pytest.mark.asyncio
+    async def test_switching_strategy_from_failover_to_fill_first_clears_attached_model_state(
+        self,
+    ):
+        async with AsyncSessionLocal() as db:
+            vendor = await _get_or_create_vendor(db)
+            profile = Profile(
+                name="Strategy Fill-First State Profile",
+                is_active=False,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            strategy = make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                name="fill-first-stateful",
+            )
+            model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id="fill-first-stateful-model",
+                model_type="native",
+                loadbalance_strategy=strategy,
+                is_enabled=True,
+            )
+            endpoint = Endpoint(
+                profile_id=profile.id,
+                name="fill-first-stateful-endpoint",
+                base_url="https://fill-first-stateful.example.com/v1",
+                api_key="sk-fill-first-stateful",
+                position=0,
+            )
+            db.add_all([strategy, model, endpoint])
+            await db.flush()
+
+            connection = Connection(
+                profile_id=profile.id,
+                model_config_id=model.id,
+                endpoint_id=endpoint.id,
+                is_active=True,
+                priority=0,
+                name="fill-first-stateful-connection",
+            )
+            db.add(connection)
+            await db.flush()
+
+            db.add(
+                LoadbalanceCurrentState(
+                    profile_id=profile.id,
+                    connection_id=connection.id,
+                    consecutive_failures=3,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=30,
+                )
+            )
+            await db.commit()
+
+            updated = await update_strategy(
+                strategy_id=strategy.id,
+                body=LoadbalanceStrategyUpdate(
+                    strategy_type="fill-first",
+                    failover_recovery_enabled=True,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            state_rows = (
+                (
+                    await db.execute(
+                        select(LoadbalanceCurrentState).where(
+                            LoadbalanceCurrentState.profile_id == profile.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            assert updated.strategy_type == "fill-first"
+            assert updated.failover_recovery_enabled is True
+            assert state_rows == []
+
     def test_strategy_ban_policy_validation_rejects_invalid_combinations(self):
         with pytest.raises(ValueError):
             LoadbalanceStrategyCreate(
@@ -374,7 +586,7 @@ class TestLoadbalanceStrategies:
     @pytest.mark.asyncio
     async def test_updating_strategy_ban_policy_clears_attached_model_state(self):
         async with AsyncSessionLocal() as db:
-            provider = await _get_or_create_provider(db)
+            vendor = await _get_or_create_vendor(db)
             profile = Profile(
                 name="Strategy Ban Policy State Profile", is_active=False, version=0
             )
@@ -389,7 +601,8 @@ class TestLoadbalanceStrategies:
             )
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id="ban-policy-stateful-model",
                 model_type="native",
                 loadbalance_strategy=strategy,

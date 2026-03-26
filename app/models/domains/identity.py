@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any
 
 # ruff: noqa: F821,F401
 from datetime import datetime
@@ -23,23 +23,6 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.core.time import utc_now
-
-if TYPE_CHECKING:
-    from app.models.domains.observability import (
-        AuditLog,
-        EndpointFxRateSetting,
-        HeaderBlocklistRule,
-        LoadbalanceCurrentState,
-        LoadbalanceEvent,
-        RequestLog,
-        UserSetting,
-    )
-    from app.models.domains.routing import (
-        Connection,
-        Endpoint,
-        ModelConfig,
-        PricingTemplate,
-    )
 
 
 class Profile(Base):
@@ -77,45 +60,47 @@ class Profile(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    model_configs: Mapped[list["ModelConfig"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    model_configs: Mapped[list[Any]] = relationship(
+        "ModelConfig", back_populates="profile", cascade="all, delete-orphan"
     )
-    endpoints: Mapped[list["Endpoint"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    endpoints: Mapped[list[Any]] = relationship(
+        "Endpoint", back_populates="profile", cascade="all, delete-orphan"
     )
-    connections: Mapped[list["Connection"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    connections: Mapped[list[Any]] = relationship(
+        "Connection", back_populates="profile", cascade="all, delete-orphan"
     )
-    user_settings: Mapped[list["UserSetting"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    user_settings: Mapped[list[Any]] = relationship(
+        "UserSetting", back_populates="profile", cascade="all, delete-orphan"
     )
-    endpoint_fx_rate_settings: Mapped[list["EndpointFxRateSetting"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    endpoint_fx_rate_settings: Mapped[list[Any]] = relationship(
+        "EndpointFxRateSetting", back_populates="profile", cascade="all, delete-orphan"
     )
-    request_logs: Mapped[list["RequestLog"]] = relationship(back_populates="profile")
-    audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="profile")
-    header_blocklist_rules: Mapped[list["HeaderBlocklistRule"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    request_logs: Mapped[list[Any]] = relationship(
+        "RequestLog", back_populates="profile"
     )
-    pricing_templates: Mapped[list["PricingTemplate"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    audit_logs: Mapped[list[Any]] = relationship("AuditLog", back_populates="profile")
+    header_blocklist_rules: Mapped[list[Any]] = relationship(
+        "HeaderBlocklistRule", back_populates="profile", cascade="all, delete-orphan"
     )
-    loadbalance_events: Mapped[list["LoadbalanceEvent"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    pricing_templates: Mapped[list[Any]] = relationship(
+        "PricingTemplate", back_populates="profile", cascade="all, delete-orphan"
     )
-    loadbalance_current_states: Mapped[list["LoadbalanceCurrentState"]] = relationship(
-        back_populates="profile", cascade="all, delete-orphan"
+    loadbalance_events: Mapped[list[Any]] = relationship(
+        "LoadbalanceEvent", back_populates="profile", cascade="all, delete-orphan"
+    )
+    loadbalance_current_states: Mapped[list[Any]] = relationship(
+        "LoadbalanceCurrentState",
+        back_populates="profile",
+        cascade="all, delete-orphan",
     )
 
 
-class Provider(Base):
-    __tablename__ = "providers"
+class Vendor(Base):
+    __tablename__ = "vendors"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    provider_type: Mapped[str] = mapped_column(
-        String(50), nullable=False
-    )  # openai, anthropic, gemini
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     audit_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     audit_capture_bodies: Mapped[bool] = mapped_column(
@@ -128,8 +113,8 @@ class Provider(Base):
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
 
-    model_configs: Mapped[list["ModelConfig"]] = relationship(
-        back_populates="provider", cascade="all, delete-orphan"
+    model_configs: Mapped[list[Any]] = relationship(
+        "ModelConfig", back_populates="vendor", cascade="all, delete-orphan"
     )
 
 

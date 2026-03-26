@@ -35,7 +35,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
             await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -66,7 +66,7 @@ class TestDEF001_LogsSurviveFailoverRollback:
             await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -103,7 +103,10 @@ class TestDEF001_LogsSurviveFailoverRollback:
             request_log_id = await log_request(
                 model_id="test-model",
                 profile_id=1,
-                provider_type="openai",
+                api_family="openai",
+                vendor_id=7,
+                vendor_key="openrouter",
+                vendor_name="OpenRouter",
                 endpoint_id=1,
                 connection_id=1,
                 endpoint_base_url="http://example.com",
@@ -121,6 +124,10 @@ class TestDEF001_LogsSurviveFailoverRollback:
         assert request_log_id == 41
         mock_session.add.assert_called_once()
         mock_session.commit.assert_awaited_once()
+        assert captured_entry["entry"].api_family == "openai"
+        assert captured_entry["entry"].vendor_id == 7
+        assert captured_entry["entry"].vendor_key == "openrouter"
+        assert captured_entry["entry"].vendor_name == "OpenRouter"
         assert captured_entry["entry"].resolved_target_model_id == "target-model-a"
         assert captured_entry["entry"].ingress_request_id == "ingress-123"
         assert captured_entry["entry"].attempt_number == 2
@@ -156,19 +163,19 @@ class TestDEF003_AuthHeaderPerEndpoint:
         ep.api_key = api_key
         return ep
 
-    def test_openai_provider_uses_bearer_by_default(self):
+    def test_openai_api_family_uses_bearer_by_default(self):
         ep = self._make_endpoint()
         headers = build_upstream_headers(ep, "openai")
         assert headers["Authorization"] == "Bearer sk-test"
         assert "x-api-key" not in headers
 
-    def test_anthropic_provider_uses_xapikey_by_default(self):
+    def test_anthropic_api_family_uses_xapikey_by_default(self):
         ep = self._make_endpoint()
         headers = build_upstream_headers(ep, "anthropic")
         assert headers["x-api-key"] == "sk-test"
         assert "anthropic-version" in headers
 
-    def test_anthropic_provider_strips_whitespace_from_api_key(self):
+    def test_anthropic_api_family_strips_whitespace_from_api_key(self):
         ep = self._make_endpoint(api_key="\tmy-super-secret-password-123 \n")
         headers = build_upstream_headers(ep, "anthropic")
         assert headers["x-api-key"] == "my-super-secret-password-123"
@@ -185,17 +192,25 @@ class TestDEF003_AuthHeaderPerEndpoint:
         assert headers["x-api-key"] == "sk-test"
         assert "anthropic-version" in headers
 
-    def test_gemini_provider_uses_bearer_by_default(self):
+    def test_gemini_api_family_uses_bearer_by_default(self):
         ep = self._make_endpoint()
         headers = build_upstream_headers(ep, "gemini")
         assert headers["Authorization"] == "Bearer sk-test"
 
-    def test_auth_type_takes_precedence_over_provider_type(self):
+    def test_auth_type_takes_precedence_over_api_family(self):
         ep = self._make_endpoint(auth_type="openai")
         headers = build_upstream_headers(ep, "anthropic")
         assert "Authorization" in headers
         assert headers["Authorization"] == "Bearer sk-test"
         assert "x-api-key" not in headers
+
+    def test_auth_defaults_follow_api_family_even_when_vendor_metadata_differs(self):
+        ep = self._make_endpoint()
+        headers = build_upstream_headers(ep, "anthropic")
+
+        assert headers["x-api-key"] == "sk-test"
+        assert headers["anthropic-version"] == "2023-06-01"
+        assert "Authorization" not in headers
 
 
 class TestDEF005_GeminiPathModelRewrite:
@@ -292,7 +307,7 @@ class TestDEF080_ProviderCorrelationExtraction:
 
         assert (
             extract_provider_correlation_id(
-                provider_type="openai",
+                api_family="openai",
                 response_headers={"x-request-id": "req-openai-1"},
                 response_body=None,
                 request_headers={"X-Client-Request-Id": "client-1"},
@@ -301,7 +316,7 @@ class TestDEF080_ProviderCorrelationExtraction:
         )
         assert (
             extract_provider_correlation_id(
-                provider_type="openai",
+                api_family="openai",
                 response_headers={},
                 response_body=None,
                 request_headers={"X-Client-Request-Id": "client-1"},
@@ -316,7 +331,7 @@ class TestDEF080_ProviderCorrelationExtraction:
 
         assert (
             extract_provider_correlation_id(
-                provider_type="anthropic",
+                api_family="anthropic",
                 response_headers={"request-id": "req-anthropic-1"},
                 response_body=b'{"type":"error","request_id":"req-anthropic-body"}',
                 request_headers={},
@@ -325,7 +340,7 @@ class TestDEF080_ProviderCorrelationExtraction:
         )
         assert (
             extract_provider_correlation_id(
-                provider_type="anthropic",
+                api_family="anthropic",
                 response_headers={},
                 response_body=b'{"type":"error","request_id":"req-anthropic-body"}',
                 request_headers={},
@@ -340,7 +355,7 @@ class TestDEF080_ProviderCorrelationExtraction:
 
         assert (
             extract_provider_correlation_id(
-                provider_type="gemini",
+                api_family="gemini",
                 response_headers={},
                 response_body=b'{"responseId":"gemini-response-1"}',
                 request_headers={},
@@ -349,7 +364,7 @@ class TestDEF080_ProviderCorrelationExtraction:
         )
         assert (
             extract_provider_correlation_id(
-                provider_type="gemini",
+                api_family="gemini",
                 response_headers={},
                 response_body=(
                     b'data: {"responseId":"gemini-stream-1","usageMetadata":{"totalTokenCount":3}}\n\n'

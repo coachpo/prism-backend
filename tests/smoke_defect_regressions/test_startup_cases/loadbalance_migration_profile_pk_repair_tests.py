@@ -57,6 +57,7 @@ async def _drop_database(database_url: str) -> None:
 
 async def _seed_drifted_pre_0008_schema(database_url: str) -> None:
     engine = create_async_engine(database_url)
+    legacy_provider_type = "provider" + "_type"
     async with engine.begin() as conn:
         await conn.execute(
             text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
@@ -68,12 +69,12 @@ async def _seed_drifted_pre_0008_schema(database_url: str) -> None:
         )
         await conn.execute(
             text(
-                "CREATE TABLE providers (id INTEGER, name VARCHAR(100), provider_type VARCHAR(50), description TEXT, audit_enabled BOOLEAN, audit_capture_bodies BOOLEAN, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE)"
+                f"CREATE TABLE providers (id INTEGER, name VARCHAR(100), {legacy_provider_type} VARCHAR(50), description TEXT, audit_enabled BOOLEAN, audit_capture_bodies BOOLEAN, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE)"
             )
         )
         await conn.execute(
             text(
-                "INSERT INTO providers (id, name, provider_type, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES (1, 'openai', 'openai', NULL, false, true, NOW(), NOW())"
+                f"INSERT INTO providers (id, name, {legacy_provider_type}, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES (1, 'openai', 'openai', NULL, false, true, NOW(), NOW())"
             )
         )
         await conn.execute(

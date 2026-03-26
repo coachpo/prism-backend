@@ -14,7 +14,7 @@ from .mutation_helpers import (
     apply_model_type_update_defaults,
     build_model_create_values,
     ensure_loadbalance_strategy_exists,
-    ensure_provider_exists,
+    ensure_vendor_exists,
     ensure_proxy_update_preconditions,
     ensure_valid_model_type,
     load_model_config_or_404,
@@ -37,7 +37,7 @@ async def create_model_config_record(
     body: ModelConfigCreate,
     profile_id: int,
 ) -> ModelConfig:
-    await ensure_provider_exists(db, body.provider_id)
+    await ensure_vendor_exists(db, body.vendor_id)
     if body.model_type == "native" and body.loadbalance_strategy_id is not None:
         await ensure_loadbalance_strategy_exists(
             db,
@@ -56,13 +56,14 @@ async def create_model_config_record(
         profile_id=profile_id,
         model_type=model_type,
         proxy_targets=body.proxy_targets,
-        provider_id=body.provider_id,
+        api_family=body.api_family,
     )
 
     config = ModelConfig(
         **build_model_create_values(
             profile_id=profile_id,
-            provider_id=body.provider_id,
+            vendor_id=body.vendor_id,
+            api_family=body.api_family,
             model_id=body.model_id,
             display_name=body.display_name,
             model_type=model_type,
@@ -104,8 +105,8 @@ async def update_model_config_record(
     original_model_id = config.model_id
     update_data = body.model_dump(exclude_unset=True)
 
-    if "provider_id" in update_data:
-        await ensure_provider_exists(db, update_data["provider_id"])
+    if "vendor_id" in update_data:
+        await ensure_vendor_exists(db, update_data["vendor_id"])
 
     if "model_id" in update_data and update_data["model_id"] != config.model_id:
         await ensure_model_id_available(
@@ -118,7 +119,7 @@ async def update_model_config_record(
     new_model_type = ensure_valid_model_type(
         update_data.get("model_type", config.model_type)
     )
-    new_provider_id = update_data.get("provider_id", config.provider_id)
+    new_api_family = update_data.get("api_family", config.api_family)
     new_model_id = update_data.get("model_id", config.model_id)
     new_loadbalance_strategy_id = update_data.get(
         "loadbalance_strategy_id", config.loadbalance_strategy_id
@@ -137,7 +138,7 @@ async def update_model_config_record(
         config=config,
         profile_id=profile_id,
         new_model_type=new_model_type,
-        new_provider_id=new_provider_id,
+        new_api_family=new_api_family,
     )
     ensure_proxy_update_preconditions(
         config=config,
@@ -151,7 +152,7 @@ async def update_model_config_record(
         profile_id=profile_id,
         model_type=new_model_type,
         proxy_targets=new_proxy_targets,
-        provider_id=new_provider_id,
+        api_family=new_api_family,
         exclude_model_id=config.model_id,
     )
 
@@ -187,7 +188,7 @@ async def update_model_config_record(
             and update_data["loadbalance_strategy_id"]
             != config.loadbalance_strategy_id,
             "model_type" in update_data and new_model_type != config.model_type,
-            "provider_id" in update_data and new_provider_id != config.provider_id,
+            "api_family" in update_data and new_api_family != config.api_family,
         )
     )
 

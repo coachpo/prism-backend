@@ -15,6 +15,7 @@ Tests comprehensive profile isolation across all functional requirements:
 
 import pytest
 import json
+import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
@@ -23,7 +24,6 @@ from datetime import datetime, timezone
 
 from app.models.models import (
     Profile,
-    Provider,
     ModelConfig,
     Endpoint,
     Connection,
@@ -129,7 +129,10 @@ class TestObservabilityAttribution:
             await log_request(
                 profile_id=1,
                 model_id="gpt-4",
-                provider_type="openai",
+                api_family="openai",
+                vendor_id=7,
+                vendor_key="openai",
+                vendor_name="OpenAI",
                 endpoint_id=10,
                 connection_id=20,
                 endpoint_base_url="https://api.openai.com",
@@ -142,6 +145,8 @@ class TestObservabilityAttribution:
         mock_session.add.assert_called_once()
         log_entry = mock_session.add.call_args[0][0]
         assert log_entry.profile_id == 1
+        assert log_entry.api_family == "openai"
+        assert log_entry.vendor_id == 7
 
     @pytest.mark.asyncio
     async def test_audit_logs_include_profile_id(self):
@@ -173,7 +178,7 @@ class TestObservabilityAttribution:
             await record_audit_log(
                 profile_id=1,
                 request_log_id=100,
-                provider_id=1,
+                vendor_id=1,
                 model_id="gpt-4",
                 request_method="POST",
                 request_url="https://api.openai.com/v1/chat/completions",
@@ -192,7 +197,37 @@ class TestObservabilityAttribution:
         mock_session.add.assert_called_once()
         audit_entry = mock_session.add.call_args[0][0]
         assert audit_entry.profile_id == 1
+        assert audit_entry.vendor_id == 1
         assert audit_entry.response_body == '{"choices":[]}'
+
+    def test_stats_routes_use_api_family_query_params(self):
+        from app.routers.stats import (
+            get_throughput,
+            list_operations_request_logs,
+            list_request_logs,
+            spending_report,
+            stats_summary,
+        )
+
+        for route in (
+            list_request_logs,
+            list_operations_request_logs,
+            stats_summary,
+            spending_report,
+            get_throughput,
+        ):
+            parameters = inspect.signature(route).parameters
+            legacy_field = "provider" + "_type"
+            assert "api_family" in parameters
+            assert legacy_field not in parameters
+
+    def test_audit_routes_use_vendor_id_filter(self):
+        from app.routers.audit import list_audit_logs
+
+        parameters = inspect.signature(list_audit_logs).parameters
+        legacy_field = "provider" + "_id"
+        assert "vendor_id" in parameters
+        assert legacy_field not in parameters
 
     @pytest.mark.asyncio
     async def test_stats_queries_filter_by_profile(self):

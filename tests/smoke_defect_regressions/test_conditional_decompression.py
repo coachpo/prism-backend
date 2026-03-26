@@ -60,7 +60,7 @@ class TestDEF067_ConditionalDecompression:
 
         headers = build_upstream_headers(
             connection=connection,
-            provider_type="openai",
+            api_family="openai",
             client_headers=None,
             blocklist_rules=None,
             endpoint=None,
@@ -81,7 +81,7 @@ class TestDEF067_ConditionalDecompression:
 
         headers = build_upstream_headers(
             connection=connection,
-            provider_type="openai",
+            api_family="openai",
             client_headers=None,
             blocklist_rules=None,
             endpoint=None,

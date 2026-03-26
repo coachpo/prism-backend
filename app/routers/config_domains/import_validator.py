@@ -4,7 +4,7 @@ from app.schemas.schemas import ConfigImportRequest
 from app.services.loadbalancer.policy import validate_strategy_ban_policy
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
-VALID_PROVIDER_TYPES = {"openai", "anthropic", "gemini"}
+VALID_API_FAMILIES = {"openai", "anthropic", "gemini"}
 
 
 def _validate_optional_strategy_policy_fields(*, strategy_name: str, strategy) -> None:
@@ -114,6 +114,15 @@ def _resolve_pricing_template_reference_name(
 
 
 def validate_import_payload(data: ConfigImportRequest) -> None:
+    vendor_keys_in_file: set[str] = set()
+    for vendor in data.vendors:
+        if vendor.key in vendor_keys_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate vendor key: '{vendor.key}'",
+            )
+        vendor_keys_in_file.add(vendor.key)
+
     endpoint_names_in_file: set[str] = set()
     for endpoint in data.endpoints:
         endpoint_name = endpoint.name.strip()
@@ -196,10 +205,16 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
             )
         seen_model_ids.add(model.model_id)
 
-        if model.provider_type not in VALID_PROVIDER_TYPES:
+        if model.api_family not in VALID_API_FAMILIES:
             raise HTTPException(
                 status_code=400,
-                detail=f"Unknown provider type: '{model.provider_type}'",
+                detail=f"Unknown api family: '{model.api_family}'",
+            )
+
+        if model.vendor_key not in vendor_keys_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown vendor key: '{model.vendor_key}'",
             )
 
         if model.model_type not in {"native", "proxy"}:
@@ -233,7 +248,7 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                         f"loadbalance strategy '{strategy_name}'"
                     ),
                 )
-            native_models[model.model_id] = model.provider_type
+            native_models[model.model_id] = model.api_family
         else:
             if not model.proxy_targets:
                 raise HTTPException(
@@ -304,11 +319,11 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                         f"'{target.target_model_id}'"
                     ),
                 )
-            if native_models[target.target_model_id] != model.provider_type:
+            if native_models[target.target_model_id] != model.api_family:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Model '{model.model_id}' cannot target cross-provider model "
+                        f"Model '{model.model_id}' cannot target cross-api-family model "
                         f"'{target.target_model_id}'"
                     ),
                 )
@@ -356,4 +371,4 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
         seen_blocklist_rules.add(key)
 
 
-__all__ = ["VALID_PROVIDER_TYPES", "validate_import_payload"]
+__all__ = ["VALID_API_FAMILIES", "validate_import_payload"]

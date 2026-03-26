@@ -15,6 +15,7 @@ _test_postgres_container: Any | None = None
 _test_database_url: str | None = None
 _DB_FREE_TEST_TARGETS = {
     "tests/services/test_background_tasks.py",
+    "tests/test_backend_version_metadata.py",
     "tests/test_realtime_broadcast.py",
 }
 _DB_FREE_DATABASE_URL = "postgresql+asyncpg://prism:prism@localhost:5432/prism_test"

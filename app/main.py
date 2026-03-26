@@ -13,6 +13,7 @@ import uvicorn
 from app import bootstrap
 from app.core.config import Settings, get_settings
 from app.core.database import get_engine
+from app.core.version import get_backend_version
 from app.services.background_tasks import background_task_manager
 from app.services.loadbalancer.limiter import reconcile_all_connection_limits
 from app.services.stats.logging import shutdown_dashboard_update_lifecycle
@@ -26,14 +27,14 @@ from app.routers import (
     models,
     pricing_templates,
     profiles,
-    providers,
     proxy,
     realtime,
     settings as settings_router,
     stats,
+    vendors,
 )
 
-DEFAULT_PROVIDERS = bootstrap.DEFAULT_PROVIDERS
+DEFAULT_VENDORS = bootstrap.DEFAULT_VENDORS
 SYSTEM_BLOCKLIST_DEFAULTS = bootstrap.SYSTEM_BLOCKLIST_DEFAULTS
 build_auth_error_response = bootstrap.build_auth_error_response
 encrypt_endpoint_secrets = bootstrap.encrypt_endpoint_secrets
@@ -41,8 +42,10 @@ run_startup_migrations = bootstrap.run_startup_migrations
 seed_app_auth_settings = bootstrap.seed_app_auth_settings
 seed_header_blocklist_rules = bootstrap.seed_header_blocklist_rules
 seed_profile_invariants = bootstrap.seed_profile_invariants
-seed_providers = bootstrap.seed_providers
+seed_vendors = bootstrap.seed_vendors
 seed_user_settings = bootstrap.seed_user_settings
+
+APP_VERSION = get_backend_version()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -87,7 +90,7 @@ def _create_app(settings: Settings) -> FastAPI:
             "A lightweight proxy gateway for routing LLM API requests with load "
             "balancing and failover."
         ),
-        version="0.1.0",
+        version=APP_VERSION,
         docs_url="/docs" if settings.docs_enabled else None,
         redoc_url="/redoc" if settings.docs_enabled else None,
         openapi_url="/openapi.json" if settings.docs_enabled else None,
@@ -113,7 +116,7 @@ def _create_app(settings: Settings) -> FastAPI:
     for router in (
         auth.router,
         profiles.router,
-        providers.router,
+        vendors.router,
         models.router,
         endpoints.router,
         connections.router,
@@ -130,7 +133,7 @@ def _create_app(settings: Settings) -> FastAPI:
 
     @app.get("/health", tags=["health"])
     async def health_check():
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": APP_VERSION}
 
     return app
 

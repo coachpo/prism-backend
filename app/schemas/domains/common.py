@@ -5,7 +5,8 @@ from typing import Literal
 _HEADER_TOKEN_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*$")
 _CURRENCY_CODE_RE = re.compile(r"^[A-Z]{3}$")
 
-AuthType = Literal["openai", "anthropic", "gemini"]
+ApiFamily = Literal["openai", "anthropic", "gemini"]
+AuthType = ApiFamily
 
 
 def _validate_decimal_non_negative(value: str | None, field_name: str) -> str | None:
@@ -22,6 +23,7 @@ def _validate_decimal_non_negative(value: str | None, field_name: str) -> str | 
 
 __all__ = [
     "AuthType",
+    "ApiFamily",
     "_CURRENCY_CODE_RE",
     "_HEADER_TOKEN_RE",
     "_validate_decimal_non_negative",

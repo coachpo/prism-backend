@@ -5,10 +5,10 @@ from app.services.proxy_support.compression import (
 )
 from app.services.proxy_support.constants import (
     AUTO_DECOMPRESSED_RESPONSE_HEADERS,
+    API_FAMILY_AUTH,
     CLIENT_AUTH_HEADERS,
     FAILOVER_STATUS_CODES,
     HOP_BY_HOP_HEADERS,
-    PROVIDER_AUTH,
 )
 from app.services.proxy_support.headers import (
     build_upstream_headers,
@@ -28,10 +28,10 @@ from app.services.proxy_support.urls import (
 
 __all__ = [
     "AUTO_DECOMPRESSED_RESPONSE_HEADERS",
+    "API_FAMILY_AUTH",
     "CLIENT_AUTH_HEADERS",
     "FAILOVER_STATUS_CODES",
     "HOP_BY_HOP_HEADERS",
-    "PROVIDER_AUTH",
     "build_upstream_headers",
     "build_upstream_url",
     "extract_model_from_body",

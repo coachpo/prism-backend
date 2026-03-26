@@ -13,10 +13,10 @@ async def get_throughput_stats(
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     model_id: str | None = None,
-    provider_type: str | None = None,
+    api_family: str | None = None,
     endpoint_id: int | None = None,
     connection_id: int | None = None,
-) -> dict:
+) -> dict[str, object]:
     # Build filters
     filters = [RequestLog.profile_id == profile_id]
     if from_time is not None:
@@ -25,8 +25,8 @@ async def get_throughput_stats(
         filters.append(RequestLog.created_at <= to_time)
     if model_id:
         filters.append(RequestLog.model_id == model_id)
-    if provider_type:
-        filters.append(RequestLog.provider_type == provider_type)
+    if api_family:
+        filters.append(RequestLog.api_family == api_family)
     if endpoint_id is not None:
         filters.append(RequestLog.endpoint_id == endpoint_id)
     if connection_id is not None:

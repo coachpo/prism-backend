@@ -21,7 +21,7 @@ class LoadbalanceEventPayload(TypedDict):
     blocked_until_at: datetime | None
     model_id: str | None
     endpoint_id: int | None
-    provider_id: int | None
+    vendor_id: int | None
     failure_threshold: int
     backoff_multiplier: float
     max_cooldown_seconds: int
@@ -50,7 +50,7 @@ def _record_loadbalance_event(event_payload: LoadbalanceEventPayload) -> None:
             ),
             model_id=event_payload_snapshot["model_id"],
             endpoint_id=event_payload_snapshot["endpoint_id"],
-            provider_id=event_payload_snapshot["provider_id"],
+            vendor_id=event_payload_snapshot["vendor_id"],
             failure_threshold=event_payload_snapshot["failure_threshold"],
             backoff_multiplier=event_payload_snapshot["backoff_multiplier"],
             max_cooldown_seconds=event_payload_snapshot["max_cooldown_seconds"],
@@ -91,7 +91,7 @@ def _build_event_payload(
     blocked_until_at: datetime | None,
     model_id: str | None,
     endpoint_id: int | None,
-    provider_id: int | None,
+    vendor_id: int | None,
     max_cooldown_strikes: int | None = None,
     ban_mode: str | None = None,
     banned_until_at: datetime | None = None,
@@ -106,7 +106,7 @@ def _build_event_payload(
         "blocked_until_at": blocked_until_at,
         "model_id": model_id,
         "endpoint_id": endpoint_id,
-        "provider_id": provider_id,
+        "vendor_id": vendor_id,
         "failure_threshold": policy.failover_failure_threshold,
         "backoff_multiplier": policy.failover_backoff_multiplier,
         "max_cooldown_seconds": policy.failover_max_cooldown_seconds,
@@ -124,7 +124,7 @@ def record_probe_eligible_transition(
     state: RecoveryStateEntry,
     model_id: str,
     endpoint_id: int | None,
-    provider_id: int,
+    vendor_id: int,
 ) -> None:
     logger.info(
         "Failover transition event=probe_eligible profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
@@ -146,7 +146,7 @@ def record_probe_eligible_transition(
             blocked_until_at=None,
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
             max_cooldown_strikes=state["max_cooldown_strikes"],
             ban_mode=state["ban_mode"],
             banned_until_at=state["banned_until_at"],
@@ -166,7 +166,7 @@ def record_failed_transition(
     blocked_until_at: datetime | None,
     model_id: str | None,
     endpoint_id: int | None,
-    provider_id: int | None,
+    vendor_id: int | None,
     max_cooldown_strikes: int | None = None,
     ban_mode: str | None = None,
     banned_until_at: datetime | None = None,
@@ -203,7 +203,7 @@ def record_failed_transition(
             blocked_until_at=blocked_until_at,
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
             max_cooldown_strikes=max_cooldown_strikes,
             ban_mode=ban_mode,
             banned_until_at=banned_until_at,
@@ -219,7 +219,7 @@ def record_recovered_transition(
     state: RecoveryStateEntry,
     model_id: str | None,
     endpoint_id: int | None,
-    provider_id: int | None,
+    vendor_id: int | None,
 ) -> None:
     logger.info(
         "Failover transition event=recovered profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
@@ -241,7 +241,7 @@ def record_recovered_transition(
             blocked_until_at=None,
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
             max_cooldown_strikes=state["max_cooldown_strikes"],
             ban_mode=state["ban_mode"],
             banned_until_at=state["banned_until_at"],
@@ -257,7 +257,7 @@ def record_max_cooldown_strike_transition(
     state: RecoveryStateEntry,
     model_id: str | None,
     endpoint_id: int | None,
-    provider_id: int | None,
+    vendor_id: int | None,
 ) -> None:
     _record_loadbalance_event(
         _build_event_payload(
@@ -271,7 +271,7 @@ def record_max_cooldown_strike_transition(
             blocked_until_at=state["blocked_until_at"],
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
             max_cooldown_strikes=state["max_cooldown_strikes"],
             ban_mode=state["ban_mode"],
             banned_until_at=state["banned_until_at"],
@@ -287,7 +287,7 @@ def record_banned_transition(
     state: RecoveryStateEntry,
     model_id: str | None,
     endpoint_id: int | None,
-    provider_id: int | None,
+    vendor_id: int | None,
 ) -> None:
     _record_loadbalance_event(
         _build_event_payload(
@@ -301,7 +301,7 @@ def record_banned_transition(
             blocked_until_at=state["blocked_until_at"],
             model_id=model_id,
             endpoint_id=endpoint_id,
-            provider_id=provider_id,
+            vendor_id=vendor_id,
             max_cooldown_strikes=state["max_cooldown_strikes"],
             ban_mode=state["ban_mode"],
             banned_until_at=state["banned_until_at"],

@@ -9,7 +9,7 @@ from app.models.models import (
     LoadbalanceCurrentState,
     ModelConfig,
     Profile,
-    Provider,
+    Vendor,
 )
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
@@ -39,9 +39,9 @@ class TestLoadbalancerState:
         suffix = uuid4().hex[:8]
 
         async with AsyncSessionLocal() as session:
-            provider = Provider(
+            vendor = Vendor(
+                key=f"openai-state-{suffix}",
                 name=f"OpenAI {suffix}",
-                provider_type="openai",
                 audit_enabled=False,
                 audit_capture_bodies=False,
             )
@@ -52,8 +52,9 @@ class TestLoadbalancerState:
                 name=f"Profile Two {suffix}", is_active=False, version=0
             )
             model_one = ModelConfig(
-                provider=provider,
+                vendor=vendor,
                 profile=profile_one,
+                api_family="openai",
                 model_id=f"model-one-{suffix}",
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -63,8 +64,9 @@ class TestLoadbalancerState:
                 is_enabled=True,
             )
             model_two = ModelConfig(
-                provider=provider,
+                vendor=vendor,
                 profile=profile_two,
+                api_family="openai",
                 model_id=f"model-two-{suffix}",
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -121,7 +123,7 @@ class TestLoadbalancerState:
 
             session.add_all(
                 [
-                    provider,
+                    vendor,
                     profile_one,
                     profile_two,
                     model_one,

@@ -20,7 +20,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import Endpoint, ModelConfig, Profile, Provider
+        from app.models.models import Endpoint, ModelConfig, Profile, Vendor
         from app.routers.connections import create_connection, update_connection
         from app.schemas.schemas import ConnectionCreate, ConnectionUpdate
         from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
@@ -40,20 +40,20 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             db.add(profile)
             await db.flush()
 
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
-                provider = Provider(
+            if vendor is None:
+                vendor = Vendor(
+                    key="openai",
                     name=f"DEF024 limiter OpenAI {suffix}",
-                    provider_type="openai",
                 )
-                db.add(provider)
+                db.add(vendor)
                 await db.flush()
 
             endpoint = Endpoint(
@@ -65,7 +65,8 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             )
             model = ModelConfig(
                 profile_id=profile.id,
-                provider_id=provider.id,
+                vendor_id=vendor.id,
+                api_family="openai",
                 model_id=f"def024-limiter-model-{suffix}",
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
@@ -118,7 +119,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             Endpoint,
             EndpointFxRateSetting,
             Profile,
-            Provider,
+            Vendor,
         )
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
@@ -132,7 +133,16 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": endpoint_name,
@@ -150,7 +160,8 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": model_id,
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
@@ -190,19 +201,19 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             db.add(profile)
             await db.flush()
             profile_id = profile.id
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
+            if vendor is None:
                 db.add(
-                    Provider(
+                    Vendor(
+                        key="openai",
                         name=f"DEF024 OpenAI {suffix}",
-                        provider_type="openai",
                     )
                 )
                 await db.flush()
@@ -298,7 +309,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import Connection, Profile, Provider
+        from app.models.models import Connection, Profile, Vendor
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
 
@@ -312,7 +323,16 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [
                     {
                         "name": endpoint_a_name,
@@ -335,7 +355,8 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": model_id,
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
@@ -371,19 +392,19 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             db.add(profile)
             await db.flush()
             profile_id = profile.id
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
+            if vendor is None:
                 db.add(
-                    Provider(
+                    Vendor(
+                        key="openai",
                         name=f"DEF024 Duplicate ID OpenAI {suffix}",
-                        provider_type="openai",
                     )
                 )
                 await db.flush()
@@ -482,8 +503,9 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 5,
+                    "version": 6,
                     "endpoints": [],
+                    "vendors": [],
                     "models": [],
                     "pricing_templates": [],
                     "loadbalance_strategies": [],
@@ -519,7 +541,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
-        from app.models.models import ModelConfig, Profile, Provider
+        from app.models.models import ModelConfig, Profile, Vendor
         from app.routers.config import export_config, import_config
         from app.schemas.schemas import ConfigImportRequest
 
@@ -532,7 +554,16 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
                 "endpoints": [],
                 "pricing_templates": [],
                 "loadbalance_strategies": [
@@ -544,21 +575,24 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                 ],
                 "models": [
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": target_a_model_id,
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
                         "connections": [],
                     },
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": target_b_model_id,
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
                         "connections": [],
                     },
                     {
-                        "provider_type": "openai",
+                        "vendor_key": "openai",
+                        "api_family": "openai",
                         "model_id": proxy_model_id,
                         "model_type": "proxy",
                         "proxy_targets": [
@@ -583,19 +617,19 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
             await db.flush()
             profile_id = profile.id
 
-            provider = (
+            vendor = (
                 await db.execute(
-                    select(Provider)
-                    .where(Provider.provider_type == "openai")
-                    .order_by(Provider.id.asc())
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
                     .limit(1)
                 )
             ).scalar_one_or_none()
-            if provider is None:
+            if vendor is None:
                 db.add(
-                    Provider(
+                    Vendor(
+                        key="openai",
                         name=f"DEF082 Proxy Target OpenAI {suffix}",
-                        provider_type="openai",
                     )
                 )
                 await db.flush()

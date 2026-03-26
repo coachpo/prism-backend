@@ -34,22 +34,25 @@ class ProfileActivateRequest(BaseModel):
     expected_active_profile_id: int
 
 
-class ProviderBase(BaseModel):
+class VendorBase(BaseModel):
+    key: str
     name: str
-    provider_type: str
     description: str | None = None
 
 
-class ProviderCreate(ProviderBase):
+class VendorCreate(VendorBase):
     pass
 
 
-class ProviderUpdate(BaseModel):
+class VendorUpdate(BaseModel):
+    key: str | None = None
+    name: str | None = None
+    description: str | None = None
     audit_enabled: bool | None = None
     audit_capture_bodies: bool | None = None
 
 
-class ProviderResponse(ProviderBase):
+class VendorResponse(VendorBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -65,8 +68,8 @@ __all__ = [
     "ProfileCreate",
     "ProfileResponse",
     "ProfileUpdate",
-    "ProviderBase",
-    "ProviderCreate",
-    "ProviderResponse",
-    "ProviderUpdate",
+    "VendorBase",
+    "VendorCreate",
+    "VendorResponse",
+    "VendorUpdate",
 ]

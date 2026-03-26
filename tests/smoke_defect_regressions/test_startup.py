@@ -7,3 +7,4 @@ from tests.smoke_defect_regressions.test_startup_cases.logging_endpoint_owner_an
 from tests.smoke_defect_regressions.test_startup_cases.loadbalance_migration_profile_pk_repair_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.observability_unlogged_migration_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.profile_scope_and_model_health_eagerload_tests import *
+from tests.smoke_defect_regressions.test_startup_cases.vendor_api_family_schema_split_tests import *
