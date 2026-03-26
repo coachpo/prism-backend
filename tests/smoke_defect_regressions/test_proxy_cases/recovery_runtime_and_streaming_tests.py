@@ -569,8 +569,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
 
 class TestDEF021_StreamingCancellationResilience:
     @staticmethod
-    def _build_request(app, raw_body: bytes):
+    def _build_request(app, raw_body: bytes, path: str = "/v1/responses"):
         from starlette.requests import Request
+
+        raw_path = path.encode("utf-8")
 
         async def receive_message():
             return {
@@ -584,8 +586,8 @@ class TestDEF021_StreamingCancellationResilience:
                 "type": "http",
                 "http_version": "1.1",
                 "method": "POST",
-                "path": "/v1/responses",
-                "raw_path": b"/v1/responses",
+                "path": path,
+                "raw_path": raw_path,
                 "query_string": b"",
                 "headers": [
                     (b"host", b"testserver"),
@@ -789,6 +791,335 @@ class TestDEF021_StreamingCancellationResilience:
                 assert audit_call.kwargs["request_log_id"] == 501
                 assert audit_call.kwargs["response_body"] == first
                 assert audit_call.kwargs["capture_bodies"] is True
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+
+class TestDEF080_OpenAIChatStreamingUsageOptIn:
+    @staticmethod
+    def _build_request(app, raw_body: bytes, path: str = "/v1/responses"):
+        return TestDEF021_StreamingCancellationResilience._build_request(
+            app,
+            raw_body,
+            path=path,
+        )
+
+    @staticmethod
+    def _build_db_mock():
+        return TestDEF021_StreamingCancellationResilience._build_db_mock()
+
+    @staticmethod
+    def _build_model_config_and_endpoint():
+        return TestDEF021_StreamingCancellationResilience._build_model_config_and_endpoint()
+
+    @staticmethod
+    async def _wait_for_asyncmock_calls(
+        mock_obj: AsyncMock, expected_min_calls: int = 1
+    ):
+        await TestDEF021_StreamingCancellationResilience._wait_for_asyncmock_calls(
+            mock_obj,
+            expected_min_calls=expected_min_calls,
+        )
+
+    @pytest.mark.asyncio
+    async def test_prepare_proxy_request_injects_include_usage_for_openai_chat_streams(
+        self,
+    ):
+        from fastapi import FastAPI
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        app = FastAPI()
+        app.state.http_client = object()
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+        request = TestDEF021_StreamingCancellationResilience._build_request(
+            app,
+            raw_body,
+            path="/v1/chat/completions",
+        )
+
+        provider = SimpleNamespace(
+            provider_type="openai",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        strategy = SimpleNamespace(
+            strategy_type="single",
+            failover_recovery_enabled=False,
+        )
+        connection = SimpleNamespace(endpoint_id=501)
+        model_config = SimpleNamespace(
+            provider=provider,
+            model_id="gpt-4o-mini",
+            loadbalance_strategy=strategy,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/chat/completions",
+                profile_id=1,
+            )
+
+        assert setup.rewritten_body is not None
+        parsed = json.loads(setup.rewritten_body)
+        assert parsed["stream_options"]["include_usage"] is True
+
+    @pytest.mark.asyncio
+    async def test_prepare_proxy_request_does_not_inject_include_usage_for_responses_streams(
+        self,
+    ):
+        from fastapi import FastAPI
+        from app.routers.proxy_domains.request_setup import prepare_proxy_request
+
+        app = FastAPI()
+        app.state.http_client = object()
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "input": "hi",
+            }
+        ).encode("utf-8")
+        request = TestDEF021_StreamingCancellationResilience._build_request(
+            app,
+            raw_body,
+            path="/v1/responses",
+        )
+
+        provider = SimpleNamespace(
+            provider_type="openai",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=1,
+        )
+        strategy = SimpleNamespace(
+            strategy_type="single",
+            failover_recovery_enabled=False,
+        )
+        connection = SimpleNamespace(endpoint_id=501)
+        model_config = SimpleNamespace(
+            provider=provider,
+            model_id="gpt-4o-mini",
+            loadbalance_strategy=strategy,
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+
+        with (
+            patch(
+                "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                AsyncMock(return_value=model_config),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                AsyncMock(return_value=_attempt_plan(connection)),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.load_costing_settings",
+                AsyncMock(return_value=MagicMock()),
+            ),
+            patch(
+                "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                return_value={},
+            ),
+        ):
+            setup = await prepare_proxy_request(
+                request=request,
+                db=mock_db,
+                raw_body=raw_body,
+                request_path="/v1/responses",
+                profile_id=1,
+            )
+
+        assert setup.rewritten_body == raw_body
+
+    @pytest.mark.asyncio
+    async def test_chat_completions_stream_logs_usage_without_body_capture_when_proxy_requests_it(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        delta_chunk = b'data: {"id":"chatcmpl-123","choices":[{"index":0,"delta":{"content":"Hello"}}],"usage":null}\n\n'
+        usage_chunk = b'data: {"id":"chatcmpl-123","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n\n'
+        done_chunk = b"data: [DONE]\n\n"
+
+        class ChatCompletionsStreamResponse:
+            def __init__(self, chunks: list[bytes]):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+                self._chunks = chunks
+
+            async def aiter_bytes(self):
+                for chunk in self._chunks:
+                    yield chunk
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.last_request_content = None
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                request = httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+                self.last_request_content = request.content
+                return request
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                request_payload = json.loads(request.content.decode("utf-8"))
+                include_usage = (
+                    request_payload.get("stream_options", {}).get("include_usage")
+                    is True
+                )
+                chunks = [delta_chunk]
+                if include_usage:
+                    chunks.append(usage_chunk)
+                chunks.append(done_chunk)
+                return ChatCompletionsStreamResponse(chunks)
+
+        app = FastAPI()
+        client = DummyHttpClient()
+        app.state.http_client = client
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = TestDEF021_StreamingCancellationResilience._build_request(
+            app,
+            raw_body,
+            path="/v1/chat/completions",
+        )
+        mock_db = TestDEF021_StreamingCancellationResilience._build_db_mock()
+        model_config, endpoint = (
+            TestDEF021_StreamingCancellationResilience._build_model_config_and_endpoint()
+        )
+        model_config.provider.audit_capture_bodies = False
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=812)
+                ) as log_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/chat/completions",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await TestDEF021_StreamingCancellationResilience._wait_for_asyncmock_calls(
+                    log_mock
+                )
+                await TestDEF021_StreamingCancellationResilience._wait_for_asyncmock_calls(
+                    audit_mock
+                )
+
+                assert b"".join(received) == delta_chunk + usage_chunk + done_chunk
+                assert client.last_request_content is not None
+                sent_payload = json.loads(client.last_request_content.decode("utf-8"))
+                assert sent_payload["stream_options"]["include_usage"] is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["input_tokens"] == 12
+                assert log_call.kwargs["output_tokens"] == 7
+                assert log_call.kwargs["total_tokens"] == 19
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["capture_bodies"] is False
+                assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
                 assert "Failed to queue streaming audit follow-up" not in caplog.text
         finally:
