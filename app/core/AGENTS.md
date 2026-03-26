@@ -11,7 +11,8 @@ core/
 ├── auth.py        # Access-token creation/decoding, proxy-key parsing, refresh helpers
 ├── crypto.py      # Secret encryption and opaque-token hashing
 ├── migrations.py  # Programmatic Alembic upgrade runner
-└── time.py        # UTC helpers and datetime normalization
+├── time.py        # UTC helpers and datetime normalization
+└── version.py     # Backend runtime version resolution from backend-local sources
 ```
 
 ## WHERE TO LOOK
@@ -22,6 +23,7 @@ core/
 - Endpoint secret encryption and token hashing: `crypto.py`
 - Startup migration execution: `migrations.py`
 - Shared UTC helpers reused by routers and services: `time.py`
+- Backend runtime version metadata used by `app/main.py`: `version.py`
 
 ## CONVENTIONS
 
@@ -30,6 +32,7 @@ core/
 - Reuse `create_access_token()`, `decode_access_token()`, and `extract_proxy_api_key()` instead of duplicating auth parsing.
 - Keep migration execution behind `run_migrations()`; `bootstrap/startup.py` owns when it runs.
 - Keep time handling UTC-first via `time.py` or `auth.py` helpers.
+- Keep backend runtime version reads behind `version.py`; runtime code should not read root-level version files.
 
 ## ANTI-PATTERNS
 
@@ -37,3 +40,4 @@ core/
 - Do not build new engine instances inside request or service code.
 - Do not parse proxy API key headers or access-token payloads ad hoc outside `auth.py`.
 - Do not duplicate crypto or timestamp helpers when `core/` already owns them.
+- Do not reintroduce runtime reads from repo-root version files when `version.py` already owns backend-local resolution.

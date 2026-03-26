@@ -7,8 +7,8 @@ ORM models for Prism, split into identity, routing, and observability domains. `
 ```
 models/
 ├── domains/
-│   ├── identity.py       # Profiles, providers, operator auth, password reset, refresh tokens, proxy keys, WebAuthn
-│   ├── routing.py        # Model configs, endpoints, pricing templates, connections
+│   ├── identity.py       # Profiles, vendors, operator auth, password reset, refresh tokens, proxy keys, WebAuthn
+│   ├── routing.py        # Model configs, endpoints, pricing templates, connections, api_family compatibility
 │   └── observability.py  # Request logs, user settings, FX rates, blocklist rules, audit logs, loadbalance current state, loadbalance events
 └── models.py             # Re-export boundary for all domain models
 ```
@@ -17,7 +17,7 @@ models/
 
 ### IDENTITY
 - `Profile`: Multi-profile scope container; owns `is_active` and `is_default` flags.
-- `Provider`: Global seed rows for `openai`, `anthropic`, `gemini`.
+- `Vendor`: Global CRUD-managed publisher metadata, shared across profiles, with vendor keys and display data.
 - `AppAuthSettings`: Singleton operator auth state, username/email, and token version.
 - `PasswordResetChallenge`: One-time password reset challenge rows, expiry, consumption, and attempt tracking.
 - `RefreshToken`: Session persistence with rotation and revocation.
@@ -25,7 +25,7 @@ models/
 - `WebAuthnChallenge` & `WebAuthnCredential`: Passkey lifecycle and device metadata.
 
 ### ROUTING
-- `ModelConfig`: Per-profile model settings, attached loadbalance strategy selection for native models, and ordered proxy-target routing for proxy models.
+- `ModelConfig`: Per-profile model settings that require both `vendor_id` and fixed `api_family`, plus attached loadbalance strategy selection for native models and ordered proxy-target routing for proxy models.
 - `ModelProxyTarget`: Ordered proxy-model target rows that connect one proxy model to one native target model.
 - `LoadbalanceStrategy`: Profile-scoped reusable routing strategy metadata for native model attachment.
 - `Endpoint`: Encrypted upstream base URLs and API keys.
@@ -33,17 +33,17 @@ models/
 - `Connection`: Linkage between model configs, endpoints, and pricing; owns health status.
 
 ### OBSERVABILITY
-- `RequestLog`: High-volume telemetry for all proxy traffic; owns requested model identity plus resolved target identity when proxy routing is involved, along with billable and priced flags.
+- `RequestLog`: High-volume telemetry for all proxy traffic; owns requested model identity, resolved target identity, and `api_family` filters, along with billable and priced flags.
 - `UserSetting`: Per-profile currency and timezone preferences.
 - `EndpointFxRateSetting`: Custom FX rates for specific model/endpoint pairs.
 - `HeaderBlocklistRule`: System and profile-scoped rules for stripping sensitive headers.
-- `AuditLog`: Detailed request/response capture for audited providers.
+- `AuditLog`: Detailed request/response capture for audited vendors.
 - `LoadbalanceCurrentState`: Persisted per-connection failover cooldown and probe state scoped by profile.
 - `LoadbalanceEvent`: Persistent record of failover, recovery, and health transitions.
 
 ## CONVENTIONS
 - Use `identity.py` for anything related to auth subjects, credentials, or profile containers.
-- Use `routing.py` for the structural graph of models, endpoints, and their connections.
+- Use `routing.py` for the structural graph of models, endpoints, api-family compatibility, and their connections.
 - Use `observability.py` for telemetry, logs, settings, and persisted loadbalance current-state or event persistence.
 - Keep business logic out of models; use properties for simple derivations like secret masking.
 - Ensure all new models are re-exported in `models/models.py` to maintain the public ORM boundary.

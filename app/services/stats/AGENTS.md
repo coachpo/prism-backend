@@ -14,7 +14,7 @@ stats/
 ├── summary.py          # Summary cards, model health, success-rate queries
 ├── throughput.py       # Time-bucket throughput reports
 ├── time_presets.py     # Preset -> datetime window normalization
-└── usage_extractors.py # Provider-specific token extraction helpers
+└── usage_extractors.py # API-family-specific token extraction helpers
 ```
 
 ## WHERE TO LOOK
@@ -27,7 +27,7 @@ stats/
 - Summary cards and connection/model success rates: `summary.py`
 - Throughput bucket aggregation: `throughput.py`
 - Time-window presets shared by summary and spending: `time_presets.py`
-- Provider token parsing fallbacks: `usage_extractors.py`
+- API-family token parsing fallbacks: `usage_extractors.py`
 
 ## CONVENTIONS
 
@@ -35,15 +35,15 @@ stats/
 - All queries stay profile-scoped; never aggregate request logs across profiles.
 - Reuse `resolve_time_preset()` instead of duplicating preset/date-window math in other modules.
 - Treat null-vs-zero token and cost fields deliberately; missing usage should not silently become priced usage.
-- Keep provider token parsing isolated to `usage_extractors.py`.
+- Keep api-family token parsing isolated to `usage_extractors.py`.
 - Keep throughput aggregation in `throughput.py` rather than layering it into `summary.py` or route handlers.
 - Keep model-detail batch metric queries in `model_metrics.py` rather than overloading `summary.py`.
-- `logging.py` owns request-log side effects, including `dashboard.update` broadcasts with request-log, summary, provider, spending, throughput, and routing snapshot payloads; callers should not duplicate those websocket emissions.
+- `logging.py` owns request-log side effects, including `dashboard.update` broadcasts with request-log, summary, api-family, spending, throughput, and routing snapshot payloads; callers should not duplicate those websocket emissions.
 
 ## ANTI-PATTERNS
 
 - Do not bypass this package by re-implementing summary or spending SQL inside routers.
 - Do not bolt model-detail metric queries onto unrelated summary helpers when `model_metrics.py` already owns that contract.
 - Do not mix successful and failed-request semantics; spending and report queries intentionally key off success and billable flags.
-- Do not add provider-specific token parsing outside `usage_extractors.py`.
+- Do not add api-family-specific token parsing outside `usage_extractors.py`.
 - Do not use request-scoped DB sessions during streaming finalization; `logging.py` opens its own `AsyncSessionLocal()` for that path.

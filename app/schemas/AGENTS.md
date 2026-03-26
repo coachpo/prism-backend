@@ -12,7 +12,7 @@ schemas/
     ├── auth.py            # Sessions, login, password reset, proxy keys, WebAuthn payloads
     ├── common.py          # Shared schema helpers and enums
     ├── connection_model.py
-    ├── core.py            # Profiles, providers, endpoints, connections, models, pricing templates
+    ├── core.py            # Profiles, vendors, endpoints, connections, models, pricing templates
     ├── endpoint_pricing.py
     ├── profile_provider.py
     └── stats.py           # Request logs, spending, throughput, metrics batch, loadbalance current-state and event payloads
@@ -23,7 +23,7 @@ schemas/
 - Supported import surface: `schemas.py`
 - Admin contracts for audit logs, config export or import, and blocklist rules: `domains/admin.py`
 - Auth and passkey contracts: `domains/auth.py`
-- Core management contracts for profiles, providers, endpoints, connections, models, and pricing templates: `domains/core.py`
+- Core management contracts for profiles, vendors, endpoints, connections, models, and pricing templates: `domains/core.py`
 - Shared helpers and split support modules behind the public surface: `domains/common.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_provider.py`
 - Stats and observability contracts for request logs, spending, throughput, metrics batches, and loadbalance current-state or event payloads: `domains/stats.py`
 

@@ -1,7 +1,7 @@
 # BACKEND ROUTERS KNOWLEDGE BASE
 
 ## OVERVIEW
-`routers/` is the backend API surface. `main.py` mounts the top-level routers here, and the management surface stays thin by handing dense request logic to documented `*_domains/` packages. The main parent-covered exceptions are the standalone routers `audit.py`, `loadbalance.py`, `providers.py`, `realtime.py`, and the shared helper package `shared/`.
+`routers/` is the backend API surface. `main.py` mounts the top-level routers here, and the management surface stays thin by handing dense request logic to documented `*_domains/` packages. The main parent-covered exceptions are the standalone routers `audit.py`, `loadbalance.py`, `vendors.py`, `realtime.py`, and the shared helper package `shared/`.
 
 ## STRUCTURE
 ```
@@ -19,7 +19,7 @@ routers/
 ├── shared/                                              # Router-layer helpers reused across management routes
 ├── audit.py                                             # Audit log queries and retention delete responses
 ├── loadbalance.py                                       # Strategy CRUD plus current-state and event management APIs
-├── providers.py                                         # Provider audit-setting management
+├── vendors.py                                           # Global vendor CRUD and audit-setting management
 └── realtime.py                                          # Websocket auth and profile-channel subscription flow
 ```
 

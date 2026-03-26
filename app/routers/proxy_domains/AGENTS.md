@@ -18,7 +18,7 @@ proxy_domains/
 
 ## WHERE TO LOOK
 
-- Request setup, model rewrite, provider-path validation, and load-balance attempt planning: `request_setup.py`, `proxy_request_helpers.py`
+- Request setup, model rewrite, api-family path validation, requested-model vendor attribution, and load-balance attempt planning: `request_setup.py`, `proxy_request_helpers.py`
 - Shared runtime dependency contracts and attempt target state: `attempt_types.py`
 - Main per-connection execution loop, endpoint activity checks, and probe-eligible claims: `attempt_execution.py`
 - Buffered or streaming upstream handling, failover classification, and recovery recording: `attempt_handlers.py`
@@ -28,7 +28,7 @@ proxy_domains/
 
 ## PACKAGE FACTS
 
-- `request_setup.py` resolves the routed model from body or Gemini-style path data, validates provider-native path families, rewrites model identifiers when a proxy model targets a different upstream model, and builds the costing context used later by request logging.
+- `request_setup.py` resolves the routed model from body or Gemini-style path data, validates api-family-native path families, keeps requested-model vendor attribution separate from resolved-target runtime routing, rewrites model identifiers when a proxy model targets a different upstream model, and builds the costing context used later by request logging.
 - `attempt_execution.py` owns the ordered connection loop. It skips disabled connections, claims probe-eligible recovery slots when needed, and returns the first successful buffered or streaming response.
 - `attempt_handlers.py` decides when an upstream status should fail over versus return directly, and records connection failure or recovery state only when failover recovery is active for the model.
 - `attempt_streaming.py` keeps streaming finalization separate from the request-scoped DB lifetime. It extracts token usage from SSE payloads when possible, then hands request-log and audit follow-up work to `background_task_manager` with an inline fallback path.

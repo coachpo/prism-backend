@@ -8,7 +8,7 @@
 proxy_support/
 ├── body.py         # Model extraction and stream-flag helpers
 ├── compression.py  # Compression request/response helpers
-├── constants.py    # Provider auth, failover codes, hop-by-hop header constants
+├── constants.py    # API-family auth, failover codes, hop-by-hop header constants
 ├── headers.py      # Upstream header assembly, sanitization, blocklist checks
 ├── transport.py    # Buffered proxy, streaming proxy, failover decisions
 └── urls.py         # Base URL normalization, validation, upstream path building
@@ -19,7 +19,7 @@ proxy_support/
 - Public re-export boundary: `../proxy_service.py`, `__init__.py`
 - Request-body model and stream parsing: `body.py`
 - Compression request/response rules: `compression.py`
-- Provider/header constants: `constants.py`
+- API-family/header constants: `constants.py`
 - Custom-header merge, auth-header injection, blocklist enforcement: `headers.py`
 - Buffered + streaming transport and failover classification: `transport.py`
 - Base URL validation and upstream URL building: `urls.py`
@@ -34,7 +34,7 @@ proxy_support/
 
 ## ANTI-PATTERNS
 
-- Do not bypass header sanitization or rebuild provider auth headers in unrelated modules.
+- Do not bypass header sanitization or rebuild api-family auth headers in unrelated modules.
 - Do not duplicate base-URL normalization or upstream-path assembly outside `urls.py`.
 - Do not classify failover-worthy responses in routers when `transport.py` already owns that decision.
 - Do not spread request-body model extraction across proxy handlers; use `body.py` helpers.

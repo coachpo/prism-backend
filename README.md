@@ -2,7 +2,7 @@
 
 **FastAPI-based proxy engine with async request routing, load balancing, and telemetry.**
 
-This is the backend component of Prism, handling all LLM API routing, load balancing, health tracking, and data persistence.
+This is the backend component of Prism, handling LLM API-family routing, load balancing, health tracking, and data persistence.
 
 ---
 
@@ -39,7 +39,7 @@ backend/
 │   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and outcome-reporting helpers
 │   │   ├── shared/                  # Router-layer shared helpers for profile rows and ordering
 │   │   ├── stats_domains/           # Request log, metrics, spending, and throughput handlers
-│   │   ├── providers.py             # Provider CRUD
+│   │   ├── vendors.py               # Vendor CRUD
 │   │   ├── models.py                # Thin model route shell
 │   │   ├── endpoints.py             # Thin endpoint route shell
 │   │   ├── connections.py           # Thin connection route shell
@@ -152,9 +152,9 @@ docker compose up -d postgres
 
 ### Management API
 
-- `GET /api/providers` - List all providers
-- `GET /api/providers/{id}` - Get a single provider
-- `PATCH /api/providers/{id}` - Update provider audit settings
+- `GET /api/vendors` - List vendor metadata
+- `GET /api/vendors/{id}` - Get one vendor record
+- `PATCH /api/vendors/{id}` - Update vendor metadata
 
 - `GET /api/models` - List all models
 - `POST /api/models` - Create model
@@ -194,7 +194,7 @@ docker compose up -d postgres
 - `POST /v1/messages*` - Anthropic runtime proxy routes
 - `POST /v1beta/models/*` - Gemini native runtime proxy routes
 
-Prism accepts provider-native path families only: OpenAI models on `/v1/*`, Anthropic models on `/v1/messages`, and Gemini models on `/v1beta/models/*`.
+Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, Anthropic models on `/v1/messages`, and Gemini models on `/v1beta/models/*`.
 
 ---
 
@@ -209,6 +209,7 @@ Prism accepts provider-native path families only: OpenAI models on `/v1/*`, Anth
 
 - **single**: Always use the first active connection (priority 0)
 - **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and auth-like cooldown handling)
+- **fill-first**: Strict priority spillover after the active target is exhausted
 
 ### Success Rate Tracking
 
@@ -220,9 +221,9 @@ Connections display a success rate badge computed from `request_logs` data (last
 
 ### Audit Logging
 
-Optional per-provider request/response body capture with automatic header redaction:
+Optional per-vendor request/response body capture with automatic header redaction:
 - Redacted headers: `authorization`, `x-api-key`, `x-goog-api-key`, and any header matching `key|secret|token|auth` pattern
-- Body capture can be disabled per-provider
+- Body capture can be disabled per vendor
 
 ---
 
@@ -236,9 +237,9 @@ All database operations and HTTP requests use async/await. Never use blocking I/
 
 Streaming responses use a separate `AsyncSessionLocal()` in the generator's `finally` block because the request-scoped session is closed before streaming completes.
 
-### Provider Auth Headers
+### API-Family Auth Headers
 
-Provider-specific auth headers are built in `proxy_service.py`:
+API-family-specific auth headers are built in `proxy_service.py`:
 - OpenAI: `Authorization: Bearer {api_key}`
 - Anthropic: `x-api-key: {api_key}`
 - Gemini: `Authorization: Bearer {api_key}`

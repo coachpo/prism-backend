@@ -51,7 +51,7 @@ backend/
 ## WHERE TO LOOK
 
 - App assembly, router registration, lifespan startup, and shared infra wiring: `app/main.py`
-- Startup sequencing, provider and profile seeding, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
+- Startup sequencing, vendor and profile seeding, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
 - Management versus runtime scope rules: `app/dependencies.py`
 - Router map and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
@@ -66,11 +66,11 @@ backend/
 - Keep app-owned shared infrastructure in `app/main.py`; feature code should consume `app.state.http_client` and `app.state.background_task_manager`.
 - Keep routers thin. Dense logic belongs in `*_domains/`, `connections_domains/`, `proxy_domains/`, or service modules.
 - Use `app.schemas.schemas`, `app.models.models`, and the service-root `*_service.py` modules as the supported re-export boundaries.
-- Keep management auth and profile rules separate from runtime proxy auth and routing semantics.
+- Keep management auth and profile rules separate from runtime proxy auth and API-family-native routing semantics.
 
 ## ANTI-PATTERNS
 
-- Do not invent unsupported providers, provider path families, routes, or CI jobs.
+- Do not invent unsupported vendors, API families, routes, or CI jobs.
 - Do not describe schema state as coming from ORM models or startup side effects; Alembic revisions under `app/alembic/` are the source of truth.
 - Do not reintroduce manual venv or `pip install` setup language.
 - Do not describe `docker-compose.yml` as a full stack definition. It provisions PostgreSQL only.

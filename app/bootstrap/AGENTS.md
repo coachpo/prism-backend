@@ -12,7 +12,7 @@ bootstrap/
 
 ## WHERE TO LOOK
 
-- Startup order, provider seeds, profile invariants, default user settings, auth settings, and blocklist defaults: `startup.py`
+- Startup order, vendor seeds, profile invariants, default user settings, auth settings, and blocklist defaults: `startup.py`
 - Public management exceptions and auth-path split: `auth_middleware.py`
 - CORS-aware auth error responses: `auth_middleware.py`
 - Main lifecycle wiring, shared `httpx.AsyncClient`, and `background_task_manager`: `../main.py`
@@ -28,4 +28,4 @@ bootstrap/
 
 - Do not reintroduce deprecated startup-event handlers when lifespan already owns bootstrap timing.
 - Do not push session-cookie or proxy-key enforcement into routers; middleware already owns that contract.
-- Do not bypass startup seeds for providers, profile invariants, auth settings, or system header blocklist rules.
+- Do not bypass startup seeds for vendors, profile invariants, auth settings, or system header blocklist rules.
