@@ -7,7 +7,7 @@ Prism's backend owns the management API on `/api/*` and the runtime proxy API on
 ```
 backend/
 ├── app/AGENTS.md                                                # Live runtime map
-├── app/alembic/                                                 # Packaged Alembic env + revisions; schema source of truth
+├── app/alembic/AGENTS.md                                        # Packaged Alembic env + revisions; schema source of truth
 ├── app/bootstrap/AGENTS.md                                      # Startup sequence and auth split
 ├── app/core/AGENTS.md                                           # Settings, database, auth helpers, crypto, migrations
 ├── app/models/AGENTS.md                                         # ORM domain ownership and `models.py` boundary
@@ -22,6 +22,7 @@ backend/
 ├── tests/services/AGENTS.md                                     # Focused service-test handoff
 ├── tests/multi_profile_isolation/AGENTS.md                      # Cross-profile containment hierarchy
 ├── tests/smoke_defect_regressions/AGENTS.md                     # DEF hierarchy map and leaf ownership
+├── tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md    # Focused proxy smoke regression cluster
 ├── alembic.ini                                                  # Root Alembic CLI config pointing at `app/alembic`
 ├── docker-compose.yml                                           # PostgreSQL-only helper on 15432
 ├── pyproject.toml                                               # Runtime deps and `prism-backend` console script
@@ -31,12 +32,12 @@ backend/
 ## CHILD DOCS
 
 - `app/AGENTS.md`: live runtime map.
-- `app/bootstrap/AGENTS.md`, `app/core/AGENTS.md`, `app/models/AGENTS.md`, `app/schemas/AGENTS.md`: startup, shared infra, ORM, and contract boundaries.
+- `app/alembic/AGENTS.md`, `app/bootstrap/AGENTS.md`, `app/core/AGENTS.md`, `app/models/AGENTS.md`, `app/schemas/AGENTS.md`: startup, migrations, shared infra, ORM, and contract boundaries.
 - `app/routers/AGENTS.md`: router parent map.
 - `app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
 - `app/routers/connections_domains/AGENTS.md`, `app/routers/proxy_domains/AGENTS.md`: the two densest router packages.
 - `app/services/AGENTS.md` plus `app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service-root and service-package boundaries.
-- `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, and `tests/multi_profile_isolation/AGENTS.md`: test hierarchy and suite leaves.
+- `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md`, and `tests/multi_profile_isolation/AGENTS.md`: test hierarchy and suite leaves.
 
 ## RUNTIME FACTS
 
@@ -56,8 +57,8 @@ backend/
 - Router map and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
 - Shared worker lifecycle, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
-- Migration source of truth: `alembic.ini`, `app/alembic/`, `app/core/migrations.py`
-- Backend test hierarchy and suite leaves: `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/multi_profile_isolation/AGENTS.md`
+- Migration source of truth: `alembic.ini`, `app/alembic/`, `app/alembic/AGENTS.md`, `app/core/migrations.py`
+- Backend test hierarchy and suite leaves: `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md`, `tests/multi_profile_isolation/AGENTS.md`
 
 ## CONVENTIONS
 

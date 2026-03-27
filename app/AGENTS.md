@@ -7,6 +7,7 @@
 ```
 app/
 ├── main.py                                                   # App assembly, router mounts, lifespan wiring
+├── alembic/AGENTS.md                                         # Packaged Alembic runtime and revision history
 ├── bootstrap/AGENTS.md                                       # Startup sequence, seeds, middleware auth split
 ├── dependencies.py                                           # Effective-profile and active-profile boundary
 ├── core/AGENTS.md                                            # Settings, database, auth helpers, crypto, migrations
@@ -22,6 +23,7 @@ app/
 
 ## CHILD DOCS
 
+- `alembic/AGENTS.md`: packaged migration runtime, script template, and revision source of truth.
 - `bootstrap/AGENTS.md`: startup sequence, seeds, middleware auth split, and shared client creation.
 - `core/AGENTS.md`: settings, engine and session factories, crypto, auth helpers, and migrations.
 - `models/AGENTS.md`: ORM model ownership and domain splits.
@@ -44,6 +46,7 @@ app/
 
 - App assembly, router mounts, lifespan startup, and shared infra ownership: `main.py`
 - Startup sequence and seed ordering: `bootstrap/startup.py`
+- Migration packaging, env wiring, and revision layout: `alembic/AGENTS.md`, `alembic/env.py`, `alembic/script.py.mako`, `alembic/versions/`
 - Management profile overrides versus runtime active-profile routing: `dependencies.py`
 - Router surface and router-domain leaf docs: `routers/AGENTS.md`, `routers/`
 - Contract exports and schema ownership: `schemas/AGENTS.md`, `schemas/schemas.py`
@@ -57,6 +60,7 @@ app/
 - Keep profile-scope rules in `dependencies.py` instead of parsing headers inside handlers.
 - Keep parent AGENTS files focused on package maps and ownership boundaries, not leaf implementation details.
 - Keep auth, runtime proxy routing, realtime fanout, and stats assembly inside their existing service or domain boundaries.
+- Keep Alembic revisions as the schema source of truth and use `core/migrations.py` for the programmatic migration seam.
 
 ## ANTI-PATTERNS
 

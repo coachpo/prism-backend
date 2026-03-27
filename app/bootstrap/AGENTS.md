@@ -1,7 +1,7 @@
 # BACKEND BOOTSTRAP KNOWLEDGE BASE
 
 ## OVERVIEW
-`bootstrap/` owns startup sequencing and the shared auth middleware mounted by `app/main.py`; `main.py` wraps that startup sequence with lifespan-managed shared infrastructure setup and teardown.
+`bootstrap/` owns startup sequencing and the shared auth middleware mounted by `app/main.py`. `main.py` wraps that startup sequence with lifespan-managed shared infrastructure setup and teardown, while Alembic runtime wiring lives in `../alembic/AGENTS.md`.
 
 ## STRUCTURE
 ```
@@ -16,6 +16,7 @@ bootstrap/
 - Public management exceptions and auth-path split: `auth_middleware.py`
 - CORS-aware auth error responses: `auth_middleware.py`
 - Main lifecycle wiring, shared `httpx.AsyncClient`, and `background_task_manager`: `../main.py`
+- Packaged migration runtime and revision source of truth: `../alembic/AGENTS.md`
 
 ## CONVENTIONS
 
