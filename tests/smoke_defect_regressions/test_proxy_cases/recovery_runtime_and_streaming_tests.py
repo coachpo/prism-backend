@@ -2929,6 +2929,171 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             await manager.shutdown()
 
     @pytest.mark.asyncio
+    async def test_stream_success_logs_oversized_openai_response_completed_usage_without_body_capture(
+        self, caplog
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from app.routers.proxy import _handle_proxy
+
+        caplog.set_level(logging.ERROR)
+
+        large_prefix = "A" * 40_000
+        large_suffix = "B" * 70_000
+        completed_event = b"event: response.completed\n" + (
+            'data: {"type":"response.completed","response":{"id":"resp_oversized","output":[{"type":"message","id":"msg_oversized","status":"completed","role":"assistant","content":[{"type":"output_text","text":"'
+            + large_prefix
+            + '"}]}],"usage":{"input_tokens":75,"output_tokens":125,"total_tokens":200,"input_tokens_details":{"cached_tokens":32},"output_tokens_details":{"reasoning_tokens":64}},"trace":"'
+            + large_suffix
+            + '"}}\n\n'
+        ).encode("utf-8")
+        expected_payload = completed_event
+
+        class CompletedStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                for offset in range(0, len(completed_event), 4096):
+                    yield completed_event[offset : offset + 4096]
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = CompletedStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-5.4",
+                "stream": True,
+                "input": "hello",
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, endpoint = self._build_model_config_and_endpoint(
+            model_id="gpt-5.4"
+        )
+        model_config.provider.audit_capture_bodies = False
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+
+            def build_cost_fields_for_oversized_usage(**kwargs):
+                return {
+                    "cache_read_input_tokens": kwargs["cache_read_input_tokens"],
+                    "cache_creation_input_tokens": kwargs[
+                        "cache_creation_input_tokens"
+                    ],
+                    "reasoning_tokens": kwargs["reasoning_tokens"],
+                }
+
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(endpoint),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    side_effect=build_cost_fields_for_oversized_usage,
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(return_value=894)
+                ) as log_mock,
+                patch(
+                    "app.routers.proxy.log_final_usage_request_event",
+                    AsyncMock(return_value=995),
+                ) as usage_event_mock,
+                patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                received = [chunk async for chunk in stream]
+
+                await self._wait_for_asyncmock_calls(log_mock)
+                await self._wait_for_asyncmock_calls(usage_event_mock)
+                await self._wait_for_asyncmock_calls(audit_mock)
+
+                assert b"".join(received) == expected_payload
+                assert upstream_resp.closed is True
+
+                log_mock.assert_awaited_once()
+                log_call = log_mock.await_args
+                assert log_call is not None
+                assert log_call.kwargs["input_tokens"] == 75
+                assert log_call.kwargs["output_tokens"] == 125
+                assert log_call.kwargs["total_tokens"] == 200
+                assert log_call.kwargs["cache_read_input_tokens"] == 32
+                assert log_call.kwargs["cache_creation_input_tokens"] == 0
+                assert log_call.kwargs["reasoning_tokens"] == 64
+
+                usage_event_mock.assert_awaited_once()
+                usage_event_call = usage_event_mock.await_args
+                assert usage_event_call is not None
+                assert usage_event_call.kwargs["input_tokens"] == 75
+                assert usage_event_call.kwargs["output_tokens"] == 125
+                assert usage_event_call.kwargs["total_tokens"] == 200
+
+                audit_mock.assert_awaited_once()
+                audit_call = audit_mock.await_args
+                assert audit_call is not None
+                assert audit_call.kwargs["request_log_id"] == 894
+                assert audit_call.kwargs["capture_bodies"] is False
+                assert audit_call.kwargs["response_body"] is None
+                assert "Failed to log streaming request" not in caplog.text
+                assert "Failed to queue streaming audit follow-up" not in caplog.text
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
     async def test_stream_success_without_body_capture_matches_full_payload_multi_event_usage(
         self, caplog
     ):

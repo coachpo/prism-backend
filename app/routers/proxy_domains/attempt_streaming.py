@@ -33,6 +33,8 @@ TOKEN_USAGE_FIELDS = (
 )
 
 STREAMING_FINALIZATION_BUFFER_MAX_BYTES = 64 * 1024
+TRUNCATED_SSE_SENTINEL = b"...[TRUNCATED]..."
+TRUNCATED_SSE_PREFIX_BYTES = 256
 
 
 def _as_int(value: object) -> int | None:
@@ -126,6 +128,53 @@ def _extract_special_usage(
     )
 
 
+def _extract_json_object_after_key(line: bytes, key: bytes) -> dict[str, object] | None:
+    key_index = line.rfind(key)
+    if key_index == -1:
+        return None
+
+    colon_index = line.find(b":", key_index + len(key))
+    if colon_index == -1:
+        return None
+
+    object_start = line.find(b"{", colon_index + 1)
+    if object_start == -1:
+        return None
+
+    depth = 0
+    in_string = False
+    escape_next = False
+
+    for index in range(object_start, len(line)):
+        byte = line[index]
+
+        if in_string:
+            if escape_next:
+                escape_next = False
+            elif byte == 0x5C:
+                escape_next = True
+            elif byte == 0x22:
+                in_string = False
+            continue
+
+        if byte == 0x22:
+            in_string = True
+            continue
+        if byte == 0x7B:
+            depth += 1
+            continue
+        if byte == 0x7D:
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = cast(object, json.loads(line[object_start : index + 1]))
+                except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+                    return None
+                return _as_object_dict(parsed)
+
+    return None
+
+
 def _is_sse_stream(content_type: str | None) -> bool:
     if content_type is None:
         return False
@@ -144,6 +193,49 @@ class _SseEventTokenUpdate:
     usage_seen: bool = False
 
 
+def _build_usage_only_update(usage: dict[str, object]) -> _SseEventTokenUpdate:
+    input_tokens = _pick_int(usage.get("prompt_tokens"), usage.get("input_tokens"))
+    output_tokens = _pick_int(
+        usage.get("completion_tokens"),
+        usage.get("output_tokens"),
+    )
+    total_tokens = _pick_int(usage.get("total_tokens"))
+    (
+        cache_read_input_tokens,
+        cache_creation_input_tokens,
+        reasoning_tokens,
+    ) = _extract_special_usage(usage)
+
+    return _SseEventTokenUpdate(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        reasoning_tokens=reasoning_tokens,
+        usage_seen=True,
+    )
+
+
+def _extract_usage_only_update_from_line(line: bytes) -> _SseEventTokenUpdate | None:
+    stripped = line.strip()
+    if not stripped.startswith(b"data: ") or stripped == b"data: [DONE]":
+        return None
+
+    usage = _extract_json_object_after_key(stripped, b'"usage"')
+    if usage is None:
+        return None
+
+    return _build_usage_only_update(usage)
+
+
+def _parse_truncated_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
+    if TRUNCATED_SSE_SENTINEL not in line:
+        return None
+
+    return _extract_usage_only_update_from_line(line)
+
+
 def _parse_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
     stripped = line.strip()
     if not stripped.startswith(b"data: ") or stripped == b"data: [DONE]":
@@ -152,7 +244,7 @@ def _parse_sse_event_update(line: bytes) -> _SseEventTokenUpdate | None:
     try:
         event_obj = cast(object, json.loads(stripped[6:]))
     except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return None
+        return _parse_truncated_sse_event_update(stripped)
 
     event = _as_object_dict(event_obj)
     if event is None:
@@ -266,7 +358,6 @@ class _StreamingFinalizationBuffer:
     max_bytes: int = STREAMING_FINALIZATION_BUFFER_MAX_BYTES
     _payload: bytearray = field(default_factory=bytearray)
     _partial_line: bytearray = field(default_factory=bytearray)
-    _discard_until_newline: bool = False
     _payload_overflowed: bool = False
     _provider_correlation_id: str | None = None
     _tokens: TokenUsage | None = None
@@ -283,11 +374,7 @@ class _StreamingFinalizationBuffer:
             self._append_sse_chunk(chunk)
 
     def finalize(self) -> tuple[bytes | None, TokenUsage | None, str | None]:
-        if (
-            self.parse_sse_tokens
-            and self._partial_line
-            and not self._discard_until_newline
-        ):
+        if self.parse_sse_tokens and self._partial_line:
             self._consume_line(bytes(self._partial_line))
             self._partial_line.clear()
 
@@ -330,24 +417,34 @@ class _StreamingFinalizationBuffer:
         self._payload.extend(chunk)
 
     def _append_sse_chunk(self, chunk: bytes) -> None:
-        remaining_chunk = chunk
-
-        if self._discard_until_newline:
-            newline_index = remaining_chunk.find(b"\n")
-            if newline_index == -1:
-                return
-            remaining_chunk = remaining_chunk[newline_index + 1 :]
-            self._discard_until_newline = False
-
-        if not remaining_chunk:
+        if not chunk:
             return
 
-        self._partial_line.extend(remaining_chunk)
+        self._partial_line.extend(chunk)
         self._consume_complete_lines()
+        self._truncate_partial_line_if_needed()
 
-        if len(self._partial_line) > self.max_bytes:
-            self._partial_line.clear()
-            self._discard_until_newline = True
+    def _truncate_partial_line_if_needed(self) -> None:
+        if len(self._partial_line) <= self.max_bytes:
+            return
+
+        self._consume_partial_line_usage_hint()
+
+        prefix_size = min(TRUNCATED_SSE_PREFIX_BYTES, self.max_bytes)
+        tail_budget = self.max_bytes - prefix_size - len(TRUNCATED_SSE_SENTINEL)
+        if tail_budget <= 0:
+            self._partial_line = bytearray(self._partial_line[-self.max_bytes :])
+            return
+
+        prefix = bytes(self._partial_line[:prefix_size])
+        tail = bytes(self._partial_line[-tail_budget:])
+        self._partial_line = bytearray(prefix + TRUNCATED_SSE_SENTINEL + tail)
+
+    def _consume_partial_line_usage_hint(self) -> None:
+        update = _extract_usage_only_update_from_line(bytes(self._partial_line))
+        if update is None:
+            return
+        self._apply_update(update)
 
     def _consume_complete_lines(self) -> None:
         lines = bytes(self._partial_line).split(b"\n")
@@ -359,6 +456,9 @@ class _StreamingFinalizationBuffer:
         update = _parse_sse_event_update(line)
         if update is None:
             return
+        self._apply_update(update)
+
+    def _apply_update(self, update: _SseEventTokenUpdate) -> None:
         if self._tokens is None:
             self._tokens = {field_name: None for field_name in TOKEN_USAGE_FIELDS}
 

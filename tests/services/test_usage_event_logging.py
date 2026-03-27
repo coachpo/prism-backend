@@ -440,6 +440,76 @@ async def test_streaming_success_finalization_writes_one_final_usage_event() -> 
 
 
 @pytest.mark.asyncio
+async def test_streaming_success_finalization_persists_oversized_response_completed_usage() -> (
+    None
+):
+    seed = await _seed_runtime_route(connection_count=1)
+    raw_body = json.dumps(
+        {
+            "model": seed.model_id,
+            "stream": True,
+            "input": "hello",
+        }
+    ).encode("utf-8")
+    large_prefix = "A" * 40_000
+    large_suffix = "B" * 70_000
+    completed_event = b"event: response.completed\n" + (
+        'data: {"type":"response.completed","response":{"id":"resp_oversized","output":[{"type":"message","id":"msg_oversized","status":"completed","role":"assistant","content":[{"type":"output_text","text":"'
+        + large_prefix
+        + '"}]}],"usage":{"input_tokens":75,"output_tokens":125,"total_tokens":200,"input_tokens_details":{"cached_tokens":32},"output_tokens_details":{"reasoning_tokens":64}},"trace":"'
+        + large_suffix
+        + '"}}\n\n'
+    ).encode("utf-8")
+    upstream_response = CompletedStreamResponse(
+        [
+            completed_event[offset : offset + 4096]
+            for offset in range(0, len(completed_event), 4096)
+        ]
+    )
+    app = FastAPI()
+    app.state.http_client = StreamingHttpClient(upstream_response)
+    request = _build_request(
+        app=app,
+        path="/v1/responses",
+        proxy_api_key_id=seed.proxy_api_key_id,
+        proxy_api_key_name=seed.proxy_api_key_name,
+    )
+
+    async with AsyncSessionLocal() as db:
+        response = await _handle_proxy(
+            request=request,
+            db=db,
+            raw_body=raw_body,
+            request_path="/v1/responses",
+            profile_id=seed.profile_id,
+        )
+
+    assert isinstance(response, StreamingResponse)
+    streamed_body = await _consume_streaming_response(response)
+    request_logs = await _load_request_logs(seed.profile_id)
+    usage_events = await _load_usage_events(seed.profile_id)
+
+    assert streamed_body == completed_event
+    assert upstream_response.closed is True
+    assert len(request_logs) == 1
+    assert request_logs[0].is_stream is True
+    assert request_logs[0].input_tokens == 75
+    assert request_logs[0].output_tokens == 125
+    assert request_logs[0].total_tokens == 200
+    assert request_logs[0].proxy_api_key_id == seed.proxy_api_key_id
+    assert request_logs[0].proxy_api_key_name_snapshot == seed.proxy_api_key_name
+    assert len(usage_events) == 1
+    assert usage_events[0].status_code == 200
+    assert usage_events[0].attempt_count == 1
+    assert usage_events[0].success_flag is True
+    assert usage_events[0].input_tokens == 75
+    assert usage_events[0].output_tokens == 125
+    assert usage_events[0].total_tokens == 200
+    assert usage_events[0].proxy_api_key_id == seed.proxy_api_key_id
+    assert usage_events[0].proxy_api_key_name_snapshot == seed.proxy_api_key_name
+
+
+@pytest.mark.asyncio
 async def test_exhausted_failover_502_writes_one_final_usage_event_from_last_attempt() -> (
     None
 ):
