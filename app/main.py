@@ -35,12 +35,14 @@ from app.routers import (
 )
 
 DEFAULT_VENDORS = bootstrap.DEFAULT_VENDORS
+DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
 SYSTEM_BLOCKLIST_DEFAULTS = bootstrap.SYSTEM_BLOCKLIST_DEFAULTS
 build_auth_error_response = bootstrap.build_auth_error_response
 encrypt_endpoint_secrets = bootstrap.encrypt_endpoint_secrets
 run_startup_migrations = bootstrap.run_startup_migrations
 seed_app_auth_settings = bootstrap.seed_app_auth_settings
 seed_header_blocklist_rules = bootstrap.seed_header_blocklist_rules
+seed_loadbalance_strategy_preset = bootstrap.seed_loadbalance_strategy_preset
 seed_profile_invariants = bootstrap.seed_profile_invariants
 seed_vendors = bootstrap.seed_vendors
 seed_user_settings = bootstrap.seed_user_settings

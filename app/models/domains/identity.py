@@ -114,7 +114,7 @@ class Vendor(Base):
     )
 
     model_configs: Mapped[list[Any]] = relationship(
-        "ModelConfig", back_populates="vendor", cascade="all, delete-orphan"
+        "ModelConfig", back_populates="vendor"
     )
 
 

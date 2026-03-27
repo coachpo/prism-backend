@@ -13,10 +13,12 @@ from pydantic import (
 
 from app.services.loadbalancer.policy import (
     BanMode,
+    normalize_failover_status_codes,
     normalize_strategy_ban_policy,
     resolve_effective_loadbalance_policy,
     validate_strategy_ban_policy,
 )
+from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
 from .common import ApiFamily, AuthType
 from .endpoint_pricing import (
@@ -167,15 +169,19 @@ class ModelConnectionsBatchResponse(BaseModel):
 
 
 class LoadbalanceStrategyBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str
     strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
+    failover_status_codes: list[int] = Field(
+        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
+    )
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
     failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
     failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
     failover_ban_mode: BanMode = "off"
     failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
     failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
@@ -187,6 +193,11 @@ class LoadbalanceStrategyBase(BaseModel):
         if not normalized:
             raise ValueError("name must not be empty")
         return normalized
+
+    @field_validator("failover_status_codes", mode="before")
+    @classmethod
+    def validate_failover_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
 
     @model_validator(mode="after")
     def validate_strategy_behavior(self):
@@ -207,19 +218,19 @@ class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
 
 
 class LoadbalanceStrategyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     name: str | None = None
     strategy_type: Literal["single", "fill-first", "round-robin", "failover"] | None = (
         None
     )
     failover_recovery_enabled: bool | None = None
+    failover_status_codes: list[int] | None = None
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
     failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
     failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
     failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
-    failover_auth_error_cooldown_seconds: int | None = Field(
-        default=None, ge=1, le=86_400
-    )
     failover_ban_mode: BanMode | None = None
     failover_max_cooldown_strikes_before_ban: int | None = Field(
         default=None, ge=0, le=100
@@ -236,6 +247,13 @@ class LoadbalanceStrategyUpdate(BaseModel):
             raise ValueError("name must not be empty")
         return normalized
 
+    @field_validator("failover_status_codes", mode="before")
+    @classmethod
+    def validate_failover_status_codes(cls, value: object) -> list[int] | None:
+        if value is None:
+            return None
+        return list(normalize_failover_status_codes(value))
+
     @model_validator(mode="after")
     def validate_strategy_behavior(self):
         if self.strategy_type == "single" and self.failover_recovery_enabled:
@@ -250,12 +268,12 @@ class LoadbalanceStrategySummary(BaseModel):
     name: str
     strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
     failover_recovery_enabled: bool
+    failover_status_codes: list[int]
     failover_cooldown_seconds: int
     failover_failure_threshold: int
     failover_backoff_multiplier: float
     failover_max_cooldown_seconds: int
     failover_jitter_ratio: float
-    failover_auth_error_cooldown_seconds: int
     failover_ban_mode: BanMode
     failover_max_cooldown_strikes_before_ban: int
     failover_ban_duration_seconds: int
@@ -281,14 +299,12 @@ class LoadbalanceStrategySummary(BaseModel):
             "name": getattr(value, "name"),
             "strategy_type": policy.strategy_type,
             "failover_recovery_enabled": policy.failover_recovery_enabled,
+            "failover_status_codes": list(policy.failover_status_codes),
             "failover_cooldown_seconds": int(policy.failover_cooldown_seconds),
             "failover_failure_threshold": policy.failover_failure_threshold,
             "failover_backoff_multiplier": policy.failover_backoff_multiplier,
             "failover_max_cooldown_seconds": policy.failover_max_cooldown_seconds,
             "failover_jitter_ratio": policy.failover_jitter_ratio,
-            "failover_auth_error_cooldown_seconds": (
-                policy.failover_auth_error_cooldown_seconds
-            ),
             "failover_ban_mode": ban_mode,
             "failover_max_cooldown_strikes_before_ban": ban_strikes,
             "failover_ban_duration_seconds": ban_duration,

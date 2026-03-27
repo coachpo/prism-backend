@@ -15,7 +15,10 @@ from app.models.models import (
     Profile,
     Vendor,
 )
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import (
+    DEFAULT_FAILOVER_STATUS_CODES,
+    make_loadbalance_strategy,
+)
 
 
 def _policy(**overrides):
@@ -44,8 +47,11 @@ def _policy(**overrides):
         failover_jitter_ratio=float(
             cast(float | int, overrides.get("failover_jitter_ratio", 0.2))
         ),
-        failover_auth_error_cooldown_seconds=cast(
-            int, overrides.get("failover_auth_error_cooldown_seconds", 1800)
+        failover_status_codes=tuple(
+            cast(
+                list[int],
+                overrides.get("failover_status_codes", DEFAULT_FAILOVER_STATUS_CODES),
+            )
         ),
         failover_ban_mode=cast(
             Literal["off", "temporary", "manual"],
@@ -129,7 +135,7 @@ async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
 
 
 class TestLoadbalancerRecovery:
-    def test_resolve_effective_loadbalance_policy_fills_legacy_strategy_defaults(self):
+    def test_resolve_effective_loadbalance_policy_preserves_explicit_status_codes(self):
         from app.core.config import get_settings
         from app.services.loadbalancer.policy import (
             resolve_effective_loadbalance_policy,
@@ -144,7 +150,7 @@ class TestLoadbalancerRecovery:
             failover_backoff_multiplier=None,
             failover_max_cooldown_seconds=None,
             failover_jitter_ratio=None,
-            failover_auth_error_cooldown_seconds=None,
+            failover_status_codes=[503, 429],
         )
 
         policy = resolve_effective_loadbalance_policy(strategy)
@@ -162,9 +168,7 @@ class TestLoadbalancerRecovery:
         assert policy.failover_jitter_ratio == pytest.approx(
             settings.failover_jitter_ratio
         )
-        assert policy.failover_auth_error_cooldown_seconds == (
-            settings.failover_auth_error_cooldown_seconds
-        )
+        assert policy.failover_status_codes == (429, 503)
 
     def test_compute_base_cooldown_uses_effective_policy_values(self):
         from app.services.loadbalancer.recovery import _compute_base_cooldown
@@ -177,7 +181,7 @@ class TestLoadbalancerRecovery:
             failover_backoff_multiplier=3.0,
             failover_max_cooldown_seconds=500,
             failover_jitter_ratio=0.2,
-            failover_auth_error_cooldown_seconds=777,
+            failover_status_codes=[403, 429],
         )
 
         assert (
@@ -198,39 +202,12 @@ class TestLoadbalancerRecovery:
             )
             == 30.0
         )
-        assert (
-            _compute_base_cooldown(
-                policy=policy,
-                base_cooldown_seconds=policy.failover_cooldown_seconds,
-                consecutive_failures=1,
-                failure_kind="auth_like",
-            )
-            == 777.0
-        )
-
-    def test_compute_base_cooldown_returns_auth_override_for_auth_like_failures(self):
-        from app.services.loadbalancer.recovery import _compute_base_cooldown
-
-        cooldown = _compute_base_cooldown(
-            policy=_policy(
-                failover_auth_error_cooldown_seconds=900,
-                failover_failure_threshold=3,
-                failover_backoff_multiplier=2.0,
-                failover_max_cooldown_seconds=3600,
-            ),
-            base_cooldown_seconds=30.0,
-            consecutive_failures=1,
-            failure_kind="auth_like",
-        )
-
-        assert cooldown == 900.0
 
     def test_compute_base_cooldown_returns_zero_before_threshold(self):
         from app.services.loadbalancer.recovery import _compute_base_cooldown
 
         cooldown = _compute_base_cooldown(
             policy=_policy(
-                failover_auth_error_cooldown_seconds=900,
                 failover_failure_threshold=3,
                 failover_backoff_multiplier=2.0,
                 failover_max_cooldown_seconds=3600,
@@ -253,7 +230,7 @@ class TestLoadbalancerRecovery:
             failover_backoff_multiplier=2.0,
             failover_max_cooldown_seconds=900,
             failover_jitter_ratio=0.25,
-            failover_auth_error_cooldown_seconds=1800,
+            failover_status_codes=[429, 503],
         )
 
         with patch(
@@ -383,7 +360,7 @@ class TestLoadbalancerRecovery:
         assert record_failed_transition.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_auth_like_failure_does_not_increment_max_cooldown_strikes(self):
+    async def test_timeout_failure_does_not_increment_max_cooldown_strikes(self):
         from datetime import datetime, timezone
 
         from app.services.loadbalancer.recovery import record_connection_failure
@@ -395,10 +372,9 @@ class TestLoadbalancerRecovery:
             profile_id=profile_id,
             connection_id=connection_id,
             base_cooldown_seconds=30.0,
-            failure_kind="auth_like",
+            failure_kind="timeout",
             policy=_policy(
                 failover_failure_threshold=1,
-                failover_auth_error_cooldown_seconds=30,
                 failover_max_cooldown_seconds=30,
                 failover_jitter_ratio=0.0,
                 failover_ban_mode="temporary",

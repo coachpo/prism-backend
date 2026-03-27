@@ -412,7 +412,7 @@ class LoadbalanceEvent(Base):
             name="chk_loadbalance_events_ban_mode",
         ),
         CheckConstraint(
-            "failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR failure_kind IS NULL",
+            "failure_kind IN ('transient_http', 'connect_error', 'timeout') OR failure_kind IS NULL",
             name="chk_failure_kind",
         ),
     )
@@ -466,7 +466,7 @@ class LoadbalanceCurrentState(Base):
             "connection_id",
         ),
         CheckConstraint(
-            "last_failure_kind IN ('transient_http', 'auth_like', 'connect_error', 'timeout') OR last_failure_kind IS NULL",
+            "last_failure_kind IN ('transient_http', 'connect_error', 'timeout') OR last_failure_kind IS NULL",
             name="chk_loadbalance_current_state_failure_kind",
         ),
         CheckConstraint(

@@ -4,7 +4,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.domains.core import ApiFamily, AuthType, _HEADER_TOKEN_RE
-from app.services.loadbalancer.policy import validate_strategy_ban_policy
+from app.services.loadbalancer.policy import (
+    normalize_failover_status_codes,
+    validate_strategy_ban_policy,
+)
+from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
 # --- Config Export/Import Schemas ---
 
@@ -48,15 +52,22 @@ class ConfigLoadbalanceStrategyExport(BaseModel):
     name: str
     strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
+    failover_status_codes: list[int] = Field(
+        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
+    )
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
     failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
     failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
     failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
     failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
     failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @field_validator("failover_status_codes", mode="before")
+    @classmethod
+    def validate_failover_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
 
 
 class ConfigLoadbalanceStrategyImport(BaseModel):
@@ -65,14 +76,12 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
     name: str
     strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
+    failover_status_codes: list[int]
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
     failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
     failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
     failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
-    failover_auth_error_cooldown_seconds: int | None = Field(
-        default=None, ge=1, le=86_400
-    )
     failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
     failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
     failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
@@ -84,6 +93,11 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
         if not normalized:
             raise ValueError("name must not be empty")
         return normalized
+
+    @field_validator("failover_status_codes", mode="before")
+    @classmethod
+    def validate_failover_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
 
     @field_validator("failover_ban_duration_seconds")
     @classmethod
@@ -229,7 +243,7 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[6] = 6
+    version: Literal[7] = 7
     exported_at: datetime
     vendors: list[ConfigVendorExport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
@@ -245,7 +259,7 @@ class ConfigExportResponse(BaseModel):
 class ConfigImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: int
+    version: Literal[7] = 7
     exported_at: datetime | None = None
     vendors: list[ConfigVendorImport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]

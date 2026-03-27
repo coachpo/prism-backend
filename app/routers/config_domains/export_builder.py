@@ -171,7 +171,7 @@ async def build_export_payload(
                 failover_backoff_multiplier=policy.failover_backoff_multiplier,
                 failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
                 failover_jitter_ratio=policy.failover_jitter_ratio,
-                failover_auth_error_cooldown_seconds=policy.failover_auth_error_cooldown_seconds,
+                failover_status_codes=list(policy.failover_status_codes),
                 failover_ban_mode=policy.failover_ban_mode,
                 failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
                 failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
@@ -315,7 +315,7 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=6,
+        version=7,
         exported_at=utc_now(),
         vendors=exported_vendors,
         endpoints=exported_endpoints,

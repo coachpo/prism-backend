@@ -100,7 +100,7 @@ class TestConfigExportImportIsolation:
                 failover_backoff_multiplier=3.5,
                 failover_max_cooldown_seconds=720,
                 failover_jitter_ratio=0.35,
-                failover_auth_error_cooldown_seconds=2400,
+                failover_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
                 failover_ban_mode="off",
                 failover_max_cooldown_strikes_before_ban=0,
                 failover_ban_duration_seconds=0,
@@ -196,7 +196,7 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 6
+        assert payload["version"] == 7
         assert payload["vendors"] == [
             {
                 "key": "openai",
@@ -217,7 +217,16 @@ class TestConfigExportImportIsolation:
         assert strategy_payload["failover_backoff_multiplier"] == 3.5
         assert strategy_payload["failover_max_cooldown_seconds"] == 720
         assert strategy_payload["failover_jitter_ratio"] == 0.35
-        assert strategy_payload["failover_auth_error_cooldown_seconds"] == 2400
+        assert strategy_payload["failover_status_codes"] == [
+            403,
+            422,
+            429,
+            500,
+            502,
+            503,
+            504,
+            529,
+        ]
         assert strategy_payload["failover_ban_mode"] == "off"
         assert strategy_payload["failover_max_cooldown_strikes_before_ban"] == 0
         assert strategy_payload["failover_ban_duration_seconds"] == 0
@@ -431,7 +440,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openrouter",
@@ -459,7 +468,16 @@ class TestConfigExportImportIsolation:
                         "failover_backoff_multiplier": 3.5,
                         "failover_max_cooldown_seconds": 720,
                         "failover_jitter_ratio": 0.35,
-                        "failover_auth_error_cooldown_seconds": 2400,
+                        "failover_status_codes": [
+                            403,
+                            422,
+                            429,
+                            500,
+                            502,
+                            503,
+                            504,
+                            529,
+                        ],
                         "failover_ban_mode": "temporary",
                         "failover_max_cooldown_strikes_before_ban": 2,
                         "failover_ban_duration_seconds": 600,
@@ -679,7 +697,16 @@ class TestConfigExportImportIsolation:
         assert target_strategies[0].failover_backoff_multiplier == 3.5
         assert target_strategies[0].failover_max_cooldown_seconds == 720
         assert target_strategies[0].failover_jitter_ratio == 0.35
-        assert target_strategies[0].failover_auth_error_cooldown_seconds == 2400
+        assert target_strategies[0].failover_status_codes == [
+            403,
+            422,
+            429,
+            500,
+            502,
+            503,
+            504,
+            529,
+        ]
         assert target_strategies[0].failover_ban_mode == "temporary"
         assert target_strategies[0].failover_max_cooldown_strikes_before_ban == 2
         assert target_strategies[0].failover_ban_duration_seconds == 600

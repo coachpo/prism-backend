@@ -197,12 +197,6 @@ def inject_openai_stream_usage_option(
     return _inject_openai_stream_usage_option(raw_body, api_family, request_path)
 
 
-_AUTH_LIKE_ERROR_RE = re.compile(
-    r"(auth|authoriz|forbidden|permission|api[\s_-]?key|token|credential|access denied)",
-    re.IGNORECASE,
-)
-
-
 def _as_object_dict(value: object) -> dict[str, object] | None:
     if isinstance(value, dict):
         return cast(dict[str, object], value)
@@ -246,13 +240,7 @@ def extract_error_text(raw_body: bytes | None) -> str:
 
 
 def _classify_http_failure(status_code: int, raw_body: bytes | None) -> FailureKind:
-    if status_code != 403:
-        return "transient_http"
-    return (
-        "auth_like"
-        if _AUTH_LIKE_ERROR_RE.search(_extract_error_text(raw_body))
-        else "transient_http"
-    )
+    return "transient_http"
 
 
 def classify_http_failure(status_code: int, raw_body: bytes | None) -> FailureKind:

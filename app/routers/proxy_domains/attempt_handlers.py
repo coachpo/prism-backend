@@ -1,5 +1,4 @@
 import logging
-import re
 import time
 
 import httpx
@@ -17,17 +16,6 @@ from .attempt_types import (
 
 logger = logging.getLogger(__name__)
 
-_AUTH_LIKE_ERROR_RE = re.compile(
-    r"(auth|authoriz|forbidden|permission|api[\s_-]?key|token|credential|access denied)",
-    re.IGNORECASE,
-)
-
-
-def _extract_error_text(raw_body: bytes | None) -> str:
-    if not raw_body:
-        return ""
-    return raw_body.decode("utf-8", errors="replace")
-
 
 def _classify_failover_failure(
     *,
@@ -41,13 +29,9 @@ def _classify_failover_failure(
             if isinstance(exception, httpx.TimeoutException)
             else "connect_error"
         )
-    if status_code is None or status_code != 403:
+    if status_code is None:
         return "transient_http"
-    return (
-        "auth_like"
-        if _AUTH_LIKE_ERROR_RE.search(_extract_error_text(raw_body))
-        else "transient_http"
-    )
+    return "transient_http"
 
 
 def _is_recovery_success_status(status_code: int) -> bool:
@@ -154,7 +138,10 @@ async def handle_streaming_attempt(
         await upstream_resp.aclose()
         error_detail = response_error_detail(response_body)
 
-        if deps.should_failover_fn(upstream_resp.status_code):
+        if deps.should_failover_fn(
+            upstream_resp.status_code,
+            state.setup.failover_policy.failover_status_codes,
+        ):
             last_error = f"Upstream returned {upstream_resp.status_code}"
             logger.warning(
                 "Endpoint %d failed with %d, trying next",
@@ -259,7 +246,10 @@ async def handle_buffered_attempt(
         was_requested_compressed=state.setup.request_compressed,
     )
 
-    if response.status_code >= 400 and deps.should_failover_fn(response.status_code):
+    if response.status_code >= 400 and deps.should_failover_fn(
+        response.status_code,
+        state.setup.failover_policy.failover_status_codes,
+    ):
         last_error = f"Upstream returned {response.status_code}"
         logger.warning(
             "Endpoint %d failed with %d, trying next",

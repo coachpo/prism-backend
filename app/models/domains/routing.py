@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.crypto import decrypt_secret, mask_secret
@@ -24,6 +25,7 @@ from app.core.database import Base
 from app.core.time import utc_now
 
 _UNREADABLE_SECRET_MASK = "********"
+_DEFAULT_FAILOVER_STATUS_CODES = [403, 422, 429, 500, 502, 503, 504, 529]
 
 
 class LoadbalanceStrategy(Base):
@@ -78,8 +80,10 @@ class LoadbalanceStrategy(Base):
         Integer, nullable=True
     )
     failover_jitter_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    failover_auth_error_cooldown_seconds: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
+    failover_status_codes: Mapped[list[int]] = mapped_column(
+        ARRAY(Integer),
+        nullable=False,
+        default=lambda: list(_DEFAULT_FAILOVER_STATUS_CODES),
     )
     failover_ban_mode: Mapped[str] = mapped_column(
         String(20), default="off", nullable=False

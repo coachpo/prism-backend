@@ -163,7 +163,7 @@ class TestLoadbalancerState:
                         profile_id=profile_two.id,
                         connection_id=other_connection.id,
                         consecutive_failures=2,
-                        last_failure_kind="auth_like",
+                        last_failure_kind="transient_http",
                         last_cooldown_seconds=120.0,
                         probe_eligible_logged=True,
                     ),

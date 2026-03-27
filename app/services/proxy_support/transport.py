@@ -1,8 +1,6 @@
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 
 import httpx
-
-from .constants import FAILOVER_STATUS_CODES
 
 
 async def proxy_request(
@@ -12,10 +10,15 @@ async def proxy_request(
     headers: dict[str, str],
     raw_body: bytes | None,
 ) -> httpx.Response:
-    kwargs: dict = {"headers": headers}
-    if raw_body:
-        kwargs["content"] = raw_body
-    send_req = client.build_request(method, upstream_url, **kwargs)
+    if raw_body is None:
+        send_req = client.build_request(method, upstream_url, headers=headers)
+    else:
+        send_req = client.build_request(
+            method,
+            upstream_url,
+            headers=headers,
+            content=raw_body,
+        )
     return await client.send(send_req, follow_redirects=True)
 
 
@@ -26,12 +29,18 @@ async def proxy_stream(
     headers: dict[str, str],
     raw_body: bytes | None,
 ) -> AsyncGenerator[tuple[bytes, httpx.Headers, int], None]:
-    kwargs: dict = {"headers": headers}
-    if raw_body:
-        kwargs["content"] = raw_body
-    async with client.stream(method, upstream_url, **kwargs) as response:
+    if raw_body is None:
+        stream_context = client.stream(method, upstream_url, headers=headers)
+    else:
+        stream_context = client.stream(
+            method,
+            upstream_url,
+            headers=headers,
+            content=raw_body,
+        )
+    async with stream_context as response:
         if response.status_code >= 400:
-            await response.aread()
+            _ = await response.aread()
             yield response.content, response.headers, response.status_code
             return
         async for chunk in response.aiter_bytes():
@@ -39,8 +48,8 @@ async def proxy_stream(
                 yield chunk, response.headers, response.status_code
 
 
-def should_failover(status_code: int) -> bool:
-    return status_code in FAILOVER_STATUS_CODES
+def should_failover(status_code: int, failover_status_codes: Sequence[int]) -> bool:
+    return status_code in failover_status_codes
 
 
 __all__ = ["proxy_request", "proxy_stream", "should_failover"]

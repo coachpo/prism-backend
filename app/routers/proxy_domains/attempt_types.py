@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
@@ -23,7 +24,7 @@ class ProxyRuntimeDependencies:
     proxy_request_fn: Callable[..., Awaitable[httpx.Response]]
     record_audit_log_fn: Callable[..., Awaitable[None]]
     release_connection_lease_fn: Callable[..., Awaitable[bool]]
-    should_failover_fn: Callable[[int], bool]
+    should_failover_fn: Callable[[int, Sequence[int]], bool]
 
 
 @dataclass(slots=True)

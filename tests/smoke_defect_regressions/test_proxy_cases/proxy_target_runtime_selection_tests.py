@@ -85,7 +85,7 @@ class TestDEF083_ProxyTargetRuntimeSelection:
             failover_backoff_multiplier=3.5,
             failover_max_cooldown_seconds=720,
             failover_jitter_ratio=0.35,
-            failover_auth_error_cooldown_seconds=2400,
+            failover_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
             failover_ban_mode="off",
             failover_max_cooldown_strikes_before_ban=0,
             failover_ban_duration_seconds=0,

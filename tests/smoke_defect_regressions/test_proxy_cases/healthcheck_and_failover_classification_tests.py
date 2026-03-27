@@ -489,6 +489,7 @@ class TestDEF060_ProxyApiFamilyPathValidation:
         model_config.loadbalance_strategy = SimpleNamespace(
             strategy_type="single",
             failover_recovery_enabled=False,
+            failover_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
         )
 
         mock_rules_result = MagicMock()
@@ -584,7 +585,7 @@ class TestDEF060_ProxyApiFamilyPathValidation:
 
 
 class TestDEF061_FailoverFailureClassification:
-    def test_classify_http_failure_marks_403_auth_like_when_body_matches_auth_patterns(
+    def test_classify_http_failure_treats_403_as_transient_http_when_body_matches_auth_patterns(
         self,
     ):
         from app.routers.proxy import _classify_http_failure
@@ -593,16 +594,18 @@ class TestDEF061_FailoverFailureClassification:
             {"error": {"message": "Invalid API key provided", "type": "auth_error"}}
         ).encode("utf-8")
 
-        assert _classify_http_failure(403, raw_body) == "auth_like"
+        assert _classify_http_failure(403, raw_body) == "transient_http"
 
-    def test_classify_http_failure_marks_403_auth_like_for_spaced_api_key_message(self):
+    def test_classify_http_failure_treats_403_as_transient_http_for_spaced_api_key_message(
+        self,
+    ):
         from app.routers.proxy import _classify_http_failure
 
         raw_body = json.dumps(
             {"error": {"message": "invalid API key for this endpoint"}}
         ).encode("utf-8")
 
-        assert _classify_http_failure(403, raw_body) == "auth_like"
+        assert _classify_http_failure(403, raw_body) == "transient_http"
 
     def test_classify_http_failure_marks_403_transient_without_auth_signal(self):
         from app.routers.proxy import _classify_http_failure
@@ -616,15 +619,19 @@ class TestDEF061_FailoverFailureClassification:
 
         assert _classify_http_failure(429, None) == "transient_http"
 
-    def test_should_failover_treats_422_as_failover_worthy(self):
+    def test_should_failover_respects_explicit_failover_status_codes(self):
         from app.services.proxy_service import should_failover
 
-        assert should_failover(422) is True
+        assert should_failover(422, [422, 503]) is True
+        assert should_failover(403, [422, 503]) is False
+        assert should_failover(403, [403, 422, 503]) is True
 
-    def test_should_failover_treats_504_as_failover_worthy(self):
-        from app.services.proxy_service import should_failover
+    def test_failure_kind_literal_excludes_auth_like(self):
+        from typing import get_args
 
-        assert should_failover(504) is True
+        from app.services.loadbalancer.types import FailureKind
+
+        assert "auth_like" not in get_args(FailureKind)
 
     def test_classify_failover_failure_for_timeout_exception(self):
         import httpx
@@ -658,7 +665,7 @@ class TestDEF061_FailoverFailureClassification:
             raw_body=raw_body,
         )
 
-        assert failure_kind == "auth_like"
+        assert failure_kind == "transient_http"
 
     def test_recovery_success_status_classifies_2xx_and_3xx_as_success(self):
         from app.routers.proxy import _is_recovery_success_status

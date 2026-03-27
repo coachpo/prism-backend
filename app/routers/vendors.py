@@ -1,15 +1,23 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from sqlalchemy import or_, select
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import utc_now
 from app.dependencies import get_db
-from app.models.models import Vendor
-from app.schemas.schemas import VendorCreate, VendorResponse, VendorUpdate
+from app.models.models import ModelConfig, Profile, Vendor
+from app.schemas.schemas import (
+    VendorCreate,
+    VendorDeleteConflictDetail,
+    VendorModelUsageItem,
+    VendorResponse,
+    VendorUpdate,
+)
 
 router = APIRouter(prefix="/api/vendors", tags=["vendors"])
+_VENDOR_DELETE_IN_USE_MESSAGE = "Cannot delete vendor that is referenced by models"
 
 
 def _normalize_vendor_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -40,15 +48,15 @@ async def _ensure_vendor_uniqueness(
     name: str | None,
     exclude_vendor_id: int | None = None,
 ) -> None:
-    filters = []
-    if key is not None:
-        filters.append(Vendor.key == key)
-    if name is not None:
-        filters.append(Vendor.name == name)
-    if not filters:
+    if key is not None and name is not None:
+        query = select(Vendor).where((Vendor.key == key) | (Vendor.name == name))
+    elif key is not None:
+        query = select(Vendor).where(Vendor.key == key)
+    elif name is not None:
+        query = select(Vendor).where(Vendor.name == name)
+    else:
         return
 
-    query = select(Vendor).where(or_(*filters))
     if exclude_vendor_id is not None:
         query = query.where(Vendor.id != exclude_vendor_id)
 
@@ -65,6 +73,38 @@ async def _ensure_vendor_uniqueness(
             status_code=409,
             detail=f"Vendor name '{name}' already exists",
         )
+
+
+async def _list_vendor_model_usage_rows(
+    db: AsyncSession, *, vendor_id: int
+) -> list[VendorModelUsageItem]:
+    result = await db.execute(
+        select(
+            ModelConfig.id.label("model_config_id"),
+            Profile.id.label("profile_id"),
+            Profile.name.label("profile_name"),
+            ModelConfig.model_id,
+            ModelConfig.display_name,
+            ModelConfig.model_type,
+            ModelConfig.api_family,
+            ModelConfig.is_enabled,
+        )
+        .join(Profile, Profile.id == ModelConfig.profile_id)
+        .where(ModelConfig.vendor_id == vendor_id)
+        .order_by(Profile.id.asc(), ModelConfig.id.asc())
+    )
+    return [VendorModelUsageItem.model_validate(row) for row in result.mappings().all()]
+
+
+def _build_vendor_delete_conflict_detail(
+    models: list[VendorModelUsageItem],
+    *,
+    message: str,
+) -> dict[str, object]:
+    return VendorDeleteConflictDetail(
+        message=message,
+        models=models,
+    ).model_dump(mode="json")
 
 
 @router.get("", response_model=list[VendorResponse])
@@ -97,6 +137,15 @@ async def create_vendor(
 @router.get("/{vendor_id}", response_model=VendorResponse)
 async def get_vendor(vendor_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
     return await _get_vendor_or_404(db, vendor_id)
+
+
+@router.get("/{vendor_id}/models", response_model=list[VendorModelUsageItem])
+async def list_vendor_models(
+    vendor_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = await _get_vendor_or_404(db, vendor_id)
+    return await _list_vendor_model_usage_rows(db, vendor_id=vendor_id)
 
 
 @router.patch("/{vendor_id}", response_model=VendorResponse)
@@ -132,6 +181,29 @@ async def delete_vendor(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     vendor = await _get_vendor_or_404(db, vendor_id)
+
+    usage_rows = await _list_vendor_model_usage_rows(db, vendor_id=vendor_id)
+    if usage_rows:
+        raise HTTPException(
+            status_code=409,
+            detail=_build_vendor_delete_conflict_detail(
+                usage_rows,
+                message=_VENDOR_DELETE_IN_USE_MESSAGE,
+            ),
+        )
+
     await db.delete(vendor)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        usage_rows = await _list_vendor_model_usage_rows(db, vendor_id=vendor_id)
+        raise HTTPException(
+            status_code=409,
+            detail=_build_vendor_delete_conflict_detail(
+                usage_rows,
+                message=_VENDOR_DELETE_IN_USE_MESSAGE,
+            ),
+        ) from exc
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

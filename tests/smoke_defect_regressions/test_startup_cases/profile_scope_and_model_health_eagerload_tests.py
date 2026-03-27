@@ -196,7 +196,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             strategy.failover_backoff_multiplier = None
             strategy.failover_max_cooldown_seconds = None
             strategy.failover_jitter_ratio = None
-            strategy.failover_auth_error_cooldown_seconds = None
+            strategy.failover_status_codes = [403, 422, 429, 500, 502, 503, 504, 529]
 
             model = ModelConfig(
                 profile_id=profile.id,
@@ -239,10 +239,16 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             assert response.loadbalance_strategy.failover_jitter_ratio == pytest.approx(
                 settings.failover_jitter_ratio
             )
-            assert (
-                response.loadbalance_strategy.failover_auth_error_cooldown_seconds
-                == settings.failover_auth_error_cooldown_seconds
-            )
+            assert response.loadbalance_strategy.failover_status_codes == [
+                403,
+                422,
+                429,
+                500,
+                502,
+                503,
+                504,
+                529,
+            ]
 
             with patch(
                 "app.routers.models.get_model_health_stats",

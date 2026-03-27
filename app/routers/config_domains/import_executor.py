@@ -297,14 +297,12 @@ async def execute_import_payload(
                 strategy_data.strategy_type,
             ),
             failover_recovery_enabled=strategy_data.failover_recovery_enabled,
+            failover_status_codes=strategy_data.failover_status_codes,
             failover_cooldown_seconds=strategy_data.failover_cooldown_seconds,
             failover_failure_threshold=strategy_data.failover_failure_threshold,
             failover_backoff_multiplier=strategy_data.failover_backoff_multiplier,
             failover_max_cooldown_seconds=strategy_data.failover_max_cooldown_seconds,
             failover_jitter_ratio=strategy_data.failover_jitter_ratio,
-            failover_auth_error_cooldown_seconds=(
-                strategy_data.failover_auth_error_cooldown_seconds
-            ),
             failover_ban_mode=failover_ban_mode,
             failover_max_cooldown_strikes_before_ban=(
                 failover_max_cooldown_strikes_before_ban

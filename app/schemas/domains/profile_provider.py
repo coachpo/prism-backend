@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+from .common import ApiFamily
 
 
 class ProfileBase(BaseModel):
@@ -62,7 +65,24 @@ class VendorResponse(VendorBase):
     updated_at: datetime
 
 
+class VendorModelUsageItem(BaseModel):
+    model_config_id: int
+    profile_id: int
+    profile_name: str
+    model_id: str
+    display_name: str | None
+    model_type: Literal["native", "proxy"]
+    api_family: ApiFamily
+    is_enabled: bool
+
+
+class VendorDeleteConflictDetail(BaseModel):
+    message: str
+    models: list[VendorModelUsageItem]
+
+
 __all__ = [
+    "VendorDeleteConflictDetail",
     "ProfileActivateRequest",
     "ProfileBase",
     "ProfileCreate",
@@ -70,6 +90,7 @@ __all__ = [
     "ProfileUpdate",
     "VendorBase",
     "VendorCreate",
+    "VendorModelUsageItem",
     "VendorResponse",
     "VendorUpdate",
 ]

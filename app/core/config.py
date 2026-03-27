@@ -25,7 +25,6 @@ class Settings(BaseSettings):
     failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
     failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    failover_auth_error_cooldown_seconds: int = Field(default=1800, ge=1, le=86_400)
     auth_jwt_secret: str = "prism-dev-jwt-secret-change-me-2026"
     secret_encryption_key: str = "prism-dev-encryption-key-change-me"
     auth_access_token_ttl_seconds: int = Field(default=900, ge=60, le=86_400)

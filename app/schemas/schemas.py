@@ -96,6 +96,8 @@ from app.schemas.domains.core import (
     ProfileUpdate,
     VendorBase,
     VendorCreate,
+    VendorDeleteConflictDetail,
+    VendorModelUsageItem,
     VendorResponse,
     VendorUpdate,
 )
@@ -237,6 +239,8 @@ __all__ = [
     "ProfileUpdate",
     "VendorBase",
     "VendorCreate",
+    "VendorDeleteConflictDetail",
+    "VendorModelUsageItem",
     "VendorResponse",
     "VendorUpdate",
     "ProxyApiKeyCreate",

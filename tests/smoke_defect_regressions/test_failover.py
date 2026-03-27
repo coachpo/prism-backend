@@ -106,7 +106,7 @@ class TestLoadbalanceStrategyFieldValidation:
             failover_backoff_multiplier=3.5,
             failover_max_cooldown_seconds=720,
             failover_jitter_ratio=0.35,
-            failover_auth_error_cooldown_seconds=2400,
+            failover_status_codes=[503, 429],
             failover_ban_mode="temporary",
             failover_max_cooldown_strikes_before_ban=3,
             failover_ban_duration_seconds=600,
@@ -119,12 +119,55 @@ class TestLoadbalanceStrategyFieldValidation:
         assert exported["failover_backoff_multiplier"] == 3.5
         assert exported["failover_max_cooldown_seconds"] == 720
         assert exported["failover_jitter_ratio"] == 0.35
-        assert exported["failover_auth_error_cooldown_seconds"] == 2400
+        assert exported["failover_status_codes"] == [429, 503]
         assert exported["failover_ban_mode"] == "temporary"
         assert exported["failover_max_cooldown_strikes_before_ban"] == 3
         assert exported["failover_ban_duration_seconds"] == 600
 
-    def test_config_export_version_6_allows_fill_first_strategy(self):
+    def test_strategy_contract_accepts_sorted_unique_failover_status_codes(self):
+        from app.schemas.schemas import LoadbalanceStrategyCreate
+
+        strategy = LoadbalanceStrategyCreate(
+            name="failover-primary",
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            failover_status_codes=[503, 429],
+        )
+
+        assert strategy.failover_status_codes == [429, 503]
+
+    def test_strategy_contract_rejects_out_of_range_failover_status_codes(self):
+        from app.schemas.schemas import LoadbalanceStrategyCreate
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            LoadbalanceStrategyCreate(
+                name="failover-primary",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_status_codes=[99, 503],
+            )
+
+        assert "failover_status_codes" in str(exc_info.value)
+
+    def test_strategy_contract_rejects_legacy_auth_cooldown_field(self):
+        from app.schemas.schemas import LoadbalanceStrategyCreate
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError) as exc_info:
+            LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "failover-primary",
+                    "strategy_type": "failover",
+                    "failover_recovery_enabled": True,
+                    "failover_status_codes": [429, 503],
+                    "failover_auth_error_cooldown_seconds": 2400,
+                }
+            )
+
+        assert "failover_auth_error_cooldown_seconds" in str(exc_info.value)
+
+    def test_config_export_version_7_allows_fill_first_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -156,7 +199,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
+                    failover_status_codes=[503, 429],
                     failover_ban_mode="temporary",
                     failover_max_cooldown_strikes_before_ban=3,
                     failover_ban_duration_seconds=600,
@@ -167,13 +210,13 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 6
+        assert exported["version"] == 7
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "fill-first"
         assert (
             exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
         )
 
-    def test_config_export_version_6_allows_round_robin_strategy(self):
+    def test_config_export_version_7_allows_round_robin_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -205,7 +248,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
+                    failover_status_codes=[503, 429],
                     failover_ban_mode="temporary",
                     failover_max_cooldown_strikes_before_ban=3,
                     failover_ban_duration_seconds=600,
@@ -216,7 +259,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 6
+        assert exported["version"] == 7
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "round-robin"
         assert (
             exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
@@ -227,7 +270,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [],
                 "endpoints": [],
                 "pricing_templates": [],
@@ -239,55 +282,52 @@ class TestLoadbalanceStrategyFieldValidation:
         assert validation.loadbalance_strategies == []
         assert validation.models == []
 
-    def test_config_import_accepts_legacy_strategy_without_failover_policy_fields(self):
+    def test_config_import_requires_explicit_failover_status_codes_under_version_7(
+        self,
+    ):
         from app.schemas.schemas import ConfigImportRequest
+        from pydantic import ValidationError
 
-        validation = ConfigImportRequest.model_validate(
-            {
-                "version": 6,
-                "vendors": [
-                    {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
-                    {
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
-                    }
-                ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
-                    {
-                        "name": "failover-primary",
-                        "strategy_type": "failover",
-                        "failover_recovery_enabled": True,
-                    }
-                ],
-                "models": [
-                    {
-                        "vendor_key": "openai",
-                        "api_family": "openai",
-                        "model_id": "gpt-4o",
-                        "model_type": "native",
-                        "loadbalance_strategy_name": "failover-primary",
-                        "connections": [{"endpoint_name": "openai-main"}],
-                    }
-                ],
-            }
-        )
-
-        strategy = validation.loadbalance_strategies[0]
-        assert strategy.name == "failover-primary"
-        assert strategy.failover_recovery_enabled is True
-        assert strategy.failover_ban_mode == "off"
-        assert strategy.failover_max_cooldown_strikes_before_ban == 0
-        assert strategy.failover_ban_duration_seconds == 0
+        with pytest.raises(ValidationError):
+            ConfigImportRequest.model_validate(
+                {
+                    "version": 7,
+                    "vendors": [
+                        {
+                            "key": "openai",
+                            "name": "OpenAI",
+                            "description": None,
+                            "audit_enabled": False,
+                            "audit_capture_bodies": True,
+                        }
+                    ],
+                    "endpoints": [
+                        {
+                            "name": "openai-main",
+                            "base_url": "https://api.openai.com",
+                            "api_key": "sk-test",
+                        }
+                    ],
+                    "pricing_templates": [],
+                    "loadbalance_strategies": [
+                        {
+                            "name": "failover-primary",
+                            "strategy_type": "failover",
+                            "failover_recovery_enabled": True,
+                        }
+                    ],
+                    "models": [
+                        {
+                            "vendor_key": "openai",
+                            "api_family": "openai",
+                            "model_id": "gpt-4o",
+                            "model_type": "native",
+                            "loadbalance_strategy_name": "failover-primary",
+                            "connections": [{"endpoint_name": "openai-main"}],
+                        }
+                    ],
+                }
+            )
 
     def test_config_import_rejects_native_model_missing_strategy_name(self):
         from app.routers.config import _validate_import
@@ -295,7 +335,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openai",
@@ -345,7 +385,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openai",
@@ -369,6 +409,7 @@ class TestLoadbalanceStrategyFieldValidation:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
@@ -444,7 +485,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
+                    failover_status_codes=[503, 429],
                     failover_ban_mode="off",
                     failover_max_cooldown_strikes_before_ban=0,
                     failover_ban_duration_seconds=0,
@@ -482,7 +523,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert strategy.failover_backoff_multiplier == 3.5
         assert strategy.failover_max_cooldown_seconds == 720
         assert strategy.failover_jitter_ratio == 0.35
-        assert strategy.failover_auth_error_cooldown_seconds == 2400
+        assert strategy.failover_status_codes == [429, 503]
         assert strategy.failover_ban_mode == "off"
         assert strategy.failover_max_cooldown_strikes_before_ban == 0
         assert strategy.failover_ban_duration_seconds == 0

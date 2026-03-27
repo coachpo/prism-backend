@@ -76,9 +76,6 @@ def _compute_base_cooldown(
     consecutive_failures: int,
     failure_kind: FailureKind,
 ) -> float:
-    if failure_kind == "auth_like":
-        return float(policy.failover_auth_error_cooldown_seconds)
-
     if consecutive_failures < policy.failover_failure_threshold:
         return 0.0
 

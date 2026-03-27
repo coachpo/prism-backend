@@ -14,12 +14,12 @@ StrategyType: TypeAlias = Literal["single", "fill-first", "round-robin", "failov
 class EffectiveLoadbalancePolicy:
     strategy_type: StrategyType
     failover_recovery_enabled: bool
+    failover_status_codes: tuple[int, ...]
     failover_cooldown_seconds: float
     failover_failure_threshold: int
     failover_backoff_multiplier: float
     failover_max_cooldown_seconds: int
     failover_jitter_ratio: float
-    failover_auth_error_cooldown_seconds: int
     failover_ban_mode: BanMode
     failover_max_cooldown_strikes_before_ban: int
     failover_ban_duration_seconds: int
@@ -59,6 +59,34 @@ def _resolve_ban_mode(value: object, *, default: BanMode) -> BanMode:
     if value == "manual":
         return "manual"
     return default
+
+
+def normalize_failover_status_codes(value: object) -> tuple[int, ...]:
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        raise ValueError("failover_status_codes must be a list of HTTP status codes")
+
+    items = list(value)
+    normalized: set[int] = set()
+    for item in items:
+        if not isinstance(item, int) or isinstance(item, bool):
+            raise ValueError("failover_status_codes must contain integers only")
+        if item < 100 or item > 599:
+            raise ValueError(
+                "failover_status_codes must contain valid HTTP status codes"
+            )
+        normalized.add(item)
+
+    if len(normalized) != len(items):
+        raise ValueError("failover_status_codes must not contain duplicates")
+
+    if not normalized:
+        raise ValueError("failover_status_codes must contain at least one status code")
+
+    return tuple(sorted(normalized))
+
+
+def _resolve_status_codes(value: object) -> tuple[int, ...]:
+    return normalize_failover_status_codes(value)
 
 
 def validate_strategy_ban_policy(
@@ -151,6 +179,9 @@ def resolve_effective_loadbalance_policy(
     return EffectiveLoadbalancePolicy(
         strategy_type=strategy_type,
         failover_recovery_enabled=failover_recovery_enabled,
+        failover_status_codes=_resolve_status_codes(
+            getattr(strategy, "failover_status_codes", None)
+        ),
         failover_cooldown_seconds=_resolve_float(
             getattr(strategy, "failover_cooldown_seconds", None),
             default=float(settings.failover_cooldown_seconds),
@@ -171,10 +202,6 @@ def resolve_effective_loadbalance_policy(
             getattr(strategy, "failover_jitter_ratio", None),
             default=settings.failover_jitter_ratio,
         ),
-        failover_auth_error_cooldown_seconds=_resolve_int(
-            getattr(strategy, "failover_auth_error_cooldown_seconds", None),
-            default=settings.failover_auth_error_cooldown_seconds,
-        ),
         failover_ban_mode=normalized_ban_policy[0],
         failover_max_cooldown_strikes_before_ban=normalized_ban_policy[1],
         failover_ban_duration_seconds=normalized_ban_policy[2],
@@ -184,6 +211,7 @@ def resolve_effective_loadbalance_policy(
 __all__ = [
     "BanMode",
     "EffectiveLoadbalancePolicy",
+    "normalize_failover_status_codes",
     "normalize_strategy_ban_policy",
     "resolve_effective_loadbalance_policy",
     "StrategyType",

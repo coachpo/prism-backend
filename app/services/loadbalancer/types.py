@@ -5,7 +5,7 @@ from typing import Literal, TypedDict
 from app.models.models import Connection
 from app.services.loadbalancer.policy import BanMode
 
-FailureKind = Literal["transient_http", "auth_like", "connect_error", "timeout"]
+FailureKind = Literal["transient_http", "connect_error", "timeout"]
 
 
 class RecoveryStateEntry(TypedDict):

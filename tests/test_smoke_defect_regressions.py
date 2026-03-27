@@ -58,6 +58,8 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF077_ThroughputRPMContract,
     TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence,
     TestDEF080_VendorApiFamilySchemaSplit,
+    TestDEF084_VendorDeleteSafety,
+    TestDEF085_LoadbalanceStrategyPresetSeed,
 )
 
 __all__ = [
@@ -108,6 +110,8 @@ __all__ = [
     "TestDEF077_ThroughputRPMContract",
     "TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence",
     "TestDEF080_VendorApiFamilySchemaSplit",
+    "TestDEF084_VendorDeleteSafety",
+    "TestDEF085_LoadbalanceStrategyPresetSeed",
     "TestDEF081_GeminiNestedProviderCorrelationExtraction",
     "TestEndpointOwnerRoute",
     "TestLoadbalanceStrategyFieldValidation",

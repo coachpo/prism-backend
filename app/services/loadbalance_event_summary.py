@@ -10,7 +10,6 @@ class LoadbalanceEventSummaryPayload(TypedDict):
 
 _FAILURE_KIND_LABELS: dict[str, str] = {
     "transient_http": "transient HTTP failure",
-    "auth_like": "authentication-like failure",
     "connect_error": "connection error",
     "timeout": "timeout",
 }
@@ -66,13 +65,10 @@ def describe_loadbalance_event(
         }
 
     if event_type == "opened":
-        if failure_kind == "auth_like":
-            reason = "An authentication-like failure triggered the dedicated recovery cooldown."
-        else:
-            reason = (
-                f"The {failure_label} raised the streak to {consecutive_failures} consecutive failures, "
-                f"meeting {threshold_label}."
-            )
+        reason = (
+            f"The {failure_label} raised the streak to {consecutive_failures} consecutive failures, "
+            f"meeting {threshold_label}."
+        )
         return {
             "event": "Connection entered cooldown",
             "reason": reason,
@@ -84,13 +80,10 @@ def describe_loadbalance_event(
         }
 
     if event_type == "extended":
-        if failure_kind == "auth_like":
-            reason = "Another authentication-like failure happened while the connection was already blocked."
-        else:
-            reason = (
-                f"Another {failure_label} happened before the active cooldown finished, and the streak is now "
-                f"{consecutive_failures} consecutive failures."
-            )
+        reason = (
+            f"Another {failure_label} happened before the active cooldown finished, and the streak is now "
+            f"{consecutive_failures} consecutive failures."
+        )
         return {
             "event": "Cooldown was extended",
             "reason": reason,

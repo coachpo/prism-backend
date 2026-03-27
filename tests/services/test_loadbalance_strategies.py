@@ -21,7 +21,10 @@ from app.routers.loadbalance import (
     update_strategy,
 )
 from app.schemas.schemas import LoadbalanceStrategyCreate, LoadbalanceStrategyUpdate
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import (
+    DEFAULT_FAILOVER_STATUS_CODES,
+    make_loadbalance_strategy,
+)
 
 
 def _vendor_key_for_api_family(api_family: str) -> str:
@@ -64,12 +67,12 @@ class TestLoadbalanceStrategies:
                     name="failover-primary",
                     strategy_type="failover",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[503, 429],
                     failover_cooldown_seconds=45,
                     failover_failure_threshold=4,
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
                     failover_ban_mode="temporary",
                     failover_max_cooldown_strikes_before_ban=3,
                     failover_ban_duration_seconds=600,
@@ -87,7 +90,7 @@ class TestLoadbalanceStrategies:
             assert created.failover_backoff_multiplier == pytest.approx(3.5)
             assert created.failover_max_cooldown_seconds == 720
             assert created.failover_jitter_ratio == pytest.approx(0.35)
-            assert created.failover_auth_error_cooldown_seconds == 2400
+            assert created.failover_status_codes == [429, 503]
             assert created.failover_ban_mode == "temporary"
             assert created.failover_max_cooldown_strikes_before_ban == 3
             assert created.failover_ban_duration_seconds == 600
@@ -100,7 +103,7 @@ class TestLoadbalanceStrategies:
             assert listed[0].failover_backoff_multiplier == pytest.approx(3.5)
             assert listed[0].failover_max_cooldown_seconds == 720
             assert listed[0].failover_jitter_ratio == pytest.approx(0.35)
-            assert listed[0].failover_auth_error_cooldown_seconds == 2400
+            assert listed[0].failover_status_codes == [429, 503]
             assert listed[0].failover_ban_mode == "temporary"
             assert listed[0].failover_max_cooldown_strikes_before_ban == 3
             assert listed[0].failover_ban_duration_seconds == 600
@@ -111,12 +114,12 @@ class TestLoadbalanceStrategies:
                     name="failover-secondary",
                     strategy_type="failover",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[403, 429, 503],
                     failover_cooldown_seconds=90,
                     failover_failure_threshold=5,
                     failover_backoff_multiplier=4.0,
                     failover_max_cooldown_seconds=1440,
                     failover_jitter_ratio=0.5,
-                    failover_auth_error_cooldown_seconds=3600,
                     failover_ban_mode="manual",
                     failover_max_cooldown_strikes_before_ban=2,
                     failover_ban_duration_seconds=0,
@@ -134,7 +137,7 @@ class TestLoadbalanceStrategies:
             assert updated.failover_backoff_multiplier == pytest.approx(4.0)
             assert updated.failover_max_cooldown_seconds == 1440
             assert updated.failover_jitter_ratio == pytest.approx(0.5)
-            assert updated.failover_auth_error_cooldown_seconds == 3600
+            assert updated.failover_status_codes == [403, 429, 503]
             assert updated.failover_ban_mode == "manual"
             assert updated.failover_max_cooldown_strikes_before_ban == 2
             assert updated.failover_ban_duration_seconds == 0
@@ -164,12 +167,12 @@ class TestLoadbalanceStrategies:
                     name="fill-first-primary",
                     strategy_type="fill-first",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[503, 429],
                     failover_cooldown_seconds=45,
                     failover_failure_threshold=4,
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
                     failover_ban_mode="temporary",
                     failover_max_cooldown_strikes_before_ban=3,
                     failover_ban_duration_seconds=600,
@@ -187,7 +190,7 @@ class TestLoadbalanceStrategies:
             assert created.failover_backoff_multiplier == pytest.approx(3.5)
             assert created.failover_max_cooldown_seconds == 720
             assert created.failover_jitter_ratio == pytest.approx(0.35)
-            assert created.failover_auth_error_cooldown_seconds == 2400
+            assert created.failover_status_codes == [429, 503]
             assert created.failover_ban_mode == "temporary"
             assert created.failover_max_cooldown_strikes_before_ban == 3
             assert created.failover_ban_duration_seconds == 600
@@ -204,12 +207,12 @@ class TestLoadbalanceStrategies:
                     name="fill-first-secondary",
                     strategy_type="fill-first",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[529, 503],
                     failover_cooldown_seconds=90,
                     failover_failure_threshold=5,
                     failover_backoff_multiplier=4.0,
                     failover_max_cooldown_seconds=1440,
                     failover_jitter_ratio=0.5,
-                    failover_auth_error_cooldown_seconds=3600,
                     failover_ban_mode="manual",
                     failover_max_cooldown_strikes_before_ban=2,
                     failover_ban_duration_seconds=0,
@@ -227,7 +230,7 @@ class TestLoadbalanceStrategies:
             assert updated.failover_backoff_multiplier == pytest.approx(4.0)
             assert updated.failover_max_cooldown_seconds == 1440
             assert updated.failover_jitter_ratio == pytest.approx(0.5)
-            assert updated.failover_auth_error_cooldown_seconds == 3600
+            assert updated.failover_status_codes == [503, 529]
             assert updated.failover_ban_mode == "manual"
             assert updated.failover_max_cooldown_strikes_before_ban == 2
             assert updated.failover_ban_duration_seconds == 0
@@ -248,12 +251,12 @@ class TestLoadbalanceStrategies:
                     name="round-robin-primary",
                     strategy_type="round-robin",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[503, 429],
                     failover_cooldown_seconds=45,
                     failover_failure_threshold=4,
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
                     failover_ban_mode="temporary",
                     failover_max_cooldown_strikes_before_ban=3,
                     failover_ban_duration_seconds=600,
@@ -279,12 +282,12 @@ class TestLoadbalanceStrategies:
                     name="round-robin-secondary",
                     strategy_type="round-robin",
                     failover_recovery_enabled=True,
+                    failover_status_codes=[529, 503],
                     failover_cooldown_seconds=90,
                     failover_failure_threshold=5,
                     failover_backoff_multiplier=4.0,
                     failover_max_cooldown_seconds=1440,
                     failover_jitter_ratio=0.5,
-                    failover_auth_error_cooldown_seconds=3600,
                     failover_ban_mode="manual",
                     failover_max_cooldown_strikes_before_ban=2,
                     failover_ban_duration_seconds=0,
@@ -312,12 +315,12 @@ class TestLoadbalanceStrategies:
             name="fill-first-with-recovery",
             strategy_type="fill-first",
             failover_recovery_enabled=True,
+            failover_status_codes=[503, 429],
             failover_cooldown_seconds=45,
             failover_failure_threshold=4,
             failover_backoff_multiplier=3.5,
             failover_max_cooldown_seconds=720,
             failover_jitter_ratio=0.35,
-            failover_auth_error_cooldown_seconds=2400,
             failover_ban_mode="temporary",
             failover_max_cooldown_strikes_before_ban=3,
             failover_ban_duration_seconds=600,
@@ -325,9 +328,48 @@ class TestLoadbalanceStrategies:
 
         assert created.strategy_type == "fill-first"
         assert created.failover_recovery_enabled is True
+        assert created.failover_status_codes == [429, 503]
         assert created.failover_ban_mode == "temporary"
         assert created.failover_max_cooldown_strikes_before_ban == 3
         assert created.failover_ban_duration_seconds == 600
+
+    def test_strategy_contract_sorts_status_codes_and_rejects_invalid_lists(self):
+        created = LoadbalanceStrategyCreate(
+            name="failover-status-codes",
+            strategy_type="failover",
+            failover_recovery_enabled=True,
+            failover_status_codes=[503, 429, 504],
+        )
+
+        assert created.failover_status_codes == [429, 503, 504]
+
+        with pytest.raises(ValidationError):
+            LoadbalanceStrategyCreate(
+                name="duplicate-status-codes",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_status_codes=[429, 429],
+            )
+
+        with pytest.raises(ValidationError):
+            LoadbalanceStrategyCreate(
+                name="out-of-range-status-codes",
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_status_codes=[99, 429],
+            )
+
+    def test_strategy_contract_rejects_removed_auth_cooldown_field(self):
+        with pytest.raises(ValidationError):
+            LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "removed-auth-cooldown",
+                    "strategy_type": "failover",
+                    "failover_recovery_enabled": True,
+                    "failover_status_codes": DEFAULT_FAILOVER_STATUS_CODES,
+                    "failover_auth_error_cooldown_seconds": 2400,
+                }
+            )
 
     @pytest.mark.asyncio
     async def test_delete_strategy_rejects_attached_models(self):

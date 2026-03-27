@@ -72,8 +72,14 @@ def make_failover_policy(**overrides):
         failover_jitter_ratio=float(
             cast(float | int, overrides.get("failover_jitter_ratio", 0.2))
         ),
-        failover_auth_error_cooldown_seconds=cast(
-            int, overrides.get("failover_auth_error_cooldown_seconds", 1800)
+        failover_status_codes=tuple(
+            cast(
+                list[int],
+                overrides.get(
+                    "failover_status_codes",
+                    [403, 422, 429, 500, 502, 503, 504, 529],
+                ),
+            )
         ),
         failover_ban_mode=cast(
             Literal["off", "temporary", "manual"],

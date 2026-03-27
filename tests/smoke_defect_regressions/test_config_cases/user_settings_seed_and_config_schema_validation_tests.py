@@ -200,10 +200,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
-    def test_config_export_schema_defaults_to_version_6(self):
+    def test_config_export_schema_defaults_to_version_7(self):
         from app.schemas.schemas import ConfigExportResponse
 
-        assert ConfigExportResponse.model_fields["version"].default == 6
+        assert ConfigExportResponse.model_fields["version"].default == 7
 
     def test_export_schema_includes_top_level_vendors_field(self):
         from app.schemas.schemas import ConfigExportResponse
@@ -250,7 +250,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "failover_backoff_multiplier",
             "failover_max_cooldown_seconds",
             "failover_jitter_ratio",
-            "failover_auth_error_cooldown_seconds",
+            "failover_status_codes",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -340,7 +340,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     failover_backoff_multiplier=3.5,
                     failover_max_cooldown_seconds=720,
                     failover_jitter_ratio=0.35,
-                    failover_auth_error_cooldown_seconds=2400,
+                    failover_status_codes=[503, 429],
                 )
             ],
             models=[
@@ -380,7 +380,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert strategy.failover_backoff_multiplier == 3.5
         assert strategy.failover_max_cooldown_seconds == 720
         assert strategy.failover_jitter_ratio == 0.35
-        assert strategy.failover_auth_error_cooldown_seconds == 2400
+        assert strategy.failover_status_codes == [429, 503]
         assert len(m.connections) == 1
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}
@@ -389,12 +389,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert connection.endpoint_name == "openai-main"
         assert reimported.vendors[0].key == "openai"
 
-    def test_version_6_import_schema_accepts_fill_first_strategy(self):
+    def test_version_7_import_schema_accepts_fill_first_strategy(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openai",
@@ -422,7 +422,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         "failover_backoff_multiplier": 3.5,
                         "failover_max_cooldown_seconds": 720,
                         "failover_jitter_ratio": 0.35,
-                        "failover_auth_error_cooldown_seconds": 2400,
+                        "failover_status_codes": [503, 429],
                         "failover_ban_mode": "temporary",
                         "failover_max_cooldown_strikes_before_ban": 3,
                         "failover_ban_duration_seconds": 600,
@@ -449,13 +449,13 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert strategy.failover_ban_duration_seconds == 600
 
     @pytest.mark.asyncio
-    async def test_import_route_rejects_legacy_version_5_payloads(self):
+    async def test_import_route_rejects_legacy_version_6_payloads(self):
         from app.routers.config import import_config
         from app.schemas.schemas import ConfigImportRequest
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 5,
+                "version": 6,
                 "vendors": [
                     {
                         "key": "openai",
@@ -478,6 +478,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
@@ -493,7 +494,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             }
         )
 
-        with pytest.raises(HTTPException, match="version=6"):
+        with pytest.raises(HTTPException, match="version=7"):
             await import_config(data=payload, db=AsyncMock(), profile_id=1)
 
 
@@ -505,7 +506,7 @@ class TestDEF023_ConfigImportReferenceValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 6,
+                    "version": 7,
                     "vendors": [
                         {
                             "key": "openai",
@@ -530,6 +531,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                             "name": "single-primary",
                             "strategy_type": "single",
                             "failover_recovery_enabled": False,
+                            "failover_status_codes": [429, 503],
                         }
                     ],
                     "models": [
@@ -568,7 +570,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openai",
@@ -591,6 +593,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
@@ -630,7 +633,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 7,
                 "vendors": [
                     {
                         "key": "openai",
@@ -653,6 +656,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [

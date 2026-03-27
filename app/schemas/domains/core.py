@@ -54,6 +54,8 @@ from .profile_provider import (
     ProfileUpdate,
     VendorBase,
     VendorCreate,
+    VendorDeleteConflictDetail,
+    VendorModelUsageItem,
     VendorResponse,
     VendorUpdate,
 )
@@ -105,6 +107,8 @@ __all__ = [
     "ProfileUpdate",
     "VendorBase",
     "VendorCreate",
+    "VendorDeleteConflictDetail",
+    "VendorModelUsageItem",
     "VendorResponse",
     "VendorUpdate",
     "_CURRENCY_CODE_RE",

@@ -13,10 +13,12 @@ from app.models.models import (
     AppAuthSettings,
     Endpoint,
     HeaderBlocklistRule,
+    LoadbalanceStrategy,
     Profile,
-    Vendor,
     UserSetting,
+    Vendor,
 )
+from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
@@ -81,6 +83,8 @@ SYSTEM_BLOCKLIST_DEFAULTS: list[dict[str, str]] = [
     },
 ]
 
+DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
+
 
 async def seed_vendors() -> None:
     async with database_core.AsyncSessionLocal() as session:
@@ -108,6 +112,59 @@ async def seed_profile_invariants() -> None:
         await ensure_profile_invariants(session)
         await session.commit()
         logger.info("Ensured default profile invariants")
+
+
+async def seed_loadbalance_strategy_preset() -> None:
+    settings = get_settings()
+
+    async with database_core.AsyncSessionLocal() as session:
+        default_profile = (
+            await session.execute(
+                select(Profile)
+                .where(Profile.is_default.is_(True), Profile.deleted_at.is_(None))
+                .order_by(Profile.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if default_profile is None:
+            return
+
+        existing = (
+            await session.execute(
+                select(LoadbalanceStrategy)
+                .where(
+                    LoadbalanceStrategy.profile_id == default_profile.id,
+                    LoadbalanceStrategy.name
+                    == DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return
+
+        session.add(
+            LoadbalanceStrategy(
+                profile_id=default_profile.id,
+                name=DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
+                strategy_type="failover",
+                failover_recovery_enabled=True,
+                failover_status_codes=list(DEFAULT_FAILOVER_STATUS_CODES),
+                failover_cooldown_seconds=settings.failover_cooldown_seconds,
+                failover_failure_threshold=settings.failover_failure_threshold,
+                failover_backoff_multiplier=settings.failover_backoff_multiplier,
+                failover_max_cooldown_seconds=settings.failover_max_cooldown_seconds,
+                failover_jitter_ratio=settings.failover_jitter_ratio,
+                failover_ban_mode="off",
+                failover_max_cooldown_strikes_before_ban=0,
+                failover_ban_duration_seconds=0,
+            )
+        )
+        await session.commit()
+        logger.info(
+            "Seeded default loadbalance strategy preset for profile %d",
+            default_profile.id,
+        )
 
 
 async def seed_header_blocklist_rules() -> None:
@@ -237,6 +294,7 @@ async def run_startup_sequence() -> None:
     await run_startup_migrations()
     await seed_vendors()
     await seed_profile_invariants()
+    await seed_loadbalance_strategy_preset()
     await seed_user_settings()
     await seed_app_auth_settings()
     await encrypt_endpoint_secrets()
@@ -259,6 +317,7 @@ def build_http_client() -> httpx.AsyncClient:
 
 __all__ = [
     "DEFAULT_VENDORS",
+    "DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME",
     "SKIP_STARTUP_SEQUENCE_ENV",
     "SYSTEM_BLOCKLIST_DEFAULTS",
     "build_http_client",
@@ -267,6 +326,7 @@ __all__ = [
     "run_startup_sequence",
     "seed_app_auth_settings",
     "seed_header_blocklist_rules",
+    "seed_loadbalance_strategy_preset",
     "seed_profile_invariants",
     "seed_vendors",
     "seed_user_settings",
