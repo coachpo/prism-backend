@@ -9,6 +9,7 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from app.core.config import get_settings
 from app.core.database import Base
 from app.models import models  # noqa: F401
 
@@ -21,6 +22,11 @@ if config.config_file_name is not None and config.get_section("formatters") is n
 
 if config.get_main_option("script_location") == "":
     config.set_main_option("script_location", str(Path(__file__).resolve().parent))
+
+if not config.get_main_option("sqlalchemy.url"):
+    database_url = get_settings().database_url
+    if database_url:
+        config.set_main_option("sqlalchemy.url", database_url)
 
 target_metadata = Base.metadata
 

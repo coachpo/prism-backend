@@ -105,6 +105,7 @@ class Vendor(Base):
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    icon_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     audit_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     audit_capture_bodies: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False

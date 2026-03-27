@@ -30,16 +30,19 @@ DEFAULT_VENDORS = [
         "key": "openai",
         "name": "OpenAI",
         "description": "OpenAI API (GPT models)",
+        "icon_key": "openai",
     },
     {
         "key": "anthropic",
         "name": "Anthropic",
         "description": "Anthropic API (Claude models)",
+        "icon_key": "anthropic",
     },
     {
         "key": "google",
         "name": "Google",
         "description": "Google Gemini API",
+        "icon_key": "google",
     },
 ]
 

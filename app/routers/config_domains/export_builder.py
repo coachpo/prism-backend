@@ -187,6 +187,7 @@ async def build_export_payload(
             key=vendor.key,
             name=vendor.name,
             description=vendor.description,
+            icon_key=vendor.icon_key,
             audit_enabled=vendor.audit_enabled,
             audit_capture_bodies=vendor.audit_capture_bodies,
         )
@@ -315,7 +316,7 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=7,
+        version=8,
         exported_at=utc_now(),
         vendors=exported_vendors,
         endpoints=exported_endpoints,

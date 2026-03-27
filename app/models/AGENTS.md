@@ -17,7 +17,7 @@ models/
 
 ### IDENTITY
 - `Profile`: Multi-profile scope container; owns `is_active` and `is_default` flags.
-- `Vendor`: Global CRUD-managed publisher metadata, shared across profiles, with vendor keys and display data.
+- `Vendor`: Global CRUD-managed publisher metadata, shared across profiles, with vendor keys, optional persisted `icon_key`, and display data.
 - `AppAuthSettings`: Singleton operator auth state, username/email, and token version.
 - `PasswordResetChallenge`: One-time password reset challenge rows, expiry, consumption, and attempt tracking.
 - `RefreshToken`: Session persistence with rotation and revocation.
@@ -25,7 +25,7 @@ models/
 - `WebAuthnChallenge` & `WebAuthnCredential`: Passkey lifecycle and device metadata.
 
 ### ROUTING
-- `ModelConfig`: Per-profile model settings that require both `vendor_id` and fixed `api_family`, plus attached loadbalance strategy selection for native models and ordered proxy-target routing for proxy models.
+- `ModelConfig`: Per-profile model settings that require both `vendor_id` and fixed `api_family`, plus attached loadbalance strategy selection for native models and ordered proxy-target routing for proxy models. Model rows do not carry vendor icon metadata.
 - `ModelProxyTarget`: Ordered proxy-model target rows that connect one proxy model to one native target model.
 - `LoadbalanceStrategy`: Profile-scoped reusable routing strategy metadata for native model attachment.
 - `Endpoint`: Encrypted upstream base URLs and API keys.

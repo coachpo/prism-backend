@@ -41,6 +41,7 @@ class VendorBase(BaseModel):
     key: str
     name: str
     description: str | None = None
+    icon_key: str | None = None
 
 
 class VendorCreate(VendorBase):
@@ -51,6 +52,7 @@ class VendorUpdate(BaseModel):
     key: str | None = None
     name: str | None = None
     description: str | None = None
+    icon_key: str | None = None
     audit_enabled: bool | None = None
     audit_capture_bodies: bool | None = None
 

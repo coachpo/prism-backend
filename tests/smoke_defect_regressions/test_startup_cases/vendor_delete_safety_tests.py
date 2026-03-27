@@ -73,6 +73,63 @@ async def _create_model(
 
 class TestDEF084_VendorDeleteSafety:
     @pytest.mark.asyncio
+    async def test_vendor_routes_round_trip_icon_key_and_normalize_it(self):
+        await get_engine().dispose()
+        await _reset_auth_state()
+        transport = ASGITransport(app=app)
+        suffix = uuid4().hex[:8]
+
+        try:
+            async with AsyncClient(
+                transport=transport, base_url="http://testserver"
+            ) as client:
+                await _login(client)
+
+                create_response = await client.post(
+                    "/api/vendors",
+                    json={
+                        "key": f"zai-{suffix}",
+                        "name": f"Z.ai {suffix}",
+                        "description": "Z.ai Open Platform",
+                        "icon_key": "  ZHIPU  ",
+                    },
+                )
+
+                assert create_response.status_code == 201
+                created_vendor = create_response.json()
+                assert created_vendor["icon_key"] == "zhipu"
+
+                vendor_id = created_vendor["id"]
+
+                update_response = await client.patch(
+                    f"/api/vendors/{vendor_id}",
+                    json={
+                        "description": " Updated description ",
+                        "icon_key": "   ",
+                    },
+                )
+
+                assert update_response.status_code == 200
+                updated_vendor = update_response.json()
+                assert updated_vendor["description"] == "Updated description"
+                assert updated_vendor["icon_key"] is None
+
+                get_response = await client.get(f"/api/vendors/{vendor_id}")
+                assert get_response.status_code == 200
+                assert get_response.json()["icon_key"] is None
+
+                list_response = await client.get("/api/vendors")
+                assert list_response.status_code == 200
+                listed_vendor = next(
+                    vendor
+                    for vendor in list_response.json()
+                    if vendor["id"] == vendor_id
+                )
+                assert listed_vendor["icon_key"] is None
+        finally:
+            await _cleanup_auth_state()
+
+    @pytest.mark.asyncio
     async def test_unused_vendor_delete_succeeds_with_204(self):
         await get_engine().dispose()
         await _reset_auth_state()

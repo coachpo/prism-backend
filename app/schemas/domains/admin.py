@@ -118,6 +118,7 @@ class ConfigVendorExport(BaseModel):
     key: str
     name: str
     description: str | None = None
+    icon_key: str | None
     audit_enabled: bool = False
     audit_capture_bodies: bool = True
 
@@ -128,6 +129,7 @@ class ConfigVendorImport(BaseModel):
     key: str
     name: str
     description: str | None = None
+    icon_key: str | None
     audit_enabled: bool = False
     audit_capture_bodies: bool = True
 
@@ -145,6 +147,24 @@ class ConfigVendorImport(BaseModel):
         normalized = value.strip()
         if not normalized:
             raise ValueError("name must not be empty")
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def validate_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("icon_key")
+    @classmethod
+    def validate_icon_key(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("icon_key must not be empty")
         return normalized
 
 
@@ -243,7 +263,7 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[7] = 7
+    version: Literal[8] = 8
     exported_at: datetime
     vendors: list[ConfigVendorExport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
@@ -259,7 +279,7 @@ class ConfigExportResponse(BaseModel):
 class ConfigImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[7] = 7
+    version: Literal[8] = 8
     exported_at: datetime | None = None
     vendors: list[ConfigVendorImport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]

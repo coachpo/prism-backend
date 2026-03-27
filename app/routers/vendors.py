@@ -31,6 +31,9 @@ def _normalize_vendor_payload(payload: dict[str, object]) -> dict[str, object]:
     description = normalized.get("description")
     if isinstance(description, str):
         normalized["description"] = description.strip() or None
+    icon_key = normalized.get("icon_key")
+    if isinstance(icon_key, str):
+        normalized["icon_key"] = icon_key.strip().lower() or None
     return normalized
 
 

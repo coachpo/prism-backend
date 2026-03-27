@@ -176,6 +176,7 @@ class TestConfigExportImportIsolation:
                 key="openai",
                 name="OpenAI",
                 description="OpenAI API (GPT models)",
+                icon_key="openai",
                 audit_enabled=False,
                 audit_capture_bodies=True,
             )
@@ -196,12 +197,13 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 7
+        assert payload["version"] == 8
         assert payload["vendors"] == [
             {
                 "key": "openai",
                 "name": "OpenAI",
                 "description": "OpenAI API (GPT models)",
+                "icon_key": "openai",
                 "audit_enabled": False,
                 "audit_capture_bodies": True,
             }
@@ -242,6 +244,9 @@ class TestConfigExportImportIsolation:
         assert exported_proxy["proxy_targets"] == [
             {"target_model_id": "gpt-4", "position": 0}
         ]
+        assert all(
+            "icon_key" not in exported_model for exported_model in payload["models"]
+        )
         assert "redirect_to" not in exported_proxy
         assert "providers" not in payload
 
@@ -304,8 +309,11 @@ class TestConfigExportImportIsolation:
             if openrouter_vendor is None:
                 openrouter_vendor = Vendor(
                     key="openrouter",
-                    name="OpenRouter Legacy",
-                    description="Legacy OpenRouter vendor row",
+                    name="OpenRouter",
+                    description="OpenRouter global catalog entry",
+                    icon_key="openrouter",
+                    audit_enabled=True,
+                    audit_capture_bodies=False,
                 )
                 db.add(openrouter_vendor)
                 await db.flush()
@@ -440,12 +448,13 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 7,
+                "version": 8,
                 "vendors": [
                     {
                         "key": "openrouter",
                         "name": "OpenRouter",
                         "description": "OpenRouter global catalog entry",
+                        "icon_key": "openrouter",
                         "audit_enabled": True,
                         "audit_capture_bodies": False,
                     }
@@ -732,6 +741,7 @@ class TestConfigExportImportIsolation:
         assert len(openrouter_rows) == 1
         assert openrouter_rows[0].id == openrouter_vendor_id
         assert openrouter_rows[0].name == "OpenRouter"
+        assert openrouter_rows[0].icon_key == "openrouter"
         assert openrouter_rows[0].audit_enabled is True
         assert openrouter_rows[0].audit_capture_bodies is False
 
@@ -757,3 +767,230 @@ class TestConfigExportImportIsolation:
 
         assert other_settings.report_currency_code == "EUR"
         assert other_settings.report_currency_symbol == "EUR"
+
+    @pytest.mark.asyncio
+    async def test_import_config_conflicting_global_vendor_key_fails_before_profile_replacement(
+        self,
+    ):
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.routers.config import import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        conflict_vendor_key = f"zai-{suffix}"
+        target_profile_name = f"import-conflict-target-{suffix}"
+        old_target_endpoint_name = f"conflict-target-endpoint-old-{suffix}"
+        old_target_model_id = f"conflict-target-model-old-{suffix}"
+        old_target_connection_name = f"conflict-target-connection-old-{suffix}"
+        old_target_rule_pattern = f"x-conflict-target-old-{suffix}"
+        new_endpoint_name = f"conflict-target-endpoint-new-{suffix}"
+        new_model_id = f"conflict-target-model-new-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            openai_vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if openai_vendor is None:
+                openai_vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
+                )
+                db.add(openai_vendor)
+                await db.flush()
+
+            conflicting_vendor = Vendor(
+                key=conflict_vendor_key,
+                name=f"Legacy Z.ai {suffix}",
+                description="Legacy vendor metadata",
+                icon_key=None,
+                audit_enabled=False,
+                audit_capture_bodies=True,
+            )
+            db.add(conflicting_vendor)
+            await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for conflict import",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(target_profile)
+            await db.flush()
+
+            target_endpoint = Endpoint(
+                profile_id=target_profile.id,
+                name=old_target_endpoint_name,
+                base_url="https://api.openai.com",
+                api_key="sk-target-old",
+                position=0,
+            )
+            db.add(target_endpoint)
+            await db.flush()
+
+            target_model = ModelConfig(
+                profile_id=target_profile.id,
+                vendor_id=openai_vendor.id,
+                api_family="openai",
+                model_id=old_target_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=target_profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            db.add(target_model)
+            await db.flush()
+
+            db.add_all(
+                [
+                    Connection(
+                        profile_id=target_profile.id,
+                        model_config_id=target_model.id,
+                        endpoint_id=target_endpoint.id,
+                        is_active=True,
+                        priority=0,
+                        name=old_target_connection_name,
+                    ),
+                    UserSetting(
+                        profile_id=target_profile.id,
+                        report_currency_code="USD",
+                        report_currency_symbol="$",
+                    ),
+                    HeaderBlocklistRule(
+                        profile_id=target_profile.id,
+                        name=f"conflict-target-rule-old-{suffix}",
+                        match_type="exact",
+                        pattern=old_target_rule_pattern,
+                        enabled=True,
+                        is_system=False,
+                    ),
+                ]
+            )
+            await db.commit()
+
+            target_profile_id = target_profile.id
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 8,
+                "vendors": [
+                    {
+                        "key": conflict_vendor_key,
+                        "name": f"Z.ai {suffix}",
+                        "description": "Z.ai Open Platform",
+                        "icon_key": "zhipu",
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
+                "endpoints": [
+                    {
+                        "name": new_endpoint_name,
+                        "base_url": "https://api.openai.com",
+                        "api_key": "sk-target-new",
+                    }
+                ],
+                "pricing_templates": [],
+                "loadbalance_strategies": [
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "single",
+                        "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
+                    }
+                ],
+                "models": [
+                    {
+                        "vendor_key": conflict_vendor_key,
+                        "api_family": "openai",
+                        "model_id": new_model_id,
+                        "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
+                        "connections": [{"endpoint_name": new_endpoint_name}],
+                    }
+                ],
+                "header_blocklist_rules": [],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await import_config(data=payload, db=db, profile_id=target_profile_id)
+            await db.rollback()
+
+        assert exc_info.value.status_code == 409
+        assert conflict_vendor_key in str(exc_info.value.detail)
+
+        async with AsyncSessionLocal() as db:
+            persisted_vendor = (
+                await db.execute(
+                    select(Vendor).where(Vendor.key == conflict_vendor_key)
+                )
+            ).scalar_one()
+            target_endpoints = (
+                (
+                    await db.execute(
+                        select(Endpoint).where(Endpoint.profile_id == target_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_models = (
+                (
+                    await db.execute(
+                        select(ModelConfig).where(
+                            ModelConfig.profile_id == target_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_connections = (
+                (
+                    await db.execute(
+                        select(Connection).where(
+                            Connection.profile_id == target_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            target_rules = (
+                (
+                    await db.execute(
+                        select(HeaderBlocklistRule).where(
+                            HeaderBlocklistRule.profile_id == target_profile_id,
+                            HeaderBlocklistRule.is_system == False,  # noqa: E712
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert persisted_vendor.name == f"Legacy Z.ai {suffix}"
+        assert persisted_vendor.description == "Legacy vendor metadata"
+        assert persisted_vendor.icon_key is None
+        assert len(target_endpoints) == 1
+        assert target_endpoints[0].name == old_target_endpoint_name
+        assert len(target_models) == 1
+        assert target_models[0].model_id == old_target_model_id
+        assert len(target_connections) == 1
+        assert target_connections[0].name == old_target_connection_name
+        assert len(target_rules) == 1
+        assert target_rules[0].pattern == old_target_rule_pattern

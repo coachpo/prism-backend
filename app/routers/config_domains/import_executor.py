@@ -93,6 +93,75 @@ def _normalize_reference_name(value: str | None) -> str | None:
     return normalized or None
 
 
+def _normalize_optional_text(value: str | None) -> str | None:
+    return _normalize_reference_name(value)
+
+
+def _normalize_icon_key(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
+
+
+def _get_vendor_conflicting_fields(
+    *, existing_vendor: Vendor, imported_vendor
+) -> list[str]:
+    conflicting_fields: list[str] = []
+    if existing_vendor.name != imported_vendor.name:
+        conflicting_fields.append("name")
+    if (
+        _normalize_optional_text(existing_vendor.description)
+        != imported_vendor.description
+    ):
+        conflicting_fields.append("description")
+    if existing_vendor.audit_enabled != imported_vendor.audit_enabled:
+        conflicting_fields.append("audit_enabled")
+    if existing_vendor.audit_capture_bodies != imported_vendor.audit_capture_bodies:
+        conflicting_fields.append("audit_capture_bodies")
+    if _normalize_icon_key(existing_vendor.icon_key) != imported_vendor.icon_key:
+        conflicting_fields.append("icon_key")
+    return conflicting_fields
+
+
+async def _preflight_import_vendors(
+    db: AsyncSession, *, vendor_payloads_by_key: dict[str, Any]
+) -> dict[str, Vendor]:
+    if not vendor_payloads_by_key:
+        return {}
+
+    existing_vendors = (
+        (
+            await db.execute(
+                select(Vendor).where(Vendor.key.in_(vendor_payloads_by_key.keys()))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    existing_vendors_by_key = {vendor.key: vendor for vendor in existing_vendors}
+
+    for vendor_key, imported_vendor in vendor_payloads_by_key.items():
+        existing_vendor = existing_vendors_by_key.get(vendor_key)
+        if existing_vendor is None:
+            continue
+
+        conflicting_fields = _get_vendor_conflicting_fields(
+            existing_vendor=existing_vendor,
+            imported_vendor=imported_vendor,
+        )
+        if conflicting_fields:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Config import vendor '{vendor_key}' conflicts with existing global vendor metadata "
+                    f"for fields: {', '.join(conflicting_fields)}"
+                ),
+            )
+
+    return existing_vendors_by_key
+
+
 def _resolve_endpoint_name(
     *,
     context: str,
@@ -143,9 +212,13 @@ def _resolve_pricing_template_id(
 async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
 ) -> ConfigImportResponse:
-    await clear_profile_state(profile_id)
     await lock_profile_row(db, profile_id=profile_id)
     await _lock_import_target_tables(db)
+    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendors}
+    existing_vendors_by_key = await _preflight_import_vendors(
+        db, vendor_payloads_by_key=vendor_payloads_by_key
+    )
+    await clear_profile_state(profile_id)
     await db.execute(
         delete(EndpointFxRateSetting).where(
             EndpointFxRateSetting.profile_id == profile_id
@@ -168,20 +241,8 @@ async def execute_import_payload(
     )
     await db.flush()
 
-    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendors}
     vendor_map: dict[str, int] = {}
     if vendor_payloads_by_key:
-        existing_vendors = (
-            (
-                await db.execute(
-                    select(Vendor).where(Vendor.key.in_(vendor_payloads_by_key.keys()))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        existing_vendors_by_key = {vendor.key: vendor for vendor in existing_vendors}
-
         for vendor_key, vendor_data in vendor_payloads_by_key.items():
             existing_vendor = existing_vendors_by_key.get(vendor_key)
             if existing_vendor is None:
@@ -189,17 +250,13 @@ async def execute_import_payload(
                     key=vendor_data.key,
                     name=vendor_data.name,
                     description=vendor_data.description,
+                    icon_key=vendor_data.icon_key,
                     audit_enabled=vendor_data.audit_enabled,
                     audit_capture_bodies=vendor_data.audit_capture_bodies,
                 )
                 db.add(existing_vendor)
                 await db.flush()
                 existing_vendors_by_key[vendor_key] = existing_vendor
-            else:
-                existing_vendor.name = vendor_data.name
-                existing_vendor.description = vendor_data.description
-                existing_vendor.audit_enabled = vendor_data.audit_enabled
-                existing_vendor.audit_capture_bodies = vendor_data.audit_capture_bodies
             vendor_map[vendor_key] = existing_vendor.id
 
     endpoint_id_allocator = await _build_id_allocator(db, Endpoint)

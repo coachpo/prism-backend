@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from app.core.database import Base
 
 
@@ -60,8 +62,34 @@ class TestDEF080_VendorApiFamilySchemaSplit:
         assert schema_surface.ApiFamily is ApiFamily
         assert schema_surface.VendorCreate is VendorCreate
         assert schema_surface.VendorResponse is VendorResponse
+        created_vendor = VendorCreate.model_validate(
+            {
+                "key": "zai",
+                "name": "Z.ai",
+                "description": "Z.ai Open Platform",
+                "icon_key": None,
+            }
+        )
+        response_vendor = VendorResponse.model_validate(
+            {
+                "id": 1,
+                "key": "zai",
+                "name": "Z.ai",
+                "description": "Z.ai Open Platform",
+                "icon_key": None,
+                "audit_enabled": False,
+                "audit_capture_bodies": True,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+
         assert "key" in vendor_create_fields
         assert "key" in vendor_response_fields
+        assert "icon_key" in vendor_create_fields
+        assert "icon_key" in vendor_response_fields
+        assert created_vendor.icon_key is None
+        assert response_vendor.icon_key is None
         assert legacy_field not in vendor_create_fields
         assert legacy_field not in vendor_response_fields
         assert not hasattr(schema_surface, legacy_provider_create)

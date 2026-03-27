@@ -32,6 +32,7 @@ schemas/
 ## SCHEMA FACTS
 
 - `schemas.py` currently re-exports a broad explicit surface from `domains/admin.py`, `domains/auth.py`, `domains/core.py`, `domains/stats.py`, and `domains/usage_statistics.py`.
+- Config export/import payloads are version 8, and the admin schemas carry the vendor `icon_key` field on vendor payloads only.
 - Supporting domain files such as `common.py`, `connection_model.py`, `endpoint_pricing.py`, and `profile_provider.py` still live under `domains/`, but the stable router-facing boundary is `schemas.py`.
 - The parent doc covers schema-domain ownership. Don't create new AGENTS docs inside `schemas/domains/` for the current layout.
 - Routers should depend on the re-export boundary, not on scattered leaf-module imports.
