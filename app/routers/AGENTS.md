@@ -32,6 +32,7 @@ routers/
 - `settings_domains/AGENTS.md`: auth-settings, costing/timezone, email-verification, and proxy-key route handlers.
 - `stats_domains/AGENTS.md`: request-log, summary, throughput, spending, and metrics batch helpers.
 - `proxy_domains/AGENTS.md`: runtime proxy setup, attempts, streaming, and reporting.
+- `loadbalance.py`: strategy CRUD plus current-state and event management. Its internals are covered through `../services/loadbalancer/AGENTS.md`.
 
 ## WHERE TO LOOK
 
@@ -41,7 +42,7 @@ routers/
 - Model, pricing template, and profile management: `models.py`, `models_domains/AGENTS.md`, `pricing_templates.py`, `pricing_templates_domains/AGENTS.md`, `profiles.py`, `profiles_domains/AGENTS.md`
 - Settings composition router and subdomains: `settings.py`, `settings_domains/AGENTS.md`
 - Stats request-log, throughput, summary, spending, and metrics batch handlers: `stats.py`, `stats_domains/AGENTS.md`
-- Loadbalance strategy CRUD, current-state reads or resets, and event management: `loadbalance.py`
+- Loadbalance strategy CRUD, current-state reads or resets, and event management: `loadbalance.py`, `../services/loadbalancer/AGENTS.md`
 - Runtime proxy path handling, attempts, streaming, and outcome reporting: `proxy.py`, `proxy_domains/AGENTS.md`
 - Websocket auth, subscribe/unsubscribe flow, and channel validation: `realtime.py`
 - Shared room-state ownership behind realtime: `../services/realtime/connection_manager.py`
@@ -60,6 +61,7 @@ routers/
 - Use `dependencies.py` for effective-profile and active-profile resolution instead of ad hoc header parsing.
 - Keep `config.py` and `settings.py` as composition routers that stitch existing domain modules together.
 - Keep runtime proxy orchestration in `proxy_domains/` and use its leaf doc for that package's internal boundary map.
+- Keep loadbalance orchestration in `../services/loadbalancer/AGENTS.md` and let `loadbalance.py` stay a thin router shell.
 - Keep websocket room state out of routers. `realtime.py` should authenticate and route messages, then hand room state to the connection manager.
 
 ## ANTI-PATTERNS

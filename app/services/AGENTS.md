@@ -10,7 +10,7 @@ services/
 ├── webauthn_service.py                 # Public passkey re-export surface
 ├── stats_service.py                    # Public stats and observability re-export surface
 ├── proxy_service.py                    # Upstream forwarding boundary
-├── loadbalancer/                       # Split planner, state, recovery, events, and admin seams
+├── loadbalancer/                       # Split planner, policy, limiter, state, recovery, events, and admin seams
 ├── audit_service.py                    # Audit persistence and redaction
 ├── costing_service.py                  # Pricing and FX helpers
 ├── background_tasks.py                 # Shared BackgroundTaskManager implementation
@@ -20,7 +20,7 @@ services/
 ├── profile_invariants.py               # Active or default profile enforcement
 ├── user_settings.py                    # Per-profile settings bootstrap and access helpers
 ├── auth/AGENTS.md                      # Session, email, password reset, proxy-key internals
-├── loadbalancer/AGENTS.md              # Split planner, state, recovery, events, and admin seams
+├── loadbalancer/AGENTS.md              # Split planner, policy, limiter, state, recovery, events, and admin seams
 ├── proxy_support/AGENTS.md             # Upstream URL, header, body, transport helpers
 ├── realtime/AGENTS.md                  # Connection manager room state and broadcasts
 ├── stats/AGENTS.md                     # Telemetry, spending, throughput, dashboard helpers
@@ -45,6 +45,7 @@ services/
 - `auth_service.py`, `stats_service.py`, and `webauthn_service.py` are intended public import surfaces over deeper packages.
 - `loadbalance_event_summary.py` is the root helper for human-readable load-balance event labels, reasons, and cooldown text used by load-balance detail responses.
 - Realtime route handlers depend on `services/realtime/connection_manager.py` for connection tracking and room membership instead of owning that state themselves.
+- `services/stats/logging.py` owns request-log side effects and emits `dashboard.update` payloads.
 
 ## CONVENTIONS
 
