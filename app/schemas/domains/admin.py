@@ -46,7 +46,7 @@ class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
 
 class ConfigLoadbalanceStrategyExport(BaseModel):
     name: str
-    strategy_type: Literal["single", "fill-first", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
@@ -63,7 +63,7 @@ class ConfigLoadbalanceStrategyImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    strategy_type: Literal["single", "fill-first", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)

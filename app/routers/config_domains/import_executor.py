@@ -275,7 +275,7 @@ async def execute_import_payload(
             failover_ban_duration_seconds,
         ) = normalize_strategy_ban_policy(
             strategy_type=cast(
-                Literal["single", "fill-first", "failover"],
+                Literal["single", "fill-first", "round-robin", "failover"],
                 strategy_data.strategy_type,
             ),
             failover_recovery_enabled=strategy_data.failover_recovery_enabled,
@@ -293,7 +293,7 @@ async def execute_import_payload(
             profile_id=profile_id,
             name=strategy_name,
             strategy_type=cast(
-                Literal["single", "fill-first", "failover"],
+                Literal["single", "fill-first", "round-robin", "failover"],
                 strategy_data.strategy_type,
             ),
             failover_recovery_enabled=strategy_data.failover_recovery_enabled,

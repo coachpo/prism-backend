@@ -55,6 +55,11 @@ async def create_connection_record(
     )
     db.add(connection)
     await db.flush()
+    await deps.clear_round_robin_state_for_model_fn(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
 
     return await deps.load_connection_or_404_fn(
         db,

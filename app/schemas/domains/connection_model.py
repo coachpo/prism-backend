@@ -168,7 +168,7 @@ class ModelConnectionsBatchResponse(BaseModel):
 
 class LoadbalanceStrategyBase(BaseModel):
     name: str
-    strategy_type: Literal["single", "fill-first", "failover"] = "single"
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
     failover_recovery_enabled: bool = False
     failover_cooldown_seconds: int = Field(default=60, ge=0)
     failover_failure_threshold: int = Field(default=2, ge=1, le=10)
@@ -208,7 +208,9 @@ class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
 
 class LoadbalanceStrategyUpdate(BaseModel):
     name: str | None = None
-    strategy_type: Literal["single", "fill-first", "failover"] | None = None
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] | None = (
+        None
+    )
     failover_recovery_enabled: bool | None = None
     failover_cooldown_seconds: int | None = Field(default=None, ge=0)
     failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
@@ -246,7 +248,7 @@ class LoadbalanceStrategySummary(BaseModel):
 
     id: int
     name: str
-    strategy_type: Literal["single", "fill-first", "failover"]
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
     failover_recovery_enabled: bool
     failover_cooldown_seconds: int
     failover_failure_threshold: int

@@ -173,6 +173,55 @@ class TestLoadbalanceStrategyFieldValidation:
             exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
         )
 
+    def test_config_export_version_6_allows_round_robin_strategy(self):
+        from datetime import datetime, timezone
+
+        from app.schemas.schemas import (
+            ConfigExportResponse,
+            ConfigLoadbalanceStrategyExport,
+            ConfigVendorExport,
+        )
+
+        config = ConfigExportResponse(
+            exported_at=datetime.now(timezone.utc),
+            vendors=[
+                ConfigVendorExport(
+                    key="openai",
+                    name="OpenAI",
+                    description=None,
+                    audit_enabled=False,
+                    audit_capture_bodies=True,
+                )
+            ],
+            endpoints=[],
+            pricing_templates=[],
+            loadbalance_strategies=[
+                ConfigLoadbalanceStrategyExport(
+                    name="round-robin-primary",
+                    strategy_type="round-robin",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=600,
+                )
+            ],
+            models=[],
+        )
+
+        exported = config.model_dump(mode="json")
+
+        assert exported["version"] == 6
+        assert exported["loadbalance_strategies"][0]["strategy_type"] == "round-robin"
+        assert (
+            exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
+        )
+
     def test_config_import_accepts_minimal_payload(self):
         from app.schemas.schemas import ConfigImportRequest
 

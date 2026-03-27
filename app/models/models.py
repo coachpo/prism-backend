@@ -16,6 +16,7 @@ from app.models.domains.observability import (
     HeaderBlocklistRule,
     LoadbalanceCurrentState,
     LoadbalanceEvent,
+    LoadbalanceRoundRobinState,
     RequestLog,
     UserSetting,
 )
@@ -40,6 +41,7 @@ __all__ = [
     "LoadbalanceStrategy",
     "LoadbalanceCurrentState",
     "LoadbalanceEvent",
+    "LoadbalanceRoundRobinState",
     "ModelConfig",
     "ModelProxyTarget",
     "PasswordResetChallenge",

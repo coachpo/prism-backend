@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, ModelConfig, ModelProxyTarget
 
-from .state import get_current_states_for_connections
+from .state import claim_round_robin_cursor_position, get_current_states_for_connections
 from .types import AttemptPlan
 
 logger = logging.getLogger("app.services.loadbalancer")
@@ -106,6 +106,7 @@ async def get_model_config_with_connections(
             profile_id,
             target,
             utc_now(),
+            advance_round_robin=False,
         )
         if attempt_plan.connections:
             return target
@@ -138,6 +139,20 @@ def get_active_connections(model_config: ModelConfig) -> list[Connection]:
 
 def _failover_sort_key(connection: Connection) -> tuple[bool, int, int]:
     return (connection.health_status == "unhealthy", connection.priority, connection.id)
+
+
+def _rotate_connections_by_start_index(
+    *, ordered_connections: list[Connection], start_index: int
+) -> list[Connection]:
+    if len(ordered_connections) < 2:
+        return ordered_connections
+
+    next_index = start_index % len(ordered_connections)
+
+    if next_index == 0:
+        return ordered_connections
+
+    return ordered_connections[next_index:] + ordered_connections[:next_index]
 
 
 async def _filter_blocked_connections_preserving_order(
@@ -192,6 +207,8 @@ async def build_attempt_plan(
     profile_id: int,
     model_config: ModelConfig,
     now_at: datetime | None = None,
+    *,
+    advance_round_robin: bool = True,
 ) -> AttemptPlan:
     strategy = model_config.loadbalance_strategy
     if strategy is None:
@@ -247,6 +264,46 @@ async def build_attempt_plan(
         )
         logger.debug(
             "build_attempt_plan: profile_id=%d fill-first with recovery attempt_plan=%s blocked=%s",
+            profile_id,
+            [connection.id for connection in plan.connections],
+            plan.blocked_connection_ids,
+        )
+        return plan
+
+    if strategy.strategy_type == "round-robin":
+        ordered_active = list(active)
+        if advance_round_robin and len(ordered_active) > 1:
+            cursor_position = await claim_round_robin_cursor_position(
+                profile_id=profile_id,
+                model_config_id=model_config.id,
+                connection_count=len(ordered_active),
+                now_at=now_at,
+            )
+            ordered_active = _rotate_connections_by_start_index(
+                ordered_connections=ordered_active,
+                start_index=cursor_position,
+            )
+
+        if not strategy.failover_recovery_enabled:
+            logger.debug(
+                "build_attempt_plan: round-robin without recovery profile_id=%d trying %d connections",
+                profile_id,
+                len(ordered_active),
+            )
+            return AttemptPlan(
+                connections=ordered_active,
+                blocked_connection_ids=[],
+                probe_eligible_connection_ids=[],
+            )
+
+        plan = await _filter_blocked_connections_preserving_order(
+            db=db,
+            profile_id=profile_id,
+            ordered_connections=ordered_active,
+            now_at=now_at,
+        )
+        logger.debug(
+            "build_attempt_plan: profile_id=%d round-robin with recovery attempt_plan=%s blocked=%s",
             profile_id,
             [connection.id for connection in plan.connections],
             plan.blocked_connection_ids,

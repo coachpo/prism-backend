@@ -1,15 +1,75 @@
 from types import SimpleNamespace
 from typing import cast
+from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy import select, text
+
+from app.core.database import AsyncSessionLocal
+from app.models.models import (
+    Connection,
+    Endpoint,
+    ModelConfig,
+    ModelProxyTarget,
+    Profile,
+    Vendor,
+)
 
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
+def _vendor_key_for_api_family(api_family: str) -> str:
+    return "google" if api_family == "gemini" else api_family
+
+
+async def _get_or_create_vendor(db, *, api_family: str = "openai"):
+    vendor_key = _vendor_key_for_api_family(api_family)
+    vendor = (
+        (
+            await db.execute(
+                select(Vendor)
+                .where(Vendor.key == vendor_key)
+                .order_by(Vendor.id.asc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if vendor is not None:
+        return vendor
+
+    vendor = Vendor(key=vendor_key, name="OpenAI planner")
+    db.add(vendor)
+    await db.flush()
+    return vendor
+
+
 class TestLoadbalancerPlanner:
+    @pytest.mark.asyncio
+    async def test_round_robin_cursor_state_table_exists_as_unlogged(self):
+        async with AsyncSessionLocal() as db:
+            regclass = (
+                await db.execute(
+                    text("SELECT to_regclass('public.loadbalance_round_robin_state')")
+                )
+            ).scalar_one()
+
+            persistence = None
+            if regclass is not None:
+                persistence = (
+                    await db.execute(
+                        text(
+                            "SELECT relpersistence FROM pg_class WHERE oid = 'loadbalance_round_robin_state'::regclass"
+                        )
+                    )
+                ).scalar_one()
+
+        assert regclass == "loadbalance_round_robin_state"
+        assert persistence in {"u", b"u"}
+
     def test_get_active_connections_sorts_active_connections_by_priority_then_id(self):
-        from app.models.models import Connection, Endpoint, ModelConfig
         from app.services.loadbalancer.planner import get_active_connections
 
         endpoint = Endpoint(
@@ -169,6 +229,328 @@ class TestLoadbalancerPlanner:
             13,
             7,
         ]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_round_robin_rotates_priority_order_between_calls(
+        self,
+    ):
+        from app.models.models import ModelConfig
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        primary = SimpleNamespace(
+            id=7,
+            priority=0,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=12,
+        )
+        secondary = SimpleNamespace(
+            id=11,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=13,
+        )
+        tertiary = SimpleNamespace(
+            id=13,
+            priority=2,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=14,
+        )
+
+        model_config = cast(
+            ModelConfig,
+            cast(
+                object,
+                SimpleNamespace(
+                    id=101,
+                    connections=[tertiary, primary, secondary],
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="round-robin",
+                        failover_recovery_enabled=False,
+                    ),
+                    model_id="gpt-4o-mini",
+                    vendor_id=1,
+                ),
+            ),
+        )
+
+        with patch(
+            "app.services.loadbalancer.planner.claim_round_robin_cursor_position",
+            AsyncMock(side_effect=[0, 1, 2]),
+        ):
+            first_plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=model_config,
+                now_at=None,
+            )
+            second_plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=model_config,
+                now_at=None,
+            )
+            third_plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=model_config,
+                now_at=None,
+            )
+
+        assert [connection.id for connection in first_plan.connections] == [7, 11, 13]
+
+    @pytest.mark.asyncio
+    async def test_round_robin_cursor_is_persisted_in_db_and_proxy_preview_does_not_advance_it(
+        self,
+    ):
+        from app.services.loadbalancer.planner import (
+            build_attempt_plan,
+            get_model_config_with_connections,
+        )
+
+        suffix = uuid4().hex[:8]
+
+        async with AsyncSessionLocal() as session:
+            vendor = await _get_or_create_vendor(session)
+            profile = Profile(
+                name=f"Round Robin Planner {suffix}", is_active=False, version=0
+            )
+            strategy = make_loadbalance_strategy(
+                profile=profile,
+                strategy_type="round-robin",
+                name=f"round-robin-{suffix}",
+            )
+            native_model = ModelConfig(
+                vendor=vendor,
+                profile=profile,
+                api_family="openai",
+                model_id=f"native-{suffix}",
+                model_type="native",
+                loadbalance_strategy=strategy,
+                is_enabled=True,
+            )
+            proxy_model = ModelConfig(
+                vendor=vendor,
+                profile=profile,
+                api_family="openai",
+                model_id=f"proxy-{suffix}",
+                model_type="proxy",
+                is_enabled=True,
+            )
+            endpoint_primary = Endpoint(
+                profile=profile,
+                name=f"endpoint-primary-{suffix}",
+                base_url="https://primary.example.com/v1",
+                api_key="sk-primary",
+                position=0,
+            )
+            endpoint_secondary = Endpoint(
+                profile=profile,
+                name=f"endpoint-secondary-{suffix}",
+                base_url="https://secondary.example.com/v1",
+                api_key="sk-secondary",
+                position=1,
+            )
+            endpoint_tertiary = Endpoint(
+                profile=profile,
+                name=f"endpoint-tertiary-{suffix}",
+                base_url="https://tertiary.example.com/v1",
+                api_key="sk-tertiary",
+                position=2,
+            )
+            session.add_all(
+                [
+                    profile,
+                    strategy,
+                    native_model,
+                    proxy_model,
+                    endpoint_primary,
+                    endpoint_secondary,
+                    endpoint_tertiary,
+                ]
+            )
+            await session.flush()
+
+            session.add_all(
+                [
+                    Connection(
+                        profile=profile,
+                        model_config_rel=native_model,
+                        endpoint_rel=endpoint_primary,
+                        is_active=True,
+                        priority=0,
+                        name="primary",
+                    ),
+                    Connection(
+                        profile=profile,
+                        model_config_rel=native_model,
+                        endpoint_rel=endpoint_secondary,
+                        is_active=True,
+                        priority=1,
+                        name="secondary",
+                    ),
+                    Connection(
+                        profile=profile,
+                        model_config_rel=native_model,
+                        endpoint_rel=endpoint_tertiary,
+                        is_active=True,
+                        priority=2,
+                        name="tertiary",
+                    ),
+                    ModelProxyTarget(
+                        source_model_config=proxy_model,
+                        target_model_config=native_model,
+                        position=0,
+                    ),
+                ]
+            )
+            await session.commit()
+
+            profile_id = profile.id
+            native_model_id = native_model.id
+            native_model_name = native_model.model_id
+            proxy_model_name = proxy_model.model_id
+
+        async with AsyncSessionLocal() as session:
+            resolved = await get_model_config_with_connections(
+                session,
+                profile_id,
+                proxy_model_name,
+            )
+            preview_cursor_row = None
+            cursor_table_exists = (
+                await session.execute(
+                    text("SELECT to_regclass('public.loadbalance_round_robin_state')")
+                )
+            ).scalar_one()
+            if cursor_table_exists is not None:
+                preview_cursor_row = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT next_cursor FROM loadbalance_round_robin_state "
+                                "WHERE profile_id = :profile_id AND model_config_id = :model_config_id"
+                            ),
+                            {
+                                "profile_id": profile_id,
+                                "model_config_id": native_model_id,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+
+            assert resolved is not None
+            assert preview_cursor_row is None
+
+            first_plan = await build_attempt_plan(
+                session,
+                profile_id,
+                resolved,
+                None,
+            )
+
+            first_cursor_row = None
+            if cursor_table_exists is not None:
+                first_cursor_row = (
+                    (
+                        await session.execute(
+                            text(
+                                "SELECT next_cursor FROM loadbalance_round_robin_state "
+                                "WHERE profile_id = :profile_id AND model_config_id = :model_config_id"
+                            ),
+                            {
+                                "profile_id": profile_id,
+                                "model_config_id": native_model_id,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+
+        assert [connection.priority for connection in first_plan.connections] == [
+            0,
+            1,
+            2,
+        ]
+        assert first_cursor_row is not None
+        assert first_cursor_row["next_cursor"] == 1
+
+        async with AsyncSessionLocal() as session:
+            resolved_native = await get_model_config_with_connections(
+                session,
+                profile_id,
+                native_model_name,
+            )
+            assert resolved_native is not None
+            second_plan = await build_attempt_plan(
+                session,
+                profile_id,
+                resolved_native,
+                None,
+            )
+            second_cursor_row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT next_cursor FROM loadbalance_round_robin_state "
+                            "WHERE profile_id = :profile_id AND model_config_id = :model_config_id"
+                        ),
+                        {"profile_id": profile_id, "model_config_id": native_model_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+
+        async with AsyncSessionLocal() as session:
+            resolved_third = await get_model_config_with_connections(
+                session,
+                profile_id,
+                native_model_name,
+            )
+            assert resolved_third is not None
+            third_plan = await build_attempt_plan(
+                session,
+                profile_id,
+                resolved_third,
+                None,
+            )
+            third_cursor_row = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT next_cursor FROM loadbalance_round_robin_state "
+                            "WHERE profile_id = :profile_id AND model_config_id = :model_config_id"
+                        ),
+                        {"profile_id": profile_id, "model_config_id": native_model_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+
+        assert [connection.priority for connection in second_plan.connections] == [
+            1,
+            2,
+            0,
+        ]
+        assert second_cursor_row is not None
+        assert second_cursor_row["next_cursor"] == 2
+        assert [connection.priority for connection in third_plan.connections] == [
+            2,
+            0,
+            1,
+        ]
+        assert third_cursor_row is not None
+        assert third_cursor_row["next_cursor"] == 0
 
     @pytest.mark.asyncio
     async def test_build_attempt_plan_fill_first_with_recovery_filters_blocked_connections_preserving_priority_order(
@@ -363,6 +745,99 @@ class TestLoadbalancerPlanner:
 
         assert resolved is target_model_b
         assert db.execute.await_count == 3
+
+    @pytest.mark.asyncio
+    async def test_get_model_config_with_connections_does_not_advance_round_robin_cursor_for_proxy_preview(
+        self,
+    ):
+        from app.models.models import ModelConfig
+        from app.services.loadbalancer.planner import (
+            build_attempt_plan,
+            get_model_config_with_connections,
+        )
+
+        primary = SimpleNamespace(
+            id=7,
+            priority=0,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=12,
+        )
+        secondary = SimpleNamespace(
+            id=11,
+            priority=1,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=13,
+        )
+        tertiary = SimpleNamespace(
+            id=13,
+            priority=2,
+            health_status="healthy",
+            is_active=True,
+            endpoint_rel=object(),
+            endpoint_id=14,
+        )
+        proxy_model = SimpleNamespace(
+            profile_id=5,
+            model_id="alias-model",
+            model_type="proxy",
+            proxy_targets=[
+                SimpleNamespace(target_model_id="target-model-a", position=0)
+            ],
+        )
+        target_model = cast(
+            ModelConfig,
+            cast(
+                object,
+                SimpleNamespace(
+                    id=303,
+                    profile_id=5,
+                    model_id="target-model-a",
+                    model_type="native",
+                    connections=[tertiary, primary, secondary],
+                    loadbalance_strategy=SimpleNamespace(
+                        strategy_type="round-robin",
+                        failover_recovery_enabled=False,
+                    ),
+                    vendor_id=1,
+                ),
+            ),
+        )
+
+        first_result = MagicMock()
+        first_result.scalar_one_or_none.return_value = proxy_model
+        second_result = MagicMock()
+        second_result.scalar_one_or_none.return_value = target_model
+
+        db = AsyncMock()
+        db.execute = AsyncMock(side_effect=[first_result, second_result])
+
+        resolved = await get_model_config_with_connections(
+            db=db,
+            profile_id=5,
+            model_id="alias-model",
+        )
+        assert resolved is not None
+        with patch(
+            "app.services.loadbalancer.planner.claim_round_robin_cursor_position",
+            AsyncMock(return_value=0),
+        ):
+            first_real_plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=resolved,
+                now_at=None,
+            )
+
+        assert resolved is target_model
+        assert [connection.id for connection in first_real_plan.connections] == [
+            7,
+            11,
+            13,
+        ]
 
     @pytest.mark.asyncio
     async def test_build_attempt_plan_reports_probe_eligible_candidates_without_mutation(

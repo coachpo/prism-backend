@@ -208,6 +208,7 @@ Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, An
 ### Load Balancing Strategies
 
 - **single**: Always use the first active connection (priority 0)
+- **round-robin**: Rotate the primary attempt across active connections in order
 - **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and auth-like cooldown handling)
 - **fill-first**: Strict priority spillover after the active target is exhausted
 

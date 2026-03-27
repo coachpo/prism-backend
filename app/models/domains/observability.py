@@ -364,6 +364,39 @@ class ConnectionLimiterLease(Base):
     )
 
 
+class LoadbalanceRoundRobinState(Base):
+    __tablename__ = "loadbalance_round_robin_state"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "model_config_id",
+            name="uq_loadbalance_round_robin_state_profile_model",
+        ),
+        Index(
+            "idx_loadbalance_round_robin_state_profile_model",
+            "profile_id",
+            "model_config_id",
+        ),
+        CheckConstraint(
+            "next_cursor >= 0",
+            name="ck_loadbalance_round_robin_state_next_cursor_nonnegative",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_config_id: Mapped[int] = mapped_column(
+        ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False
+    )
+    next_cursor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+
 class LoadbalanceEvent(Base):
     __tablename__ = "loadbalance_events"
     __table_args__ = (

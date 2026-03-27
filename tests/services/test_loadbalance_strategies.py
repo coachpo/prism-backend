@@ -232,6 +232,72 @@ class TestLoadbalanceStrategies:
             assert updated.failover_max_cooldown_strikes_before_ban == 2
             assert updated.failover_ban_duration_seconds == 0
 
+    @pytest.mark.asyncio
+    async def test_round_robin_strategy_crud_roundtrip(self):
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name="Round-Robin Strategy CRUD Profile",
+                is_active=False,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            created = await create_strategy(
+                body=LoadbalanceStrategyCreate(
+                    name="round-robin-primary",
+                    strategy_type="round-robin",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=45,
+                    failover_failure_threshold=4,
+                    failover_backoff_multiplier=3.5,
+                    failover_max_cooldown_seconds=720,
+                    failover_jitter_ratio=0.35,
+                    failover_auth_error_cooldown_seconds=2400,
+                    failover_ban_mode="temporary",
+                    failover_max_cooldown_strikes_before_ban=3,
+                    failover_ban_duration_seconds=600,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            assert created.name == "round-robin-primary"
+            assert created.strategy_type == "round-robin"
+            assert created.failover_recovery_enabled is True
+
+            listed = await list_strategies(db=db, profile_id=profile.id)
+
+            assert [strategy.name for strategy in listed] == ["round-robin-primary"]
+            assert listed[0].strategy_type == "round-robin"
+            assert listed[0].failover_recovery_enabled is True
+
+            updated = await update_strategy(
+                strategy_id=created.id,
+                body=LoadbalanceStrategyUpdate(
+                    name="round-robin-secondary",
+                    strategy_type="round-robin",
+                    failover_recovery_enabled=True,
+                    failover_cooldown_seconds=90,
+                    failover_failure_threshold=5,
+                    failover_backoff_multiplier=4.0,
+                    failover_max_cooldown_seconds=1440,
+                    failover_jitter_ratio=0.5,
+                    failover_auth_error_cooldown_seconds=3600,
+                    failover_ban_mode="manual",
+                    failover_max_cooldown_strikes_before_ban=2,
+                    failover_ban_duration_seconds=0,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.commit()
+
+            assert updated.name == "round-robin-secondary"
+            assert updated.strategy_type == "round-robin"
+            assert updated.failover_recovery_enabled is True
+
     def test_fill_first_strategy_allows_recovery_fields_while_single_still_rejects_them(
         self,
     ):

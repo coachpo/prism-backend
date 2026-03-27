@@ -18,7 +18,10 @@ from app.schemas.schemas import (
     HealthCheckResponse,
 )
 from app.services.loadbalancer.recovery import record_connection_recovery
-from app.services.loadbalancer.state import clear_connection_state
+from app.services.loadbalancer.state import (
+    clear_connection_state,
+    clear_round_robin_state_for_model,
+)
 from app.services.proxy_service import (
     build_upstream_headers,
 )
@@ -62,6 +65,7 @@ router = APIRouter(tags=["connections"])
 def _crud_deps() -> ConnectionCrudDependencies:
     return ConnectionCrudDependencies(
         clear_connection_state_fn=clear_connection_state,
+        clear_round_robin_state_for_model_fn=clear_round_robin_state_for_model,
         create_endpoint_from_inline_fn=_create_endpoint_from_inline,
         ensure_model_config_ids_exist_fn=_ensure_model_config_ids_exist,
         list_ordered_connections_fn=_list_ordered_connections,

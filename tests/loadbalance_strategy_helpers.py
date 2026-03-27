@@ -12,7 +12,9 @@ def make_loadbalance_strategy(
     *,
     profile_id: int | None = None,
     profile: object | None = None,
-    strategy_type: Literal["single", "fill-first", "failover"] = "single",
+    strategy_type: Literal[
+        "single", "fill-first", "round-robin", "failover"
+    ] = "single",
     failover_recovery_enabled: bool | None = None,
     name: str | None = None,
 ) -> LoadbalanceStrategy:

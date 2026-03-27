@@ -28,12 +28,21 @@ async def update_connection_record(
         deps=deps,
     )
     clear_recovery_state = should_clear_recovery_state(connection, update_data)
+    clear_round_robin_state = (
+        "is_active" in update_data and update_data["is_active"] != connection.is_active
+    )
 
     for key, value in update_data.items():
         setattr(connection, key, value)
 
     if clear_recovery_state:
         await deps.clear_connection_state_fn(profile_id, connection.id)
+    if clear_round_robin_state:
+        await deps.clear_round_robin_state_for_model_fn(
+            db,
+            profile_id=profile_id,
+            model_config_id=connection.model_config_id,
+        )
     connection.updated_at = utc_now()
     await db.flush()
 

@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 from typing import Literal
 
 from app.core.config import get_settings
 
 BanMode = Literal["off", "temporary", "manual"]
+StrategyType: TypeAlias = Literal["single", "fill-first", "round-robin", "failover"]
 
 
 @dataclass(slots=True, frozen=True)
 class EffectiveLoadbalancePolicy:
-    strategy_type: Literal["single", "fill-first", "failover"]
+    strategy_type: StrategyType
     failover_recovery_enabled: bool
     failover_cooldown_seconds: float
     failover_failure_threshold: int
@@ -25,9 +27,11 @@ class EffectiveLoadbalancePolicy:
 
 def _resolve_strategy_type(
     value: object,
-) -> Literal["single", "fill-first", "failover"]:
+) -> StrategyType:
     if value == "fill-first":
         return "fill-first"
+    if value == "round-robin":
+        return "round-robin"
     if value == "failover":
         return "failover"
     return "single"
@@ -59,7 +63,7 @@ def _resolve_ban_mode(value: object, *, default: BanMode) -> BanMode:
 
 def validate_strategy_ban_policy(
     *,
-    strategy_type: Literal["single", "fill-first", "failover"],
+    strategy_type: StrategyType,
     failover_recovery_enabled: bool,
     failover_ban_mode: BanMode,
     failover_max_cooldown_strikes_before_ban: int,
@@ -99,7 +103,7 @@ def validate_strategy_ban_policy(
 
 def normalize_strategy_ban_policy(
     *,
-    strategy_type: Literal["single", "fill-first", "failover"],
+    strategy_type: StrategyType,
     failover_recovery_enabled: bool,
     failover_ban_mode: BanMode,
     failover_max_cooldown_strikes_before_ban: int,
@@ -182,5 +186,6 @@ __all__ = [
     "EffectiveLoadbalancePolicy",
     "normalize_strategy_ban_policy",
     "resolve_effective_loadbalance_policy",
+    "StrategyType",
     "validate_strategy_ban_policy",
 ]

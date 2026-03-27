@@ -215,7 +215,7 @@ async def update_model_config_record(
             new_model_type=new_model_type,
         )
 
-    if clear_model_current_state and config.model_type == "native":
+    if clear_model_current_state:
         await clear_model_state(profile_id, config.id)
 
     config.updated_at = utc_now()

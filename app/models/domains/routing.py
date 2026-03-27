@@ -40,7 +40,7 @@ class LoadbalanceStrategy(Base):
             name="uq_loadbalance_strategies_profile_id_id",
         ),
         CheckConstraint(
-            "strategy_type IN ('single', 'fill-first', 'failover')",
+            "strategy_type IN ('single', 'fill-first', 'round-robin', 'failover')",
             name="chk_loadbalance_strategies_type",
         ),
         CheckConstraint(

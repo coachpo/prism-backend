@@ -51,7 +51,7 @@ def make_failover_policy(**overrides):
 
     return EffectiveLoadbalancePolicy(
         strategy_type=cast(
-            Literal["single", "fill-first", "failover"],
+            Literal["single", "fill-first", "round-robin", "failover"],
             overrides.get("strategy_type", "failover"),
         ),
         failover_recovery_enabled=cast(

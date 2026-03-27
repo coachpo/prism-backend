@@ -265,7 +265,7 @@ async def update_loadbalance_strategy(
     )
     validate_strategy_ban_policy(
         strategy_type=cast(
-            Literal["single", "fill-first", "failover"],
+            Literal["single", "fill-first", "round-robin", "failover"],
             next_strategy_type,
         ),
         failover_recovery_enabled=next_recovery_enabled,
@@ -287,7 +287,7 @@ async def update_loadbalance_strategy(
             update_data["failover_ban_duration_seconds"],
         ) = normalize_strategy_ban_policy(
             strategy_type=cast(
-                Literal["single", "fill-first", "failover"],
+                Literal["single", "fill-first", "round-robin", "failover"],
                 next_strategy_type,
             ),
             failover_recovery_enabled=next_recovery_enabled,

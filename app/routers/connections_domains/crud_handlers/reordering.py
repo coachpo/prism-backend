@@ -52,6 +52,11 @@ async def move_connection_priority_for_model(
     connections.insert(body.to_index, connection)
     deps.normalize_connection_priorities_fn(connections)
     await db.flush()
+    await deps.clear_round_robin_state_for_model_fn(
+        db,
+        profile_id=profile_id,
+        model_config_id=model_config_id,
+    )
     return connections
 
 
