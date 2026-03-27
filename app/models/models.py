@@ -18,6 +18,7 @@ from app.models.domains.observability import (
     LoadbalanceEvent,
     LoadbalanceRoundRobinState,
     RequestLog,
+    UsageRequestEvent,
     UserSetting,
 )
 from app.models.domains.routing import (
@@ -50,6 +51,7 @@ __all__ = [
     "ProxyApiKey",
     "RefreshToken",
     "RequestLog",
+    "UsageRequestEvent",
     "UserSetting",
     "Vendor",
     "WebAuthnChallenge",

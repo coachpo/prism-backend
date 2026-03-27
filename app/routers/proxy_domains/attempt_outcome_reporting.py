@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 
 from app.services.background_tasks import background_task_manager
@@ -16,9 +16,36 @@ from .attempt_types import (
 logger = logging.getLogger(__name__)
 
 LogRequestFn = Callable[..., Awaitable[int | None]]
+FinalUsageEventFn = Callable[..., Awaitable[int | None]]
 RecordAuditLogFn = Callable[..., Awaitable[None]]
 CostFieldsBuilder = Callable[[dict[str, int | None] | None], CostFieldPayload]
 TokenUsage = dict[str, int | None]
+
+FINAL_USAGE_EVENT_COST_FIELDS = (
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+    "reasoning_tokens",
+    "input_cost_micros",
+    "output_cost_micros",
+    "cache_read_input_cost_micros",
+    "cache_creation_input_cost_micros",
+    "reasoning_cost_micros",
+    "total_cost_original_micros",
+    "total_cost_user_currency_micros",
+    "currency_code_original",
+    "report_currency_code",
+    "report_currency_symbol",
+    "fx_rate_used",
+    "fx_rate_source",
+    "pricing_snapshot_unit",
+    "pricing_snapshot_input",
+    "pricing_snapshot_output",
+    "pricing_snapshot_cache_read_input",
+    "pricing_snapshot_cache_creation_input",
+    "pricing_snapshot_reasoning",
+    "pricing_snapshot_missing_special_token_price_policy",
+    "pricing_config_version_used",
+)
 
 
 def _lower_header_map(headers: dict[str, str] | None) -> dict[str, str]:
@@ -98,6 +125,13 @@ def response_error_detail(raw_body: bytes | None) -> str | None:
     return raw_body.decode("utf-8", errors="replace")[:500]
 
 
+def _final_usage_event_cost_fields(cost_fields: CostFieldPayload) -> dict[str, object]:
+    return {
+        field_name: cost_fields.get(field_name)
+        for field_name in FINAL_USAGE_EVENT_COST_FIELDS
+    }
+
+
 async def record_request_log(
     *,
     deps: ProxyRuntimeDependencies,
@@ -123,6 +157,8 @@ async def record_request_log(
         resolved_target_model_id=state.setup.resolved_target_model_id,
         endpoint_id=target.connection.endpoint_id,
         connection_id=target.connection.id,
+        proxy_api_key_id=state.setup.proxy_api_key_id,
+        proxy_api_key_name_snapshot=state.setup.proxy_api_key_name,
         ingress_request_id=state.setup.ingress_request_id,
         attempt_number=target.attempt_number,
         provider_correlation_id=extract_provider_correlation_id(
@@ -142,6 +178,38 @@ async def record_request_log(
         output_tokens=token_values.get("output_tokens"),
         total_tokens=token_values.get("total_tokens"),
         **state.setup.build_cost_fields(target.connection, status_code, tokens),
+    )
+
+
+async def record_final_usage_event(
+    *,
+    deps: ProxyRuntimeDependencies,
+    state: ProxyRequestState,
+    target: ProxyAttemptTarget,
+    status_code: int,
+    attempt_count: int,
+    tokens: dict[str, int | None] | None = None,
+) -> int | None:
+    token_values = tokens or {}
+    cost_fields = state.setup.build_cost_fields(target.connection, status_code, tokens)
+    return await deps.log_usage_request_event_fn(
+        model_id=state.setup.model_id,
+        profile_id=state.profile_id,
+        api_family=state.setup.api_family,
+        resolved_target_model_id=state.setup.resolved_target_model_id,
+        endpoint_id=target.connection.endpoint_id,
+        connection_id=target.connection.id,
+        proxy_api_key_id=state.setup.proxy_api_key_id,
+        proxy_api_key_name_snapshot=state.setup.proxy_api_key_name,
+        ingress_request_id=state.setup.ingress_request_id,
+        status_code=status_code,
+        success_flag=200 <= status_code < 300,
+        input_tokens=token_values.get("input_tokens"),
+        output_tokens=token_values.get("output_tokens"),
+        total_tokens=token_values.get("total_tokens"),
+        attempt_count=attempt_count,
+        request_path=state.request_path,
+        **_final_usage_event_cost_fields(cost_fields),
     )
 
 
@@ -237,9 +305,12 @@ class StreamFinalizationSnapshot:
     endpoint_id: int | None
     ingress_request_id: str
     log_request_fn: LogRequestFn
+    log_usage_request_event_fn: FinalUsageEventFn
     model_id: str
     payload: bytes | None
     profile_id: int
+    proxy_api_key_id: int | None
+    proxy_api_key_name_snapshot: str | None
     vendor_id: int
     vendor_key: str | None
     vendor_name: str | None
@@ -288,9 +359,12 @@ def build_stream_finalization_snapshot(
         endpoint_id=connection.endpoint_id,
         ingress_request_id=state.setup.ingress_request_id,
         log_request_fn=deps.log_request_fn,
+        log_usage_request_event_fn=deps.log_usage_request_event_fn,
         model_id=state.setup.model_id,
         payload=payload,
         profile_id=state.profile_id,
+        proxy_api_key_id=state.setup.proxy_api_key_id,
+        proxy_api_key_name_snapshot=state.setup.proxy_api_key_name,
         vendor_id=state.setup.vendor_id,
         vendor_key=state.setup.vendor_key,
         vendor_name=state.setup.vendor_name,
@@ -326,6 +400,8 @@ async def _persist_stream_request_log(
         resolved_target_model_id=snapshot.resolved_target_model_id,
         endpoint_id=snapshot.endpoint_id,
         connection_id=snapshot.connection_id,
+        proxy_api_key_id=snapshot.proxy_api_key_id,
+        proxy_api_key_name_snapshot=snapshot.proxy_api_key_name_snapshot,
         ingress_request_id=snapshot.ingress_request_id,
         attempt_number=snapshot.attempt_number,
         provider_correlation_id=snapshot.provider_correlation_id
@@ -346,6 +422,33 @@ async def _persist_stream_request_log(
         output_tokens=token_values.get("output_tokens"),
         total_tokens=token_values.get("total_tokens"),
         **snapshot.build_cost_fields(tokens),
+    )
+
+
+async def _persist_stream_usage_request_event(
+    snapshot: StreamFinalizationSnapshot,
+) -> int | None:
+    tokens = snapshot.token_usage
+    token_values = tokens or {}
+    cost_fields = snapshot.build_cost_fields(tokens)
+    return await snapshot.log_usage_request_event_fn(
+        model_id=snapshot.model_id,
+        profile_id=snapshot.profile_id,
+        api_family=snapshot.api_family,
+        resolved_target_model_id=snapshot.resolved_target_model_id,
+        endpoint_id=snapshot.endpoint_id,
+        connection_id=snapshot.connection_id,
+        proxy_api_key_id=snapshot.proxy_api_key_id,
+        proxy_api_key_name_snapshot=snapshot.proxy_api_key_name_snapshot,
+        ingress_request_id=snapshot.ingress_request_id,
+        status_code=snapshot.status_code,
+        success_flag=200 <= snapshot.status_code < 300,
+        input_tokens=token_values.get("input_tokens"),
+        output_tokens=token_values.get("output_tokens"),
+        total_tokens=token_values.get("total_tokens"),
+        attempt_count=snapshot.attempt_number,
+        request_path=snapshot.request_path,
+        **_final_usage_event_cost_fields(cost_fields),
     )
 
 
@@ -409,6 +512,16 @@ def enqueue_stream_finalize(
         except Exception:
             logger.exception("Failed to queue streaming audit follow-up")
 
+        try:
+            await _persist_stream_usage_request_event(snapshot)
+        except asyncio.CancelledError:
+            logger.debug(
+                "Streaming usage-event finalization cancelled before completion"
+            )
+            raise
+        except Exception:
+            logger.exception("Failed to log final usage request event")
+
     background_task_manager.enqueue(
         name=(
             "stream-finalize:"
@@ -424,21 +537,42 @@ def enqueue_stream_finalize(
 async def persist_stream_request_log_inline_fallback(
     snapshot: StreamFinalizationSnapshot,
 ) -> int | None:
-    try:
-        request_log_task = asyncio.create_task(
-            _persist_stream_request_log(snapshot),
-            name="proxy-stream-request-log-fallback",
-        )
-    except RuntimeError:
-        logger.debug(
-            "Event loop closed before inline streaming request logging fallback could be scheduled"
-        )
-        return None
+    async def _run_inline(
+        awaitable: Coroutine[object, object, int | None],
+        *,
+        task_name: str,
+    ) -> int | None:
+        try:
+            task = asyncio.create_task(awaitable, name=task_name)
+        except RuntimeError:
+            logger.debug(
+                "Event loop closed before inline %s fallback could be scheduled",
+                task_name,
+            )
+            return None
+
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            return await task
+
+    request_log_id = await _run_inline(
+        _persist_stream_request_log(snapshot),
+        task_name="proxy-stream-request-log-fallback",
+    )
 
     try:
-        return await asyncio.shield(request_log_task)
+        _ = await _run_inline(
+            _persist_stream_usage_request_event(snapshot),
+            task_name="proxy-stream-usage-event-fallback",
+        )
     except asyncio.CancelledError:
-        return await request_log_task
+        logger.debug(
+            "Streaming usage-event inline fallback cancelled before completion"
+        )
+        raise
+
+    return request_log_id
 
 
 __all__ = [
@@ -447,6 +581,7 @@ __all__ = [
     "extract_provider_correlation_id",
     "log_and_audit_attempt",
     "persist_stream_request_log_inline_fallback",
+    "record_final_usage_event",
     "record_attempt_audit",
     "response_error_detail",
 ]

@@ -19,6 +19,7 @@ class ProxyRuntimeDependencies:
     clear_connection_state_fn: Callable[..., Awaitable[bool]]
     filter_response_headers_fn: Callable[..., dict[str, str]]
     log_request_fn: Callable[..., Awaitable[int | None]]
+    log_usage_request_event_fn: Callable[..., Awaitable[int | None]]
     record_connection_failure_fn: Callable[..., Awaitable[None]]
     record_connection_recovery_fn: Callable[..., Awaitable[None]]
     proxy_request_fn: Callable[..., Awaitable[httpx.Response]]

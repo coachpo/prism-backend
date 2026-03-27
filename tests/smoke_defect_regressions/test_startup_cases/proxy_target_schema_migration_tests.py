@@ -102,7 +102,7 @@ class TestDEF081_ProxyTargetSchemaMigration:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def081_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0018_proxy_targets_resolved_log"
+        expected_head_revision = "0024_usage_request_events"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision

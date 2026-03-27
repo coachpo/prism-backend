@@ -14,6 +14,7 @@ from .attempt_handlers import (
     handle_streaming_attempt,
     handle_transport_exception,
 )
+from .attempt_outcome_reporting import record_final_usage_event
 from .attempt_types import (
     ProxyAttemptTarget,
     ProxyRequestState,
@@ -84,6 +85,7 @@ async def execute_proxy_attempts(
     deps: ProxyRuntimeDependencies,
 ) -> Response | StreamingResponse:
     last_error = None
+    last_attempt_target: ProxyAttemptTarget | None = None
     attempted_any_endpoint = False
     limiter_denied_any_endpoint = False
     state = ProxyRequestState(
@@ -151,6 +153,7 @@ async def execute_proxy_attempts(
             deps=deps,
         )
         start_time = time.monotonic()
+        last_attempt_target = target
 
         try:
             if setup.is_streaming:
@@ -194,6 +197,15 @@ async def execute_proxy_attempts(
         raise HTTPException(
             status_code=503,
             detail=f"No active connections available for model '{setup.model_id}'.",
+        )
+
+    if last_attempt_target is not None:
+        _ = await record_final_usage_event(
+            deps=deps,
+            state=state,
+            target=last_attempt_target,
+            status_code=502,
+            attempt_count=last_attempt_target.attempt_number,
         )
 
     raise HTTPException(

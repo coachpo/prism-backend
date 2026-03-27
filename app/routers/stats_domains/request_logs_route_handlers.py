@@ -6,13 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.schemas import (
     BatchDeleteResponse,
-    OperationsRequestLogListResponse,
-    OperationsRequestLogResponse,
     RequestLogListResponse,
     RequestLogResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
-from app.services.stats_service import get_operations_request_logs, get_request_logs
+from app.services.stats_service import get_request_logs
 
 from .helpers import normalize_datetime_filter
 
@@ -65,56 +63,6 @@ async def list_request_logs(
     )
 
 
-async def list_operations_request_logs(
-    db: AsyncSession,
-    profile_id: int,
-    request_id: int | None = None,
-    ingress_request_id: str | None = None,
-    model_id: str | None = None,
-    api_family: str | None = None,
-    status_code: int | None = None,
-    status_family: Literal["4xx", "5xx"] | None = None,
-    success: bool | None = None,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
-    endpoint_id: int | None = None,
-    connection_id: int | None = None,
-    limit: int = 200,
-    offset: int = 0,
-    *,
-    get_operations_request_logs_fn=get_operations_request_logs,
-):
-    normalized_from_time = normalize_datetime_filter(from_time)
-    normalized_to_time = normalize_datetime_filter(to_time)
-
-    items, total = await get_operations_request_logs_fn(
-        db,
-        request_id=request_id,
-        ingress_request_id=ingress_request_id,
-        model_id=model_id,
-        profile_id=profile_id,
-        api_family=api_family,
-        status_code=status_code,
-        status_family=status_family,
-        success=success,
-        from_time=normalized_from_time,
-        to_time=normalized_to_time,
-        endpoint_id=endpoint_id,
-        connection_id=connection_id,
-        limit=limit,
-        offset=offset,
-    )
-    serialized_items = [
-        OperationsRequestLogResponse.model_validate(item) for item in items
-    ]
-    return OperationsRequestLogListResponse(
-        items=serialized_items,
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
 async def delete_request_logs(
     background_tasks: BackgroundTasks,
     profile_id: int,
@@ -145,6 +93,5 @@ async def delete_request_logs(
 
 __all__ = [
     "delete_request_logs",
-    "list_operations_request_logs",
     "list_request_logs",
 ]

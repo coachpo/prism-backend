@@ -78,6 +78,9 @@ class Profile(Base):
     request_logs: Mapped[list[Any]] = relationship(
         "RequestLog", back_populates="profile"
     )
+    usage_request_events: Mapped[list[Any]] = relationship(
+        "UsageRequestEvent", back_populates="profile"
+    )
     audit_logs: Mapped[list[Any]] = relationship("AuditLog", back_populates="profile")
     header_blocklist_rules: Mapped[list[Any]] = relationship(
         "HeaderBlocklistRule", back_populates="profile", cascade="all, delete-orphan"

@@ -19,20 +19,27 @@ import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, func
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.models.models import (
     Profile,
     ModelConfig,
     Endpoint,
     Connection,
+    ProxyApiKey,
     UserSetting,
+    UsageRequestEvent,
+    Vendor,
     EndpointFxRateSetting,
     RequestLog,
     AuditLog,
     HeaderBlocklistRule,
 )
+from app.core.database import AsyncSessionLocal, get_engine
+from app.core.time import utc_now
+from app.main import app
 from app.routers.profiles import (
     list_profiles,
     get_active_profile,
@@ -57,6 +64,187 @@ from app.services.stats_service import (
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+
+
+async def _seed_usage_snapshot_profiles_for_scope_test() -> tuple[int, int, str, str]:
+    suffix = utc_now().strftime("%H%M%S%f")
+    created_at = utc_now() - timedelta(hours=1)
+
+    async with AsyncSessionLocal() as session:
+        profile_a = Profile(
+            name=f"Observability Snapshot A {suffix}",
+            is_active=False,
+            is_default=False,
+            version=0,
+        )
+        profile_b = Profile(
+            name=f"Observability Snapshot B {suffix}",
+            is_active=False,
+            is_default=False,
+            version=0,
+        )
+        vendor = Vendor(
+            key=f"observability-snapshot-vendor-{suffix}",
+            name=f"Observability Snapshot Vendor {suffix}",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+        )
+        strategy_a = make_loadbalance_strategy(
+            profile=profile_a, strategy_type="failover"
+        )
+        strategy_b = make_loadbalance_strategy(
+            profile=profile_b, strategy_type="failover"
+        )
+        model_a = ModelConfig(
+            profile=profile_a,
+            vendor=vendor,
+            api_family="openai",
+            model_id=f"scope-a-{suffix}",
+            display_name=f"Scope Model A {suffix}",
+            model_type="native",
+            loadbalance_strategy=strategy_a,
+            is_enabled=True,
+        )
+        model_b = ModelConfig(
+            profile=profile_b,
+            vendor=vendor,
+            api_family="openai",
+            model_id=f"scope-b-{suffix}",
+            display_name=f"Scope Model B {suffix}",
+            model_type="native",
+            loadbalance_strategy=strategy_b,
+            is_enabled=True,
+        )
+        endpoint_a = Endpoint(
+            profile=profile_a,
+            name=f"Scope Endpoint A {suffix}",
+            base_url=f"https://scope-a-{suffix}.example.com/v1",
+            api_key=f"sk-scope-a-{suffix}",
+            position=0,
+        )
+        endpoint_b = Endpoint(
+            profile=profile_b,
+            name=f"Scope Endpoint B {suffix}",
+            base_url=f"https://scope-b-{suffix}.example.com/v1",
+            api_key=f"sk-scope-b-{suffix}",
+            position=0,
+        )
+        connection_a = Connection(
+            profile=profile_a,
+            model_config_rel=model_a,
+            endpoint_rel=endpoint_a,
+            is_active=True,
+            priority=0,
+            name=f"Scope Connection A {suffix}",
+        )
+        connection_b = Connection(
+            profile=profile_b,
+            model_config_rel=model_b,
+            endpoint_rel=endpoint_b,
+            is_active=True,
+            priority=0,
+            name=f"Scope Connection B {suffix}",
+        )
+        proxy_key_a = ProxyApiKey(
+            name=f"Scope Key A {suffix}",
+            key_prefix=f"prism_pk_scope_a_{suffix}",
+            key_hash=(suffix * 8)[:64],
+            last_four=suffix[-4:],
+            is_active=True,
+        )
+        proxy_key_b = ProxyApiKey(
+            name=f"Scope Key B {suffix}",
+            key_prefix=f"prism_pk_scope_b_{suffix}",
+            key_hash=(suffix[::-1] * 8)[:64],
+            last_four=suffix[:4],
+            is_active=True,
+        )
+
+        session.add_all(
+            [
+                profile_a,
+                profile_b,
+                vendor,
+                strategy_a,
+                strategy_b,
+                model_a,
+                model_b,
+                endpoint_a,
+                endpoint_b,
+                connection_a,
+                connection_b,
+                proxy_key_a,
+                proxy_key_b,
+                UserSetting(profile=profile_a),
+                UserSetting(profile=profile_b),
+            ]
+        )
+        await session.flush()
+
+        ingress_a = f"scope-ingress-a-{suffix}"
+        ingress_b = f"scope-ingress-b-{suffix}"
+        session.add_all(
+            [
+                UsageRequestEvent(
+                    profile_id=profile_a.id,
+                    ingress_request_id=ingress_a,
+                    model_id=model_a.model_id,
+                    resolved_target_model_id=model_a.model_id,
+                    api_family="openai",
+                    endpoint_id=endpoint_a.id,
+                    connection_id=connection_a.id,
+                    proxy_api_key_id=proxy_key_a.id,
+                    proxy_api_key_name_snapshot=f"Scope Snapshot A {suffix}",
+                    status_code=200,
+                    success_flag=True,
+                    input_tokens=10,
+                    output_tokens=20,
+                    total_tokens=35,
+                    cache_read_input_tokens=3,
+                    cache_creation_input_tokens=2,
+                    reasoning_tokens=1,
+                    total_cost_original_micros=500,
+                    total_cost_user_currency_micros=500,
+                    currency_code_original="USD",
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    attempt_count=1,
+                    request_path="/v1/chat/completions",
+                    created_at=created_at,
+                ),
+                UsageRequestEvent(
+                    profile_id=profile_b.id,
+                    ingress_request_id=ingress_b,
+                    model_id=model_b.model_id,
+                    resolved_target_model_id=model_b.model_id,
+                    api_family="openai",
+                    endpoint_id=endpoint_b.id,
+                    connection_id=connection_b.id,
+                    proxy_api_key_id=proxy_key_b.id,
+                    proxy_api_key_name_snapshot=f"Scope Snapshot B {suffix}",
+                    status_code=200,
+                    success_flag=True,
+                    input_tokens=99,
+                    output_tokens=1,
+                    total_tokens=100,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    reasoning_tokens=0,
+                    total_cost_original_micros=1000,
+                    total_cost_user_currency_micros=1000,
+                    currency_code_original="USD",
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    attempt_count=1,
+                    request_path="/v1/chat/completions",
+                    created_at=created_at,
+                ),
+            ]
+        )
+        await session.commit()
+
+        return profile_a.id, profile_b.id, ingress_a, ingress_b
 
 
 class TestCostingAndSettingsIsolation:
@@ -203,7 +391,6 @@ class TestObservabilityAttribution:
     def test_stats_routes_use_api_family_query_params(self):
         from app.routers.stats import (
             get_throughput,
-            list_operations_request_logs,
             list_request_logs,
             spending_report,
             stats_summary,
@@ -211,7 +398,6 @@ class TestObservabilityAttribution:
 
         for route in (
             list_request_logs,
-            list_operations_request_logs,
             stats_summary,
             spending_report,
             get_throughput,
@@ -262,6 +448,53 @@ class TestObservabilityAttribution:
         # Verify all logs belong to profile 1
         assert total == 2
         assert all(log.profile_id == 1 for log in items)
+
+    @pytest.mark.asyncio
+    async def test_usage_snapshot_route_scopes_results_to_effective_profile(self):
+        await get_engine().dispose()
+        (
+            profile_a_id,
+            profile_b_id,
+            ingress_a,
+            ingress_b,
+        ) = await _seed_usage_snapshot_profiles_for_scope_test()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response_a = await client.get(
+                "/api/stats/usage-snapshot",
+                params={"preset": "24h"},
+                headers={"X-Profile-Id": str(profile_a_id)},
+            )
+            response_b = await client.get(
+                "/api/stats/usage-snapshot",
+                params={"preset": "24h"},
+                headers={"X-Profile-Id": str(profile_b_id)},
+            )
+
+        assert response_a.status_code == 200
+        assert response_b.status_code == 200
+
+        payload_a = response_a.json()
+        payload_b = response_b.json()
+
+        assert payload_a["overview"]["total_requests"] == 1
+        assert payload_b["overview"]["total_requests"] == 1
+        assert (
+            payload_a["request_events"]["items"][0]["ingress_request_id"] == ingress_a
+        )
+        assert (
+            payload_b["request_events"]["items"][0]["ingress_request_id"] == ingress_b
+        )
+        assert (
+            payload_a["request_events"]["items"][0]["ingress_request_id"] != ingress_b
+        )
+        assert (
+            payload_b["request_events"]["items"][0]["ingress_request_id"] != ingress_a
+        )
 
 
 class TestHeaderBlocklistScoping:

@@ -145,32 +145,14 @@ async def test_get_request_logs_uses_stable_id_tiebreaker_for_timestamp_sort() -
     ]
 
 
-@pytest.mark.asyncio
-async def test_get_operations_request_logs_uses_stable_id_tiebreaker_for_timestamp_sort() -> (
-    None
-):
-    from app.services.stats.request_logs import get_operations_request_logs
+def test_operations_request_logs_contract_is_retired_from_stats_services() -> None:
+    import app.services.stats.request_logs as request_logs
+    import app.services.stats_service as stats_service
 
-    count_result = MagicMock()
-    count_result.scalar.return_value = 0
-    rows_result = MagicMock()
-    rows_result.mappings.return_value.all.return_value = []
-    statements = []
+    legacy_name = "get_" + "operations_request_logs"
 
-    async def capture_execute(statement):
-        statements.append(statement)
-        return count_result if len(statements) == 1 else rows_result
-
-    db = AsyncMock()
-    db.execute = AsyncMock(side_effect=capture_execute)
-
-    await get_operations_request_logs(db, profile_id=7, limit=200, offset=0)
-
-    order_clauses = [str(clause) for clause in statements[1]._order_by_clauses]
-    assert order_clauses == [
-        str(RequestLog.created_at.desc()),
-        str(RequestLog.id.desc()),
-    ]
+    assert not hasattr(request_logs, legacy_name)
+    assert not hasattr(stats_service, legacy_name)
 
 
 @pytest.mark.asyncio
@@ -242,60 +224,6 @@ async def test_get_request_logs_filters_by_status_family_and_preserves_failure_f
 
     assert total == 2
     assert [item.status_code for item in items] == [429, 404]
-
-
-@pytest.mark.asyncio
-async def test_get_operations_request_logs_filters_by_status_family_and_exact_status_code() -> (
-    None
-):
-    from app.services.stats.request_logs import get_operations_request_logs
-
-    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
-
-    async with AsyncSessionLocal() as db:
-        profile = Profile(
-            name=f"operations-log-profile-{uuid4()}",
-            is_active=False,
-            is_default=False,
-        )
-        db.add(profile)
-        await db.flush()
-
-        db.add_all(
-            [
-                _request_log(
-                    profile_id=profile.id,
-                    response_time_ms=100,
-                    created_at=created_at,
-                    status_code=500,
-                ),
-                _request_log(
-                    profile_id=profile.id,
-                    response_time_ms=110,
-                    created_at=created_at,
-                    status_code=503,
-                ),
-                _request_log(
-                    profile_id=profile.id,
-                    response_time_ms=120,
-                    created_at=created_at,
-                    status_code=429,
-                ),
-            ]
-        )
-        await db.commit()
-
-        items, total = await get_operations_request_logs(
-            db,
-            profile_id=profile.id,
-            status_family="5xx",
-            status_code=503,
-            limit=200,
-            offset=0,
-        )
-
-    assert total == 1
-    assert [item["status_code"] for item in items] == [503]
 
 
 @pytest.mark.asyncio
@@ -449,45 +377,6 @@ async def test_get_request_logs_filters_by_api_family() -> None:
 
     assert total == 1
     assert [item.api_family for item in items] == ["openai"]
-
-
-@pytest.mark.asyncio
-async def test_get_operations_request_logs_exposes_api_family_field() -> None:
-    from app.services.stats.request_logs import get_operations_request_logs
-
-    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
-
-    async with AsyncSessionLocal() as db:
-        profile = Profile(
-            name=f"operations-api-family-profile-{uuid4()}",
-            is_active=False,
-            is_default=False,
-        )
-        db.add(profile)
-        await db.flush()
-
-        db.add(
-            _request_log(
-                profile_id=profile.id,
-                response_time_ms=100,
-                created_at=created_at,
-                api_family="anthropic",
-            )
-        )
-        await db.commit()
-
-        items, total = await get_operations_request_logs(
-            db,
-            profile_id=profile.id,
-            api_family="anthropic",
-            limit=200,
-            offset=0,
-        )
-
-    assert total == 1
-    legacy_field = "provider" + "_type"
-    assert items[0]["api_family"] == "anthropic"
-    assert legacy_field not in items[0]
 
 
 @pytest.mark.asyncio

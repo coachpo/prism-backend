@@ -120,8 +120,6 @@ from app.schemas.domains.stats import (
     ModelMetricsBatchItem,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
-    OperationsRequestLogListResponse,
-    OperationsRequestLogResponse,
     RequestLogListResponse,
     RequestLogResponse,
     SpendingGroupRow,
@@ -135,6 +133,13 @@ from app.schemas.domains.stats import (
     TimezonePreferenceUpdate,
     ThroughputBucket,
     ThroughputStatsResponse,
+)
+from app.schemas.domains.usage_statistics import (
+    UsageProxyApiKeyStatistic,
+    UsageRequestEventResponse,
+    UsageRequestEventsSection,
+    UsageSnapshotResponse,
+    UsageSnapshotRequestEventItem,
 )
 
 __all__ = [
@@ -220,8 +225,6 @@ __all__ = [
     "ModelMetricsBatchItem",
     "ModelMetricsBatchRequest",
     "ModelMetricsBatchResponse",
-    "OperationsRequestLogListResponse",
-    "OperationsRequestLogResponse",
     "PasswordResetConfirmRequest",
     "PasswordResetConfirmResponse",
     "PasswordResetRequest",
@@ -262,6 +265,11 @@ __all__ = [
     "TimezonePreferenceUpdate",
     "ThroughputBucket",
     "ThroughputStatsResponse",
+    "UsageRequestEventResponse",
+    "UsageRequestEventsSection",
+    "UsageSnapshotRequestEventItem",
+    "UsageProxyApiKeyStatistic",
+    "UsageSnapshotResponse",
     "WebAuthnAuthenticationOptionsResponse",
     "WebAuthnAuthenticationVerifyRequest",
     "WebAuthnCredentialListResponse",

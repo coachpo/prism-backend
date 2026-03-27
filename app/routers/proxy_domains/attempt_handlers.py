@@ -6,7 +6,11 @@ from fastapi.responses import Response, StreamingResponse
 
 from app.services.stats_service import extract_token_usage
 
-from .attempt_outcome_reporting import log_and_audit_attempt, response_error_detail
+from .attempt_outcome_reporting import (
+    log_and_audit_attempt,
+    record_final_usage_event,
+    response_error_detail,
+)
 from .attempt_streaming import build_streaming_response
 from .attempt_types import (
     ProxyAttemptTarget,
@@ -186,6 +190,14 @@ async def handle_streaming_attempt(
             error_detail=error_detail,
             tokens=tokens,
         )
+        _ = await record_final_usage_event(
+            deps=deps,
+            state=state,
+            target=target,
+            status_code=upstream_resp.status_code,
+            attempt_count=target.attempt_number,
+            tokens=tokens,
+        )
         await _release_limiter_lease_if_needed(
             deps=deps,
             state=state,
@@ -296,6 +308,14 @@ async def handle_buffered_attempt(
         is_stream=False,
         elapsed_ms=elapsed_ms,
         error_detail=error_detail,
+        tokens=tokens,
+    )
+    _ = await record_final_usage_event(
+        deps=deps,
+        state=state,
+        target=target,
+        status_code=response.status_code,
+        attempt_count=target.attempt_number,
         tokens=tokens,
     )
     await _release_limiter_lease_if_needed(

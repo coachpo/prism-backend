@@ -55,6 +55,7 @@ def _set_request_auth_state(request: Request, *, auth_enabled: bool) -> None:
     request.state.auth_enabled = auth_enabled
     request.state.auth_subject = None
     request.state.proxy_api_key_id = None
+    request.state.proxy_api_key_name = None
 
 
 def _append_response_background_task(
@@ -160,6 +161,7 @@ async def _handle_proxy_authentication(
     last_used_at = utc_now()
     last_used_ip = request.client.host if request.client else None
     request.state.proxy_api_key_id = proxy_key.id
+    request.state.proxy_api_key_name = proxy_key.name
     response = await call_next(request)
 
     background_task_manager = getattr(

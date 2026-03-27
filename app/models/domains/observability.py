@@ -47,6 +47,12 @@ class RequestLog(Base):
     connection_id: Mapped[int | None] = mapped_column(
         Integer, nullable=True, index=True
     )
+    proxy_api_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("proxy_api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    proxy_api_key_name_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
     ingress_request_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     attempt_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
     provider_correlation_id: Mapped[str | None] = mapped_column(
@@ -118,6 +124,107 @@ class RequestLog(Base):
     )
 
     profile: Mapped[Any] = relationship("Profile", back_populates="request_logs")
+
+
+class UsageRequestEvent(Base):
+    __tablename__ = "usage_request_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id",
+            "ingress_request_id",
+            name="uq_usage_request_events_profile_ingress_request",
+        ),
+        Index("idx_usage_request_events_ingress_request_id", "ingress_request_id"),
+        Index(
+            "idx_usage_request_events_profile_created_at", "profile_id", "created_at"
+        ),
+        CheckConstraint(
+            "attempt_count >= 1",
+            name="ck_usage_request_events_attempt_count_positive",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    profile_id: Mapped[int] = mapped_column(
+        ForeignKey("profiles.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    ingress_request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    model_id: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    resolved_target_model_id: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    api_family: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    endpoint_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    connection_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, index=True
+    )
+    proxy_api_key_id: Mapped[int | None] = mapped_column(
+        ForeignKey("proxy_api_keys.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    proxy_api_key_name_snapshot: Mapped[str | None] = mapped_column(
+        String(200), nullable=True
+    )
+    status_code: Mapped[int] = mapped_column(Integer, nullable=False)
+    success_flag: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    output_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_read_input_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cache_creation_input_tokens: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    reasoning_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    input_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    output_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    cache_read_input_cost_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    cache_creation_input_cost_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    reasoning_cost_micros: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_cost_original_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    total_cost_user_currency_micros: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    currency_code_original: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    report_currency_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    report_currency_symbol: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    fx_rate_used: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    fx_rate_source: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    pricing_snapshot_unit: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    pricing_snapshot_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_output: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_cache_read_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_cache_creation_input: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_reasoning: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
+    pricing_snapshot_missing_special_token_price_policy: Mapped[str | None] = (
+        mapped_column(String(20), nullable=True)
+    )
+    pricing_config_version_used: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+    profile: Mapped[Any] = relationship(
+        "Profile", back_populates="usage_request_events"
+    )
 
 
 class UserSetting(Base):

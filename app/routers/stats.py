@@ -13,22 +13,22 @@ from app.schemas.schemas import (
     ConnectionSuccessRateResponse,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
-    OperationsRequestLogListResponse,
     RequestLogListResponse,
     SpendingReportResponse,
     StatsSummaryResponse,
     ThroughputStatsResponse,
+    UsageSnapshotResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
 from app.services.stats_service import (
     get_connection_metrics_batch,
     get_connection_success_rates,
     get_model_metrics_batch,
-    get_operations_request_logs,
     get_request_logs,
     get_spending_report,
     get_stats_summary,
     get_throughput_stats,
+    get_usage_snapshot,
 )
 
 router = APIRouter(prefix="/api/stats", tags=["statistics"])
@@ -69,44 +69,6 @@ async def list_request_logs(
         limit=limit,
         offset=offset,
         get_request_logs_fn=get_request_logs,
-    )
-
-
-@router.get("/requests/operations", response_model=OperationsRequestLogListResponse)
-async def list_operations_request_logs(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)],
-    request_id: int | None = None,
-    ingress_request_id: str | None = None,
-    model_id: str | None = None,
-    api_family: str | None = None,
-    status_code: int | None = None,
-    status_family: Literal["4xx", "5xx"] | None = None,
-    success: bool | None = None,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
-    endpoint_id: int | None = None,
-    connection_id: int | None = None,
-    limit: int = Query(default=200, ge=1, le=500),
-    offset: int = Query(default=0, ge=0),
-):
-    return await _stats_impl.list_operations_request_logs(
-        db,
-        profile_id,
-        request_id=request_id,
-        ingress_request_id=ingress_request_id,
-        model_id=model_id,
-        api_family=api_family,
-        status_code=status_code,
-        status_family=status_family,
-        success=success,
-        from_time=from_time,
-        to_time=to_time,
-        endpoint_id=endpoint_id,
-        connection_id=connection_id,
-        limit=limit,
-        offset=offset,
-        get_operations_request_logs_fn=get_operations_request_logs,
     )
 
 
@@ -261,15 +223,29 @@ async def get_throughput(
     )
 
 
+@router.get("/usage-snapshot", response_model=UsageSnapshotResponse)
+async def usage_snapshot(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    preset: Literal["all", "7h", "24h", "7d"] = "24h",
+):
+    return await _stats_impl.usage_snapshot(
+        db,
+        profile_id,
+        preset=preset,
+        get_usage_snapshot_fn=get_usage_snapshot,
+    )
+
+
 __all__ = [
     "connection_metrics_batch",
     "connection_success_rates",
     "delete_request_logs",
     "get_throughput",
-    "list_operations_request_logs",
     "list_request_logs",
     "model_metrics_batch",
     "router",
     "spending_report",
     "stats_summary",
+    "usage_snapshot",
 ]

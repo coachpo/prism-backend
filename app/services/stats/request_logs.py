@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Literal
+from typing import Literal
 
 from sqlalchemy import and_, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -105,65 +105,3 @@ async def get_request_logs(
     )
     rows = (await db.execute(q)).scalars().all()
     return list(rows), total
-
-
-async def get_operations_request_logs(
-    db: AsyncSession,
-    *,
-    profile_id: int,
-    request_id: int | None = None,
-    ingress_request_id: str | None = None,
-    model_id: str | None = None,
-    api_family: str | None = None,
-    status_code: int | None = None,
-    status_family: Literal["4xx", "5xx"] | None = None,
-    success: bool | None = None,
-    from_time: datetime | None = None,
-    to_time: datetime | None = None,
-    endpoint_id: int | None = None,
-    connection_id: int | None = None,
-    limit: int = 200,
-    offset: int = 0,
-) -> tuple[list[dict[str, Any]], int]:
-    where = _build_request_log_where(
-        profile_id=profile_id,
-        request_id=request_id,
-        ingress_request_id=ingress_request_id,
-        model_id=model_id,
-        api_family=api_family,
-        status_code=status_code,
-        status_family=status_family,
-        success=success,
-        from_time=from_time,
-        to_time=to_time,
-        endpoint_id=endpoint_id,
-        connection_id=connection_id,
-    )
-    total = await _get_request_log_total(db, where)
-
-    q = (
-        select(
-            RequestLog.id.label("id"),
-            RequestLog.model_id.label("model_id"),
-            RequestLog.api_family.label("api_family"),
-            RequestLog.status_code.label("status_code"),
-            RequestLog.response_time_ms.label("response_time_ms"),
-            RequestLog.input_tokens.label("input_tokens"),
-            RequestLog.output_tokens.label("output_tokens"),
-            RequestLog.total_tokens.label("total_tokens"),
-            RequestLog.cache_read_input_tokens.label("cache_read_input_tokens"),
-            RequestLog.cache_creation_input_tokens.label("cache_creation_input_tokens"),
-            RequestLog.reasoning_tokens.label("reasoning_tokens"),
-            RequestLog.total_cost_user_currency_micros.label(
-                "total_cost_user_currency_micros"
-            ),
-            RequestLog.error_detail.label("error_detail"),
-            RequestLog.created_at.label("created_at"),
-        )
-        .where(where)
-        .order_by(*_request_log_order_by())
-        .limit(limit)
-        .offset(offset)
-    )
-    rows = (await db.execute(q)).mappings().all()
-    return [dict(row) for row in rows], total

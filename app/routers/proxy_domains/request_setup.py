@@ -70,6 +70,8 @@ class ProxyRequestSetup:
     vendor_key: str | None
     vendor_name: str | None
     api_family: str
+    proxy_api_key_id: int | None
+    proxy_api_key_name: str | None
     probe_eligible_connection_ids: list[int]
     raw_body: bytes | None
     recovery_active: bool
@@ -152,6 +154,14 @@ async def prepare_proxy_request(
         extract_stream_flag(raw_body) if raw_body else False
     ) or request_path.endswith(":streamGenerateContent")
     client_headers = get_client_headers(request)
+    raw_proxy_api_key_id = getattr(request.state, "proxy_api_key_id", None)
+    raw_proxy_api_key_name = getattr(request.state, "proxy_api_key_name", None)
+    proxy_api_key_id = (
+        raw_proxy_api_key_id if isinstance(raw_proxy_api_key_id, int) else None
+    )
+    proxy_api_key_name = (
+        raw_proxy_api_key_name if isinstance(raw_proxy_api_key_name, str) else None
+    )
     method = request.method
     upstream_model_id = model_config.model_id
     body_model_id = extract_model_from_body(raw_body) if raw_body else None
@@ -259,6 +269,8 @@ async def prepare_proxy_request(
         vendor_key=vendor_key,
         vendor_name=vendor_name,
         api_family=api_family,
+        proxy_api_key_id=proxy_api_key_id,
+        proxy_api_key_name=proxy_api_key_name,
         probe_eligible_connection_ids=attempt_plan.probe_eligible_connection_ids,
         raw_body=raw_body,
         recovery_active=failover_policy.failover_recovery_enabled,

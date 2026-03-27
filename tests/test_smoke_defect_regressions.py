@@ -60,6 +60,7 @@ from tests.smoke_defect_regressions.test_startup import (
     TestDEF080_VendorApiFamilySchemaSplit,
     TestDEF084_VendorDeleteSafety,
     TestDEF085_LoadbalanceStrategyPresetSeed,
+    TestDEF086_UsageStatisticsStorageCutover,
 )
 
 __all__ = [
@@ -112,6 +113,7 @@ __all__ = [
     "TestDEF080_VendorApiFamilySchemaSplit",
     "TestDEF084_VendorDeleteSafety",
     "TestDEF085_LoadbalanceStrategyPresetSeed",
+    "TestDEF086_UsageStatisticsStorageCutover",
     "TestDEF081_GeminiNestedProviderCorrelationExtraction",
     "TestEndpointOwnerRoute",
     "TestLoadbalanceStrategyFieldValidation",

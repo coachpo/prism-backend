@@ -5,6 +5,7 @@ from typing import TypeAlias
 from typing import Literal
 
 from app.core.config import get_settings
+from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
 BanMode = Literal["off", "temporary", "manual"]
 StrategyType: TypeAlias = Literal["single", "fill-first", "round-robin", "failover"]
@@ -86,6 +87,8 @@ def normalize_failover_status_codes(value: object) -> tuple[int, ...]:
 
 
 def _resolve_status_codes(value: object) -> tuple[int, ...]:
+    if value is None:
+        return tuple(DEFAULT_FAILOVER_STATUS_CODES)
     return normalize_failover_status_codes(value)
 
 

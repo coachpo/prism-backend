@@ -22,7 +22,7 @@ from app.services.proxy_service import (
     proxy_request,
     should_failover,
 )
-from app.services.stats_service import log_request
+from app.services.stats_service import log_final_usage_request_event, log_request
 from app.services.audit_service import record_audit_log
 from app.routers.proxy_domains.attempt_execution import (
     ProxyRuntimeDependencies,
@@ -87,6 +87,7 @@ async def _handle_proxy(
             clear_connection_state_fn=clear_connection_state,
             filter_response_headers_fn=filter_response_headers,
             log_request_fn=log_request,
+            log_usage_request_event_fn=log_final_usage_request_event,
             record_connection_failure_fn=record_connection_failure,
             record_connection_recovery_fn=record_connection_recovery,
             proxy_request_fn=proxy_request,
