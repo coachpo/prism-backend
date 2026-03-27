@@ -1,7 +1,7 @@
 # BACKEND STATS SERVICE KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/stats/` is the telemetry and query cluster behind `../stats_service.py`: request-log writes, filtered request-log listing with request-id focus, summary rollups, throughput reports, spending reports, batch model or connection metrics, preset time-window resolution, and dashboard realtime payload emission.
+`services/stats/` is the telemetry and query cluster behind `../stats_service.py`: request-log writes, usage-event writes, usage snapshot assembly, filtered request-log listing with request-id focus, summary rollups, throughput reports, spending reports, batch model or connection metrics, preset time-window resolution, and dashboard realtime payload emission.
 
 ## STRUCTURE
 ```
@@ -10,6 +10,8 @@ stats/
 ├── logging.py          # Request-log writes during proxy execution
 ├── model_metrics.py    # Batch model-detail and connections-list metric payloads
 ├── request_logs.py     # Filtered request-log listing and pagination, including request-id focus
+├── usage_events.py     # Finalized usage-event writes and snapshot-friendly attribution
+├── usage_snapshot.py   # Unified statistics snapshot assembly
 ├── spending.py         # Spending report aggregation and top-N rollups
 ├── summary.py          # Summary cards, model health, success-rate queries
 ├── throughput.py       # Time-bucket throughput reports
@@ -21,6 +23,8 @@ stats/
 
 - Re-export surface: `__init__.py`
 - Proxy-side request logging: `logging.py`
+- Finalized usage-event persistence and snapshot attribution: `usage_events.py`
+- Unified statistics snapshot assembly: `usage_snapshot.py`
 - Batch success-rate, latency, and spend metrics for model-detail surfaces: `model_metrics.py`
 - Operations/request-log table data and request focus lookups: `request_logs.py`
 - Spending filters, grouping, and top spenders: `spending.py`
@@ -36,6 +40,7 @@ stats/
 - Reuse `resolve_time_preset()` instead of duplicating preset/date-window math in other modules.
 - Treat null-vs-zero token and cost fields deliberately; missing usage should not silently become priced usage.
 - Keep api-family token parsing isolated to `usage_extractors.py`.
+- Keep usage-event persistence isolated to `usage_events.py` and snapshot shaping isolated to `usage_snapshot.py`.
 - Keep throughput aggregation in `throughput.py` rather than layering it into `summary.py` or route handlers.
 - Keep model-detail batch metric queries in `model_metrics.py` rather than overloading `summary.py`.
 - `logging.py` owns request-log side effects, including `dashboard.update` broadcasts with request-log, summary, api-family, spending, throughput, and routing snapshot payloads; callers should not duplicate those websocket emissions.
