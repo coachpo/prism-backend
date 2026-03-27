@@ -373,3 +373,22 @@ class TestDEF080_ProviderCorrelationExtraction:
             )
             == "gemini-stream-1"
         )
+
+
+class TestDEF081_GeminiNestedProviderCorrelationExtraction:
+    def test_gemini_extracts_nested_response_id_from_sse_chunk(self):
+        from app.routers.proxy_domains.attempt_outcome_reporting import (
+            extract_provider_correlation_id,
+        )
+
+        assert (
+            extract_provider_correlation_id(
+                api_family="gemini",
+                response_headers={},
+                response_body=(
+                    b'data: {"response":{"responseId":"gemini-nested-stream-1"},"usageMetadata":{"totalTokenCount":3}}\n\n'
+                ),
+                request_headers={},
+            )
+            == "gemini-nested-stream-1"
+        )

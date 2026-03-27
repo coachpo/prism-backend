@@ -10,6 +10,7 @@ from tests.smoke_defect_regressions.test_proxy import (
     TestDEF012_RuntimeEndpointToggleFailoverE2E,
     TestDEF021_StreamingCancellationResilience,
     TestDEF032_ProxyModelUpdateInvariants,
+    TestDEF081_GeminiNestedProviderCorrelationExtraction,
 )
 from tests.smoke_defect_regressions.test_config import (
     TestDEF031_StartupUserSettingsSeed,
@@ -107,6 +108,7 @@ __all__ = [
     "TestDEF077_ThroughputRPMContract",
     "TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence",
     "TestDEF080_VendorApiFamilySchemaSplit",
+    "TestDEF081_GeminiNestedProviderCorrelationExtraction",
     "TestEndpointOwnerRoute",
     "TestLoadbalanceStrategyFieldValidation",
     "TestHeaderBlocklist",

@@ -1,4 +1,4 @@
-from app.core.crypto import encrypt_secret, mask_secret
+from app.core.crypto import decrypt_secret, encrypt_secret, mask_secret
 
 
 def test_mask_secret_reveals_only_the_last_four_characters_for_long_values():
@@ -23,3 +23,12 @@ def test_mask_secret_fully_redacts_values_of_eight_characters_or_less():
     secret = "12345678"
 
     assert mask_secret(encrypt_secret(secret)) == "********"
+
+
+def test_encrypt_secret_returns_existing_encrypted_values_without_double_encrypting():
+    secret = "sk-1234567890abcdefghijklmnop"
+
+    encrypted = encrypt_secret(secret)
+
+    assert encrypt_secret(encrypted) == encrypted
+    assert decrypt_secret(encrypted) == secret
