@@ -11,6 +11,8 @@ from tests.smoke_defect_regressions.test_proxy import (
     TestDEF021_StreamingCancellationResilience,
     TestDEF032_ProxyModelUpdateInvariants,
     TestDEF081_GeminiNestedProviderCorrelationExtraction,
+    TestDEF083_ProxyTargetRuntimeSelection,
+    TestDEF087_ProxyUnroutableTargetRejection,
 )
 from tests.smoke_defect_regressions.test_config import (
     TestDEF031_StartupUserSettingsSeed,
@@ -115,7 +117,9 @@ __all__ = [
     "TestDEF085_LoadbalanceStrategyPresetSeed",
     "TestDEF086_UsageStatisticsStorageCutover",
     "TestDEF081_GeminiNestedProviderCorrelationExtraction",
+    "TestDEF083_ProxyTargetRuntimeSelection",
     "TestEndpointOwnerRoute",
+    "TestDEF087_ProxyUnroutableTargetRejection",
     "TestLoadbalanceStrategyFieldValidation",
     "TestHeaderBlocklist",
 ]

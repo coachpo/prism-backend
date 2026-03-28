@@ -33,6 +33,7 @@ from app.models.models import (
     RequestLog,
     AuditLog,
     HeaderBlocklistRule,
+    ModelProxyTarget,
 )
 from app.routers.profiles import (
     list_profiles,
@@ -63,6 +64,190 @@ from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 class TestConfigExportImportIsolation:
     """FR-007: Config Export/Import Isolation"""
+
+    @pytest.mark.asyncio
+    async def test_import_config_allows_proxy_model_with_empty_targets_for_target_profile_only(
+        self,
+    ):
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.routers.config import import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        target_profile_name = f"empty-proxy-target-{suffix}"
+        other_profile_name = f"empty-proxy-other-{suffix}"
+        stale_target_model_id = f"stale-target-model-{suffix}"
+        stale_proxy_model_id = f"stale-proxy-model-{suffix}"
+        other_model_id = f"other-model-{suffix}"
+        imported_proxy_model_id = f"proxy-without-targets-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if vendor is None:
+                vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
+                )
+                db.add(vendor)
+                await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for empty proxy import",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            other_profile = Profile(
+                name=other_profile_name,
+                description="Control profile that must remain unchanged",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add_all([target_profile, other_profile])
+            await db.flush()
+
+            target_model = ModelConfig(
+                profile_id=target_profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=stale_target_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=target_profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            stale_proxy_model = ModelConfig(
+                profile_id=target_profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=stale_proxy_model_id,
+                model_type="proxy",
+                is_enabled=True,
+            )
+            other_model = ModelConfig(
+                profile_id=other_profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=other_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=other_profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            db.add_all([target_model, stale_proxy_model, other_model])
+            await db.flush()
+            db.add(
+                ModelProxyTarget(
+                    source_model_config_id=stale_proxy_model.id,
+                    target_model_config_id=target_model.id,
+                    position=0,
+                )
+            )
+            await db.commit()
+
+            target_profile_id = target_profile.id
+            other_profile_id = other_profile.id
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 8,
+                "vendors": [
+                    {
+                        "key": "openai",
+                        "name": "OpenAI",
+                        "description": "OpenAI API (GPT models)",
+                        "icon_key": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
+                "endpoints": [],
+                "pricing_templates": [],
+                "loadbalance_strategies": [],
+                "models": [
+                    {
+                        "vendor_key": "openai",
+                        "api_family": "openai",
+                        "model_id": imported_proxy_model_id,
+                        "display_name": "Proxy configured later",
+                        "model_type": "proxy",
+                        "proxy_targets": [],
+                        "connections": [],
+                    }
+                ],
+                "header_blocklist_rules": [],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            response = await import_config(
+                data=payload,
+                db=db,
+                profile_id=target_profile_id,
+            )
+            await db.commit()
+
+            assert response.models_imported == 1
+
+        async with AsyncSessionLocal() as db:
+            target_models = (
+                (
+                    await db.execute(
+                        select(ModelConfig).where(
+                            ModelConfig.profile_id == target_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            other_models = (
+                (
+                    await db.execute(
+                        select(ModelConfig).where(
+                            ModelConfig.profile_id == other_profile_id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            proxy_target_rows = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(ModelProxyTarget)
+                    .where(
+                        ModelProxyTarget.source_model_config_id == target_models[0].id
+                    )
+                )
+            ).scalar_one()
+
+        assert len(target_models) == 1
+        assert target_models[0].model_id == imported_proxy_model_id
+        assert target_models[0].model_type == "proxy"
+        assert proxy_target_rows == 0
+
+        assert len(other_models) == 1
+        assert other_models[0].model_id == other_model_id
+        assert other_models[0].model_type == "native"
 
     @pytest.mark.asyncio
     async def test_export_config_filters_by_profile(self):

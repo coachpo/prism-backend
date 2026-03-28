@@ -20,6 +20,7 @@ from app.services.loadbalancer.policy import (
     resolve_effective_loadbalance_policy,
 )
 from app.services.loadbalancer.planner import (
+    ProxyTargetsUnroutableError,
     build_attempt_plan,
     get_model_config_with_connections,
 )
@@ -79,6 +80,20 @@ class ProxyRequestSetup:
     rewritten_body: bytes | None
 
 
+@dataclass(slots=True)
+class ProxyRoutingRejection(Exception):
+    api_family: str
+    detail: str
+    ingress_request_id: str
+    is_streaming: bool
+    model_id: str
+    proxy_api_key_id: int | None
+    proxy_api_key_name: str | None
+    vendor_id: int
+    vendor_key: str | None
+    vendor_name: str | None
+
+
 async def prepare_proxy_request(
     *,
     request: Request,
@@ -96,11 +111,18 @@ async def prepare_proxy_request(
                 "Include 'model' in the request body or use a Gemini-style model path."
             ),
         )
-    model_config = await get_model_config_with_connections(db, profile_id, model_id)
-    if not model_config:
-        raise HTTPException(
-            status_code=404, detail=f"Model '{model_id}' not configured or disabled"
-        )
+    ingress_request_id = str(uuid4())
+    is_streaming = (
+        extract_stream_flag(raw_body) if raw_body else False
+    ) or request_path.endswith(":streamGenerateContent")
+    raw_proxy_api_key_id = getattr(request.state, "proxy_api_key_id", None)
+    raw_proxy_api_key_name = getattr(request.state, "proxy_api_key_name", None)
+    proxy_api_key_id = (
+        raw_proxy_api_key_id if isinstance(raw_proxy_api_key_id, int) else None
+    )
+    proxy_api_key_name = (
+        raw_proxy_api_key_name if isinstance(raw_proxy_api_key_name, str) else None
+    )
 
     requested_model_config = (
         (
@@ -117,21 +139,56 @@ async def prepare_proxy_request(
         .scalars()
         .one_or_none()
     )
+    if requested_model_config is None:
+        raise HTTPException(
+            status_code=404, detail=f"Model '{model_id}' not configured or disabled"
+        )
+
+    try:
+        model_config = await get_model_config_with_connections(db, profile_id, model_id)
+    except ProxyTargetsUnroutableError as exc:
+        requested_vendor = cast(
+            Vendor,
+            getattr(requested_model_config, "vendor", None),
+        )
+        if requested_vendor is None:
+            raise HTTPException(
+                status_code=500, detail="Model vendor metadata is missing"
+            ) from exc
+
+        raw_vendor_key = getattr(requested_vendor, "key", None)
+        raw_vendor_name = getattr(requested_vendor, "name", None)
+        raise ProxyRoutingRejection(
+            api_family=requested_model_config.api_family,
+            detail=str(exc),
+            ingress_request_id=ingress_request_id,
+            is_streaming=is_streaming,
+            model_id=model_id,
+            proxy_api_key_id=proxy_api_key_id,
+            proxy_api_key_name=proxy_api_key_name,
+            vendor_id=requested_vendor.id,
+            vendor_key=raw_vendor_key if isinstance(raw_vendor_key, str) else None,
+            vendor_name=raw_vendor_name if isinstance(raw_vendor_name, str) else None,
+        ) from exc
+
+    if not model_config:
+        raise HTTPException(
+            status_code=404, detail=f"Model '{model_id}' not configured or disabled"
+        )
 
     request_metadata_model = model_config
-    if requested_model_config is not None:
-        requested_vendor = getattr(requested_model_config, "vendor", None)
-        requested_vendor_id = getattr(requested_vendor, "id", None)
-        requested_audit_enabled = getattr(requested_vendor, "audit_enabled", None)
-        requested_audit_capture_bodies = getattr(
-            requested_vendor, "audit_capture_bodies", None
-        )
-        if (
-            isinstance(requested_vendor_id, int)
-            and isinstance(requested_audit_enabled, bool)
-            and isinstance(requested_audit_capture_bodies, bool)
-        ):
-            request_metadata_model = requested_model_config
+    requested_vendor = getattr(requested_model_config, "vendor", None)
+    requested_vendor_id = getattr(requested_vendor, "id", None)
+    requested_audit_enabled = getattr(requested_vendor, "audit_enabled", None)
+    requested_audit_capture_bodies = getattr(
+        requested_vendor, "audit_capture_bodies", None
+    )
+    if (
+        isinstance(requested_vendor_id, int)
+        and isinstance(requested_audit_enabled, bool)
+        and isinstance(requested_audit_capture_bodies, bool)
+    ):
+        request_metadata_model = requested_model_config
 
     vendor = cast(
         Vendor,
@@ -150,18 +207,7 @@ async def prepare_proxy_request(
     vendor_name = raw_vendor_name if isinstance(raw_vendor_name, str) else None
     app = cast(_RequestAppWithClientState, request.app)
     client = app.state.http_client
-    is_streaming = (
-        extract_stream_flag(raw_body) if raw_body else False
-    ) or request_path.endswith(":streamGenerateContent")
     client_headers = get_client_headers(request)
-    raw_proxy_api_key_id = getattr(request.state, "proxy_api_key_id", None)
-    raw_proxy_api_key_name = getattr(request.state, "proxy_api_key_name", None)
-    proxy_api_key_id = (
-        raw_proxy_api_key_id if isinstance(raw_proxy_api_key_id, int) else None
-    )
-    proxy_api_key_name = (
-        raw_proxy_api_key_name if isinstance(raw_proxy_api_key_name, str) else None
-    )
     method = request.method
     upstream_model_id = model_config.model_id
     body_model_id = extract_model_from_body(raw_body) if raw_body else None
@@ -259,7 +305,7 @@ async def prepare_proxy_request(
         effective_request_path=effective_request_path,
         endpoints_to_try=endpoints_to_try,
         failover_policy=failover_policy,
-        ingress_request_id=str(uuid4()),
+        ingress_request_id=ingress_request_id,
         is_streaming=is_streaming,
         method=method,
         model_config=model_config,
@@ -279,4 +325,4 @@ async def prepare_proxy_request(
     )
 
 
-__all__ = ["ProxyRequestSetup", "prepare_proxy_request"]
+__all__ = ["ProxyRequestSetup", "ProxyRoutingRejection", "prepare_proxy_request"]

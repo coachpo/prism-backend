@@ -219,6 +219,15 @@ async def execute_import_payload(
         db, vendor_payloads_by_key=vendor_payloads_by_key
     )
     await clear_profile_state(profile_id)
+    profile_model_ids = select(ModelConfig.id).where(
+        ModelConfig.profile_id == profile_id
+    )
+    await db.execute(
+        delete(ModelProxyTarget).where(
+            ModelProxyTarget.source_model_config_id.in_(profile_model_ids)
+            | ModelProxyTarget.target_model_config_id.in_(profile_model_ids)
+        )
+    )
     await db.execute(
         delete(EndpointFxRateSetting).where(
             EndpointFxRateSetting.profile_id == profile_id

@@ -84,6 +84,7 @@ async def create_model_config_record(
 
     result = await db.execute(
         select(ModelConfig)
+        .execution_options(populate_existing=True)
         .options(*MODEL_CONFIG_DETAIL_OPTIONS)
         .where(ModelConfig.id == config.id)
     )
@@ -218,13 +219,19 @@ async def update_model_config_record(
     if clear_model_current_state:
         await clear_model_state(profile_id, config.id)
 
+    config_id = config.id
     config.updated_at = utc_now()
     await db.flush()
+    db.expire(
+        config,
+        ["proxy_targets", "connections", "vendor", "loadbalance_strategy"],
+    )
 
     result = await db.execute(
         select(ModelConfig)
+        .execution_options(populate_existing=True)
         .options(*MODEL_CONFIG_DETAIL_OPTIONS)
-        .where(ModelConfig.id == config.id)
+        .where(ModelConfig.id == config_id)
     )
     return result.scalar_one()
 

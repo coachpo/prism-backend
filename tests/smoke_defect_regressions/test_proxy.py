@@ -3,3 +3,5 @@ from tests.smoke_defect_regressions.test_proxy_cases.logging_model_auth_path_tes
 from tests.smoke_defect_regressions.test_proxy_cases.healthcheck_and_failover_classification_tests import *
 from tests.smoke_defect_regressions.test_proxy_cases.recovery_runtime_and_streaming_tests import *
 from tests.smoke_defect_regressions.test_proxy_cases.model_update_proxy_invariant_tests import *
+from tests.smoke_defect_regressions.test_proxy_cases.proxy_target_runtime_selection_tests import *
+from tests.smoke_defect_regressions.test_proxy_cases.proxy_unroutable_target_rejection_tests import *

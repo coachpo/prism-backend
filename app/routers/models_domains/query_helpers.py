@@ -154,10 +154,7 @@ async def validate_proxy_model(
 ) -> list[ModelConfig]:
     if model_type == "proxy":
         if not proxy_targets:
-            raise HTTPException(
-                status_code=400,
-                detail="proxy_targets is required for proxy models",
-            )
+            return []
         target_model_ids = [target.target_model_id for target in proxy_targets]
         if exclude_model_id is not None and exclude_model_id in target_model_ids:
             raise HTTPException(

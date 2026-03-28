@@ -250,11 +250,6 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 )
             native_models[model.model_id] = model.api_family
         else:
-            if not model.proxy_targets:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Proxy model '{model.model_id}' must include proxy_targets",
-                )
             if model.loadbalance_strategy_name is not None:
                 raise HTTPException(
                     status_code=400,

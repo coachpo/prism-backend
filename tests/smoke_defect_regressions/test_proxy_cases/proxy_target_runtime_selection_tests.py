@@ -20,6 +20,118 @@ def _attempt_plan(*connections):
 
 class TestDEF083_ProxyTargetRuntimeSelection:
     @pytest.mark.asyncio
+    async def test_get_model_config_with_connections_rejects_proxy_with_zero_targets(
+        self,
+    ):
+        from app.services.loadbalancer.planner import (
+            ProxyTargetsUnroutableError,
+            get_model_config_with_connections,
+        )
+
+        proxy_model = SimpleNamespace(
+            profile_id=5,
+            model_id="alias-model",
+            model_type="proxy",
+            proxy_targets=[],
+        )
+
+        first_result = MagicMock()
+        first_result.scalar_one_or_none.return_value = proxy_model
+
+        db = AsyncMock()
+        db.execute = AsyncMock(return_value=first_result)
+
+        with pytest.raises(ProxyTargetsUnroutableError) as exc_info:
+            await get_model_config_with_connections(
+                db=db,
+                profile_id=5,
+                model_id="alias-model",
+            )
+
+        assert exc_info.value.proxy_model_id == "alias-model"
+
+    @pytest.mark.asyncio
+    async def test_prepare_proxy_request_rejects_proxy_when_no_target_yields_attempt_plan(
+        self,
+    ):
+        from app.routers.proxy_domains.request_setup import (
+            ProxyRoutingRejection,
+            prepare_proxy_request,
+        )
+        from app.services.loadbalancer.planner import ProxyTargetsUnroutableError
+
+        app = FastAPI()
+        app.state.http_client = object()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {"model": "proxy-model", "messages": [{"role": "user", "content": "hi"}]}
+        ).encode("utf-8")
+
+        proxy_vendor = SimpleNamespace(
+            key="openrouter",
+            name="OpenRouter",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+            id=4,
+        )
+        requested_proxy_model = SimpleNamespace(
+            vendor=proxy_vendor,
+            api_family="openai",
+            model_id="proxy-model",
+            is_enabled=True,
+        )
+
+        mock_requested_model_result = MagicMock()
+        mock_requested_model_result.scalars.return_value.one_or_none.return_value = (
+            requested_proxy_model
+        )
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_requested_model_result)
+
+        with patch(
+            "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+            AsyncMock(
+                side_effect=ProxyTargetsUnroutableError(proxy_model_id="proxy-model")
+            ),
+        ):
+            with pytest.raises(ProxyRoutingRejection) as exc_info:
+                await prepare_proxy_request(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/chat/completions",
+                    profile_id=1,
+                )
+
+        assert (
+            exc_info.value.detail
+            == "Proxy model 'proxy-model' has no routable targets."
+        )
+        assert exc_info.value.model_id == "proxy-model"
+        assert exc_info.value.api_family == "openai"
+        assert exc_info.value.vendor_id == 4
+        assert exc_info.value.vendor_key == "openrouter"
+        assert exc_info.value.vendor_name == "OpenRouter"
+
+    @pytest.mark.asyncio
     async def test_proxy_request_logs_requested_and_resolved_target_without_cross_target_retry(
         self,
     ):

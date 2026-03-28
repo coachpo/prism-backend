@@ -128,17 +128,20 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         await get_engine().dispose()
 
         suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def024-openai-{suffix}"
+        vendor_name = f"DEF024 OpenAI {suffix}"
         endpoint_name = f"def024-endpoint-{suffix}"
         model_id = f"def024-model-{suffix}"
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 8,
                 "vendors": [
                     {
-                        "key": "openai",
-                        "name": "OpenAI",
+                        "key": vendor_key,
+                        "name": vendor_name,
                         "description": None,
+                        "icon_key": None,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -156,11 +159,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": vendor_key,
                         "api_family": "openai",
                         "model_id": model_id,
                         "model_type": "native",
@@ -204,7 +208,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             vendor = (
                 await db.execute(
                     select(Vendor)
-                    .where(Vendor.key == "openai")
+                    .where(Vendor.key == vendor_key)
                     .order_by(Vendor.id.asc())
                     .limit(1)
                 )
@@ -212,8 +216,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             if vendor is None:
                 db.add(
                     Vendor(
-                        key="openai",
-                        name=f"DEF024 OpenAI {suffix}",
+                        key=vendor_key,
+                        name=vendor_name,
+                        description=None,
+                        icon_key=None,
+                        audit_enabled=False,
+                        audit_capture_bodies=True,
                     )
                 )
                 await db.flush()
@@ -316,6 +324,8 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         await get_engine().dispose()
 
         suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def024-duplicate-vendor-{suffix}"
+        vendor_name = f"DEF024 Duplicate Vendor {suffix}"
         endpoint_a_name = f"def024-duplicate-id-endpoint-a-{suffix}"
         endpoint_b_name = f"def024-duplicate-id-endpoint-b-{suffix}"
         model_id = f"def024-duplicate-id-model-{suffix}"
@@ -323,12 +333,13 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 8,
                 "vendors": [
                     {
-                        "key": "openai",
-                        "name": "OpenAI",
+                        "key": vendor_key,
+                        "name": vendor_name,
                         "description": None,
+                        "icon_key": None,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -351,11 +362,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": vendor_key,
                         "api_family": "openai",
                         "model_id": model_id,
                         "model_type": "native",
@@ -395,7 +407,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             vendor = (
                 await db.execute(
                     select(Vendor)
-                    .where(Vendor.key == "openai")
+                    .where(Vendor.key == vendor_key)
                     .order_by(Vendor.id.asc())
                     .limit(1)
                 )
@@ -403,8 +415,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             if vendor is None:
                 db.add(
                     Vendor(
-                        key="openai",
-                        name=f"DEF024 Duplicate ID OpenAI {suffix}",
+                        key=vendor_key,
+                        name=vendor_name,
+                        description=None,
+                        icon_key=None,
+                        audit_enabled=False,
+                        audit_capture_bodies=True,
                     )
                 )
                 await db.flush()
@@ -503,7 +519,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 6,
+                    "version": 8,
                     "endpoints": [],
                     "vendors": [],
                     "models": [],
@@ -548,18 +564,21 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
         await get_engine().dispose()
 
         suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def082-openai-{suffix}"
+        vendor_name = f"DEF082 Proxy Target OpenAI {suffix}"
         target_a_model_id = f"def082-proxy-target-a-{suffix}"
         target_b_model_id = f"def082-proxy-target-b-{suffix}"
         proxy_model_id = f"def082-proxy-model-{suffix}"
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 8,
                 "vendors": [
                     {
-                        "key": "openai",
-                        "name": "OpenAI",
+                        "key": vendor_key,
+                        "name": vendor_name,
                         "description": None,
+                        "icon_key": None,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -571,11 +590,12 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                         "name": "single-primary",
                         "strategy_type": "single",
                         "failover_recovery_enabled": False,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": vendor_key,
                         "api_family": "openai",
                         "model_id": target_a_model_id,
                         "model_type": "native",
@@ -583,7 +603,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                         "connections": [],
                     },
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": vendor_key,
                         "api_family": "openai",
                         "model_id": target_b_model_id,
                         "model_type": "native",
@@ -591,7 +611,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                         "connections": [],
                     },
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": vendor_key,
                         "api_family": "openai",
                         "model_id": proxy_model_id,
                         "model_type": "proxy",
@@ -620,7 +640,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
             vendor = (
                 await db.execute(
                     select(Vendor)
-                    .where(Vendor.key == "openai")
+                    .where(Vendor.key == vendor_key)
                     .order_by(Vendor.id.asc())
                     .limit(1)
                 )
@@ -628,8 +648,12 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
             if vendor is None:
                 db.add(
                     Vendor(
-                        key="openai",
-                        name=f"DEF082 Proxy Target OpenAI {suffix}",
+                        key=vendor_key,
+                        name=vendor_name,
+                        description=None,
+                        icon_key=None,
+                        audit_enabled=False,
+                        audit_capture_bodies=True,
                     )
                 )
                 await db.flush()
@@ -660,3 +684,97 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
             {"target_model_id": target_b_model_id, "position": 1},
         ]
         assert "redirect_to" not in exported_proxy_model
+
+    @pytest.mark.asyncio
+    async def test_proxy_target_config_roundtrip_preserves_empty_proxy_targets(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
+        from app.routers.config import export_config, import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def082-empty-vendor-{suffix}"
+        vendor_name = f"DEF082 Empty Proxy Vendor {suffix}"
+        proxy_model_id = f"def082-empty-proxy-model-{suffix}"
+
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 8,
+                "vendors": [
+                    {
+                        "key": vendor_key,
+                        "name": vendor_name,
+                        "description": None,
+                        "icon_key": None,
+                        "audit_enabled": False,
+                        "audit_capture_bodies": True,
+                    }
+                ],
+                "endpoints": [],
+                "pricing_templates": [],
+                "loadbalance_strategies": [],
+                "models": [
+                    {
+                        "vendor_key": vendor_key,
+                        "api_family": "openai",
+                        "model_id": proxy_model_id,
+                        "display_name": "Deferred proxy",
+                        "model_type": "proxy",
+                        "proxy_targets": [],
+                        "connections": [],
+                    }
+                ],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF082 Empty Proxy Targets Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+            profile_id = profile.id
+
+            response = await import_config(data=payload, db=db, profile_id=profile_id)
+            await db.commit()
+            assert response.models_imported == 1
+
+        async with AsyncSessionLocal() as db:
+            proxy_model = (
+                await db.execute(
+                    select(ModelConfig).where(
+                        ModelConfig.profile_id == profile_id,
+                        ModelConfig.model_id == proxy_model_id,
+                    )
+                )
+            ).scalar_one()
+            proxy_target_rows = (
+                (
+                    await db.execute(
+                        select(ModelProxyTarget).where(
+                            ModelProxyTarget.source_model_config_id == proxy_model.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            export_response = await export_config(db=db, profile_id=profile_id)
+            exported = json.loads(bytes(export_response.body).decode("utf-8"))
+
+        assert proxy_model.model_type == "proxy"
+        assert proxy_target_rows == []
+        exported_proxy_model = next(
+            model for model in exported["models"] if model["model_id"] == proxy_model_id
+        )
+        assert exported_proxy_model["proxy_targets"] == []
+        assert exported_proxy_model["loadbalance_strategy_name"] is None
