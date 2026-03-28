@@ -333,6 +333,17 @@ class ProxyTargetReference(BaseModel):
         return normalized
 
 
+def validate_unique_proxy_targets(
+    proxy_targets: list[ProxyTargetReference] | None,
+) -> None:
+    if not proxy_targets:
+        return
+
+    target_model_ids = [proxy_target.target_model_id for proxy_target in proxy_targets]
+    if len(target_model_ids) != len(set(target_model_ids)):
+        raise ValueError("proxy_targets must contain unique target_model_id values")
+
+
 class ModelConfigBase(BaseModel):
     vendor_id: int
     api_family: ApiFamily
@@ -350,8 +361,7 @@ class ModelConfigBase(BaseModel):
             raise ValueError("proxy_targets must be empty for native models")
         if self.model_type == "proxy" and self.loadbalance_strategy_id is not None:
             raise ValueError("loadbalance_strategy_id must be null for proxy models")
-        if self.model_type == "proxy" and not self.proxy_targets:
-            raise ValueError("proxy_targets is required for proxy models")
+        validate_unique_proxy_targets(self.proxy_targets)
         return self
 
     is_enabled: bool = True
@@ -375,8 +385,7 @@ class ModelConfigUpdate(BaseModel):
     def validate_proxy_targets(self):
         if self.model_type == "native" and self.proxy_targets:
             raise ValueError("proxy_targets must be empty for native models")
-        if self.model_type == "proxy" and self.proxy_targets == []:
-            raise ValueError("proxy_targets must not be empty for proxy models")
+        validate_unique_proxy_targets(self.proxy_targets)
         return self
 
 

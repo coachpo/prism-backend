@@ -14,6 +14,12 @@ from .types import AttemptPlan
 logger = logging.getLogger("app.services.loadbalancer")
 
 
+class ProxyTargetsUnroutableError(Exception):
+    def __init__(self, *, proxy_model_id: str):
+        self.proxy_model_id = proxy_model_id
+        super().__init__(f"Proxy model '{proxy_model_id}' has no routable targets.")
+
+
 def _is_connection_banned(current_state, *, now_at: datetime) -> bool:
     if getattr(current_state, "ban_mode", "off") == "manual":
         return True
@@ -116,7 +122,7 @@ async def get_model_config_with_connections(
         model_id,
         profile_id,
     )
-    return None
+    raise ProxyTargetsUnroutableError(proxy_model_id=model_id)
 
 
 def get_active_connections(model_config: ModelConfig) -> list[Connection]:
@@ -342,6 +348,7 @@ async def build_attempt_plan(
 
 __all__ = [
     "MODEL_CONFIG_WITH_CONNECTION_OPTIONS",
+    "ProxyTargetsUnroutableError",
     "build_attempt_plan",
     "get_active_connections",
     "get_model_config_with_connections",

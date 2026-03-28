@@ -1,7 +1,7 @@
 # ruff: noqa: F401
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_db, get_active_profile_id
@@ -28,7 +28,10 @@ from app.routers.proxy_domains.attempt_execution import (
     ProxyRuntimeDependencies,
     execute_proxy_attempts,
 )
-from app.routers.proxy_domains.request_setup import prepare_proxy_request
+from app.routers.proxy_domains.request_setup import (
+    ProxyRoutingRejection,
+    prepare_proxy_request,
+)
 from app.routers.proxy_domains.proxy_request_helpers import (
     classify_failover_failure,
     classify_http_failure,
@@ -65,13 +68,39 @@ async def _handle_proxy(
     request_path: str,
     profile_id: int,
 ):
-    setup = await prepare_proxy_request(
-        request=request,
-        db=db,
-        raw_body=raw_body,
-        request_path=request_path,
-        profile_id=profile_id,
-    )
+    try:
+        setup = await prepare_proxy_request(
+            request=request,
+            db=db,
+            raw_body=raw_body,
+            request_path=request_path,
+            profile_id=profile_id,
+        )
+    except ProxyRoutingRejection as exc:
+        await log_request(
+            model_id=exc.model_id,
+            profile_id=profile_id,
+            api_family=exc.api_family,
+            vendor_id=exc.vendor_id,
+            vendor_key=exc.vendor_key,
+            vendor_name=exc.vendor_name,
+            resolved_target_model_id=None,
+            endpoint_id=None,
+            connection_id=None,
+            proxy_api_key_id=exc.proxy_api_key_id,
+            proxy_api_key_name_snapshot=exc.proxy_api_key_name,
+            ingress_request_id=exc.ingress_request_id,
+            endpoint_base_url=None,
+            endpoint_description=None,
+            status_code=503,
+            response_time_ms=0,
+            is_stream=exc.is_streaming,
+            request_path=request_path,
+            success_flag=False,
+            error_detail=exc.detail,
+        )
+        raise HTTPException(status_code=503, detail=exc.detail) from exc
+
     return await execute_proxy_attempts(
         db=db,
         endpoint_is_active_now_fn=_endpoint_is_active_now,

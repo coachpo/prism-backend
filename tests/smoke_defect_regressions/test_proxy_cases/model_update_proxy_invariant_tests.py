@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 from fastapi import HTTPException
@@ -607,3 +608,239 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
             assert exc_info.value.status_code == 400
             assert "point to this model" in exc_info.value.detail
+
+    @pytest.mark.asyncio
+    async def test_create_proxy_model_allows_empty_proxy_targets(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
+        from app.routers.models import create_model
+        from app.schemas.schemas import ModelConfigCreate
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        proxy_model_id = f"def032-empty-create-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            vendor = _make_vendor(
+                key=f"def032-empty-create-{suffix}",
+                name=f"DEF032 Empty Create {suffix}",
+                description="DEF032 empty create vendor",
+            )
+            profile = Profile(
+                name=f"DEF032 Empty Create Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add_all([vendor, profile])
+            await db.flush()
+
+            response = await create_model(
+                body=ModelConfigCreate(
+                    vendor_id=vendor.id,
+                    api_family="openai",
+                    model_id=proxy_model_id,
+                    model_type="proxy",
+                    proxy_targets=[],
+                    is_enabled=True,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.flush()
+
+            proxy_model = (
+                await db.execute(
+                    select(ModelConfig).where(
+                        ModelConfig.profile_id == profile.id,
+                        ModelConfig.model_id == proxy_model_id,
+                    )
+                )
+            ).scalar_one()
+            proxy_targets = (
+                (
+                    await db.execute(
+                        select(ModelProxyTarget).where(
+                            ModelProxyTarget.source_model_config_id == proxy_model.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            assert response.model_type == "proxy"
+            assert response.proxy_targets == []
+            assert proxy_model.loadbalance_strategy_id is None
+            assert proxy_targets == []
+
+    @pytest.mark.asyncio
+    async def test_update_proxy_model_allows_clearing_proxy_targets(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, ModelProxyTarget, Profile
+        from app.routers.models import update_model
+        from app.schemas.schemas import ModelConfigUpdate
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        target_model_id = f"def032-empty-update-target-{suffix}"
+        proxy_model_id = f"def032-empty-update-proxy-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            vendor = _make_vendor(
+                key=f"def032-empty-update-{suffix}",
+                name=f"DEF032 Empty Update {suffix}",
+                description="DEF032 empty update vendor",
+            )
+            profile = Profile(
+                name=f"DEF032 Empty Update Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add_all([vendor, profile])
+            await db.flush()
+
+            target_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=target_model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            proxy_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=proxy_model_id,
+                model_type="proxy",
+                is_enabled=True,
+            )
+            db.add_all([target_model, proxy_model])
+            await db.flush()
+            db.add(
+                ModelProxyTarget(
+                    source_model_config_id=proxy_model.id,
+                    target_model_config_id=target_model.id,
+                    position=0,
+                )
+            )
+            await db.flush()
+
+            response = await update_model(
+                model_config_id=proxy_model.id,
+                body=ModelConfigUpdate(proxy_targets=[]),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.flush()
+
+            proxy_targets = (
+                (
+                    await db.execute(
+                        select(ModelProxyTarget).where(
+                            ModelProxyTarget.source_model_config_id == proxy_model.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+            assert response.model_type == "proxy"
+            assert response.proxy_targets == []
+            assert proxy_targets == []
+
+    def test_native_model_schema_still_rejects_non_empty_proxy_targets(self):
+        from app.schemas.schemas import ModelConfigCreate, ProxyTargetReference
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigCreate(
+                vendor_id=1,
+                api_family="openai",
+                model_id="def032-native-invalid-proxy-targets",
+                model_type="native",
+                proxy_targets=[
+                    ProxyTargetReference(
+                        target_model_id="some-native-target",
+                        position=0,
+                    )
+                ],
+                loadbalance_strategy_id=1,
+                is_enabled=True,
+            )
+
+        assert "proxy_targets must be empty for native models" in str(exc_info.value)
+
+    def test_proxy_model_schema_rejects_duplicate_proxy_targets(self):
+        from app.schemas.schemas import ModelConfigCreate, ProxyTargetReference
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigCreate(
+                vendor_id=1,
+                api_family="openai",
+                model_id="def032-duplicate-proxy-targets",
+                model_type="proxy",
+                proxy_targets=[
+                    ProxyTargetReference(
+                        target_model_id="native-target-a",
+                        position=0,
+                    ),
+                    ProxyTargetReference(
+                        target_model_id="native-target-a",
+                        position=1,
+                    ),
+                ],
+                is_enabled=True,
+            )
+
+        assert "proxy_targets must contain unique target_model_id values" in str(
+            exc_info.value
+        )
+
+    def test_proxy_model_update_schema_rejects_duplicate_proxy_targets(self):
+        from app.schemas.schemas import ModelConfigUpdate, ProxyTargetReference
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigUpdate(
+                proxy_targets=[
+                    ProxyTargetReference(
+                        target_model_id="native-target-a",
+                        position=0,
+                    ),
+                    ProxyTargetReference(
+                        target_model_id="native-target-a",
+                        position=1,
+                    ),
+                ]
+            )
+
+        assert "proxy_targets must contain unique target_model_id values" in str(
+            exc_info.value
+        )
+
+    def test_native_model_schema_still_requires_loadbalance_strategy(self):
+        from app.schemas.schemas import ModelConfigCreate
+
+        with pytest.raises(ValidationError) as exc_info:
+            ModelConfigCreate(
+                vendor_id=1,
+                api_family="openai",
+                model_id="def032-native-missing-strategy",
+                model_type="native",
+                proxy_targets=[],
+                is_enabled=True,
+            )
+
+        assert "loadbalance_strategy_id is required for native models" in str(
+            exc_info.value
+        )
