@@ -2,6 +2,7 @@
 from tests.smoke_defect_regressions.test_startup_cases.auth_proxy_key_generation_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.auth_management_flows_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.cors_preflight_auth_middleware_tests import *
+from tests.smoke_defect_regressions.test_startup_cases.health_contract_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.stats_timezone_batch_delete_and_endpoint_mapping_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.logging_endpoint_owner_and_connection_defaults_tests import *
 from tests.smoke_defect_regressions.test_startup_cases.loadbalance_migration_profile_pk_repair_tests import *
