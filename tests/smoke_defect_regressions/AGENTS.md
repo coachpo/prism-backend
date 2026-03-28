@@ -36,8 +36,8 @@ smoke_defect_regressions/
 
 ## DEF FACTS
 
-- The current top-level smoke aggregator exports DEF cases through `TestDEF087_HealthEndpointContract`, with nearby startup-side additions `DEF084`, `DEF085`, and `DEF086`, plus proxy-side `DEF081`.
-- Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
+- The current top-level smoke aggregator includes two `DEF087` leaves: startup-side `TestDEF087_HealthEndpointContract` and proxy-side `TestDEF087_ProxyUnroutableTargetRejection`, alongside nearby proxy additions `DEF081` and `DEF083`.
+- Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, health contract checks, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
 - The grouped folders already provide the parent structure for their leaf files unless a folder has grown enough to justify its own leaf map.
 - `test_connection_priority.py` remains a standalone smoke leaf outside the top-level smoke re-export surface.
 

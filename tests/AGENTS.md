@@ -45,7 +45,7 @@ tests/
 
 ## TEST FACTS
 
-- `test_smoke_defect_regressions.py` is the top-level DEF aggregator and now exports cases through `TestDEF087_HealthEndpointContract`, with additional recent startup-side DEF cases through `DEF086` and proxy-side `DEF081`.
+- `test_smoke_defect_regressions.py` is the top-level DEF aggregator and now includes two `DEF087` leaves (`HealthEndpointContract` on the startup side and `ProxyUnroutableTargetRejection` on the proxy side) alongside recent proxy-side `DEF081` and `DEF083` coverage.
 - `test_multi_profile_isolation.py` is the top-level aggregator for lifecycle, scoping, runtime, observability, and config export or import isolation.
 - `multi_profile_isolation/test_connection_priority_isolation.py` currently remains a direct subtree leaf instead of a top-level re-export in `test_multi_profile_isolation.py`.
 - `services/` holds focused backend tests that do not fit the smoke or isolation hierarchies.
