@@ -13,6 +13,7 @@ app/
 ├── core/AGENTS.md                                            # Settings, database, auth helpers, crypto, migrations
 ├── models/AGENTS.md                                          # ORM model ownership
 ├── routers/AGENTS.md                                         # Thin route shells and router-domain package map
+├── routers/shared/AGENTS.md                                  # Reusable router-layer helpers
 ├── routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md
 ├── routers/connections_domains/AGENTS.md                     # Dense connection-management leaf
 ├── routers/proxy_domains/AGENTS.md                           # Dense runtime proxy leaf
@@ -28,6 +29,7 @@ app/
 - `core/AGENTS.md`: settings, engine and session factories, crypto, auth helpers, and migrations.
 - `models/AGENTS.md`: ORM model ownership and domain splits.
 - `routers/AGENTS.md`: router shells, standalone routers, and leaf handoff.
+- `routers/shared/AGENTS.md`: reusable ordering, endpoint-record, and profile-row helpers shared across routers.
 - `routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
 - `routers/connections_domains/AGENTS.md`, `routers/proxy_domains/AGENTS.md`: the densest router packages.
 - `schemas/AGENTS.md`: contract ownership and the `schemas.py` boundary.
@@ -48,7 +50,7 @@ app/
 - Startup sequence and seed ordering: `bootstrap/startup.py`
 - Migration packaging, env wiring, and revision layout: `alembic/AGENTS.md`, `alembic/env.py`, `alembic/script.py.mako`, `alembic/versions/`
 - Management profile overrides versus runtime active-profile routing: `dependencies.py`
-- Router surface and router-domain leaf docs: `routers/AGENTS.md`, `routers/`
+- Router surface, shared router helpers, and router-domain leaf docs: `routers/AGENTS.md`, `routers/shared/AGENTS.md`, `routers/`
 - Contract exports and schema ownership: `schemas/AGENTS.md`, `schemas/schemas.py`
 - Shared worker lifecycle and service public boundaries: `services/AGENTS.md`, `services/background_tasks.py`
 - Reporting helpers for load-balance events and model metrics: `services/loadbalance_event_summary.py`, `services/stats/model_metrics.py`

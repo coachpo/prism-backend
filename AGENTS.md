@@ -12,6 +12,7 @@ backend/
 ├── app/core/AGENTS.md                                           # Settings, database, auth helpers, crypto, migrations
 ├── app/models/AGENTS.md                                         # ORM domain ownership and `models.py` boundary
 ├── app/routers/AGENTS.md                                        # Router map, standalone routers, and leaf handoff
+├── app/routers/shared/AGENTS.md                                 # Reusable router-layer helpers
 ├── app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md
 ├── app/routers/connections_domains/AGENTS.md                    # Dense connection-management leaf
 ├── app/routers/proxy_domains/AGENTS.md                          # Dense runtime proxy leaf
@@ -34,6 +35,7 @@ backend/
 - `app/AGENTS.md`: live runtime map.
 - `app/alembic/AGENTS.md`, `app/bootstrap/AGENTS.md`, `app/core/AGENTS.md`, `app/models/AGENTS.md`, `app/schemas/AGENTS.md`: startup, migrations, shared infra, ORM, and contract boundaries.
 - `app/routers/AGENTS.md`: router parent map.
+- `app/routers/shared/AGENTS.md`: reusable router-layer helpers shared across management routes.
 - `app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
 - `app/routers/connections_domains/AGENTS.md`, `app/routers/proxy_domains/AGENTS.md`: the two densest router packages.
 - `app/services/AGENTS.md` plus `app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service-root and service-package boundaries.
@@ -54,7 +56,7 @@ backend/
 - App assembly, router registration, lifespan startup, and shared infra wiring: `app/main.py`
 - Startup sequencing, vendor and profile seeding, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
 - Management versus runtime scope rules: `app/dependencies.py`
-- Router map and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/`
+- Router map, shared router helpers, and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/shared/AGENTS.md`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
 - Shared worker lifecycle, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
 - Migration source of truth: `alembic.ini`, `app/alembic/`, `app/alembic/AGENTS.md`, `app/core/migrations.py`
