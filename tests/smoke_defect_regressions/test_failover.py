@@ -167,7 +167,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         assert "failover_auth_error_cooldown_seconds" in str(exc_info.value)
 
-    def test_config_export_version_7_allows_fill_first_strategy(self):
+    def test_config_export_version_8_allows_fill_first_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -183,6 +183,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     key="openai",
                     name="OpenAI",
                     description=None,
+                    icon_key=None,
                     audit_enabled=False,
                     audit_capture_bodies=True,
                 )
@@ -210,13 +211,13 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 7
+        assert exported["version"] == 8
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "fill-first"
         assert (
             exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
         )
 
-    def test_config_export_version_7_allows_round_robin_strategy(self):
+    def test_config_export_version_8_allows_round_robin_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -232,6 +233,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     key="openai",
                     name="OpenAI",
                     description=None,
+                    icon_key=None,
                     audit_enabled=False,
                     audit_capture_bodies=True,
                 )
@@ -259,7 +261,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 7
+        assert exported["version"] == 8
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "round-robin"
         assert (
             exported["loadbalance_strategies"][0]["failover_recovery_enabled"] is True
@@ -270,7 +272,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 7,
+                "version": 8,
                 "vendors": [],
                 "endpoints": [],
                 "pricing_templates": [],
@@ -282,7 +284,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert validation.loadbalance_strategies == []
         assert validation.models == []
 
-    def test_config_import_requires_explicit_failover_status_codes_under_version_7(
+    def test_config_import_requires_explicit_failover_status_codes_under_version_8(
         self,
     ):
         from app.schemas.schemas import ConfigImportRequest
@@ -291,12 +293,13 @@ class TestLoadbalanceStrategyFieldValidation:
         with pytest.raises(ValidationError):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 7,
+                    "version": 8,
                     "vendors": [
                         {
                             "key": "openai",
                             "name": "OpenAI",
                             "description": None,
+                            "icon_key": None,
                             "audit_enabled": False,
                             "audit_capture_bodies": True,
                         }
@@ -335,12 +338,13 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 7,
+                "version": 8,
                 "vendors": [
                     {
                         "key": "openai",
                         "name": "OpenAI",
                         "description": None,
+                        "icon_key": None,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -385,12 +389,13 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 7,
+                "version": 8,
                 "vendors": [
                     {
                         "key": "openai",
                         "name": "OpenAI",
                         "description": None,
+                        "icon_key": None,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -462,6 +467,7 @@ class TestLoadbalanceStrategyFieldValidation:
                     key="openai",
                     name="OpenAI",
                     description=None,
+                    icon_key=None,
                     audit_enabled=False,
                     audit_capture_bodies=True,
                 )

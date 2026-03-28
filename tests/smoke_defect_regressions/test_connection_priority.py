@@ -483,7 +483,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
     suffix = _unique_suffix()
 
     async with AsyncSessionLocal() as db:
-        await _get_or_create_vendor(db)
+        vendor = await _get_or_create_vendor(db)
 
         profile = Profile(
             name=f"DEF068 Profile {suffix}",
@@ -497,14 +497,15 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 6,
+                "version": 8,
                 "vendors": [
                     {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
+                        "key": vendor.key,
+                        "name": vendor.name,
+                        "description": vendor.description,
+                        "icon_key": vendor.icon_key,
+                        "audit_enabled": vendor.audit_enabled,
+                        "audit_capture_bodies": vendor.audit_capture_bodies,
                     }
                 ],
                 "endpoints": [
@@ -530,6 +531,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
                         "name": "failover-primary",
                         "strategy_type": "failover",
                         "failover_recovery_enabled": True,
+                        "failover_status_codes": [429, 503],
                     }
                 ],
                 "models": [
