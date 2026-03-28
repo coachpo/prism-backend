@@ -228,7 +228,7 @@ async def _seed_usage_snapshot_dataset(now: datetime) -> UsageSnapshotSeed:
                     report_currency_symbol="$",
                     attempt_count=3,
                     request_path="/v1/chat/completions",
-                    created_at=now - timedelta(hours=1),
+                    created_at=now - timedelta(minutes=15),
                 ),
                 UsageRequestEvent(
                     profile_id=primary_profile.id,
@@ -426,9 +426,51 @@ class TestUsageSnapshotService:
             "average_rpm": 0.005,
             "average_tpm": 0.583,
             "total_cost_micros": 4200,
+            "rolling_window_minutes": 30,
+            "rolling_request_count": 1,
+            "rolling_token_count": 185,
+            "rolling_rpm": 0.033,
+            "rolling_tpm": 6.167,
         }
         assert snapshot["service_health"]["availability_percentage"] == 50.0
+        assert snapshot["service_health"]["days"] == 7
+        assert snapshot["service_health"]["interval_minutes"] == 15
         assert len(snapshot["service_health"]["daily"]) == 7
+
+        service_health_cells = {
+            cell["bucket_start"]: cell for cell in snapshot["service_health"]["cells"]
+        }
+        assert len(service_health_cells) == 7 * 96
+        assert service_health_cells[
+            datetime(2026, 3, 27, 11, 45, tzinfo=timezone.utc)
+        ] == {
+            "bucket_start": datetime(2026, 3, 27, 11, 45, tzinfo=timezone.utc),
+            "request_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "availability_percentage": 100.0,
+            "status": "ok",
+        }
+        assert service_health_cells[
+            datetime(2026, 3, 27, 10, 0, tzinfo=timezone.utc)
+        ] == {
+            "bucket_start": datetime(2026, 3, 27, 10, 0, tzinfo=timezone.utc),
+            "request_count": 1,
+            "success_count": 0,
+            "failed_count": 1,
+            "availability_percentage": 0.0,
+            "status": "down",
+        }
+        assert service_health_cells[
+            datetime(2026, 3, 27, 10, 15, tzinfo=timezone.utc)
+        ] == {
+            "bucket_start": datetime(2026, 3, 27, 10, 15, tzinfo=timezone.utc),
+            "request_count": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "availability_percentage": None,
+            "status": "empty",
+        }
 
         request_trend_series = {
             series["key"]: series for series in snapshot["request_trends"]["hourly"]
@@ -542,12 +584,49 @@ class TestUsageSnapshotService:
         assert model_rows[seed.alt_model_id]["request_count"] == 1
 
         assert snapshot["request_events"]["total"] == 2
+        assert snapshot["request_events"]["shown_count"] == 2
+        assert snapshot["request_events"]["render_limit"] == 500
         newest_event = snapshot["request_events"]["items"][0]
         assert newest_event["ingress_request_id"].startswith("ingress-success-")
         assert newest_event["cached_tokens"] == 25
         assert newest_event["proxy_api_key"] == {
             "label": "Snapshot Primary Key",
             "key_prefix": seed.primary_key_prefix,
+        }
+        assert snapshot["request_events"]["available_filters"] == {
+            "models": [
+                {
+                    "model_id": seed.alt_model_id,
+                    "label": seed.alt_model_id,
+                },
+                {
+                    "model_id": seed.primary_model_id,
+                    "label": model_rows[seed.primary_model_id]["model_label"],
+                },
+            ],
+            "endpoints": [
+                {
+                    "endpoint_id": seed.primary_endpoint_id,
+                    "label": endpoint_rows[seed.primary_endpoint_id]["endpoint_label"],
+                },
+                {
+                    "endpoint_id": seed.secondary_endpoint_id,
+                    "label": endpoint_rows[seed.secondary_endpoint_id][
+                        "endpoint_label"
+                    ],
+                },
+            ],
+            "api_families": [
+                {"api_family": "anthropic", "label": "anthropic"},
+                {"api_family": "openai", "label": "openai"},
+            ],
+            "proxy_api_keys": [
+                {
+                    "proxy_api_key_id": seed.primary_key_id,
+                    "label": "Snapshot Primary Key",
+                    "key_prefix": seed.primary_key_prefix,
+                }
+            ],
         }
 
         assert snapshot["proxy_api_key_statistics"] == [

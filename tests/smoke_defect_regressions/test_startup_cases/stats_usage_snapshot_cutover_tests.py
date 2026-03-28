@@ -299,7 +299,7 @@ class TestDEF086_UsageStatisticsStorageCutover:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def086_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0024_usage_request_events"
+        expected_head_revision = "0025_vendor_icon_key"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision
@@ -409,11 +409,50 @@ class TestDEF086_UsageStatisticsStorageCutover:
         assert payload["time_range"]["preset"] == "7h"
         assert payload["overview"]["total_requests"] == 1
         assert payload["overview"]["cached_tokens"] == 10
+        assert payload["overview"]["rolling_window_minutes"] == 30
+        assert payload["overview"]["rolling_request_count"] == 0
+        assert payload["overview"]["rolling_token_count"] == 0
         assert payload["request_events"]["total"] == 1
+        assert payload["request_events"]["shown_count"] == 1
+        assert payload["request_events"]["render_limit"] == 500
+        assert payload["request_events"]["available_filters"] == {
+            "models": [
+                {
+                    "model_id": payload["request_events"]["items"][0]["model_id"],
+                    "label": payload["request_events"]["items"][0]["model_label"],
+                }
+            ],
+            "endpoints": [
+                {
+                    "endpoint_id": payload["request_events"]["items"][0]["endpoint_id"],
+                    "label": payload["request_events"]["items"][0]["endpoint_label"],
+                }
+            ],
+            "api_families": [
+                {
+                    "api_family": payload["request_events"]["items"][0]["api_family"],
+                    "label": payload["request_events"]["items"][0]["api_family"],
+                }
+            ],
+            "proxy_api_keys": [
+                {
+                    "proxy_api_key_id": payload["proxy_api_key_statistics"][0][
+                        "proxy_api_key_id"
+                    ],
+                    "label": payload["request_events"]["items"][0]["proxy_api_key"][
+                        "label"
+                    ],
+                    "key_prefix": key_prefix,
+                }
+            ],
+        }
         assert (
             payload["request_events"]["items"][0]["ingress_request_id"]
             == ingress_request_id
         )
+        assert payload["service_health"]["days"] == 7
+        assert payload["service_health"]["interval_minutes"] == 15
+        assert len(payload["service_health"]["cells"]) == 7 * 96
         assert payload["request_events"]["items"][0]["proxy_api_key"] == {
             "label": payload["request_events"]["items"][0]["proxy_api_key"]["label"],
             "key_prefix": key_prefix,

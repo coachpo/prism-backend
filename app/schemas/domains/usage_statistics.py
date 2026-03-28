@@ -76,6 +76,11 @@ class UsageSnapshotOverview(BaseModel):
     average_rpm: float
     average_tpm: float
     total_cost_micros: int
+    rolling_window_minutes: int
+    rolling_request_count: int
+    rolling_token_count: int
+    rolling_rpm: float
+    rolling_tpm: float
 
 
 class UsageServiceHealthPoint(BaseModel):
@@ -86,12 +91,24 @@ class UsageServiceHealthPoint(BaseModel):
     availability_percentage: float | None = None
 
 
+class UsageServiceHealthCell(BaseModel):
+    bucket_start: datetime
+    request_count: int
+    success_count: int
+    failed_count: int
+    availability_percentage: float | None = None
+    status: Literal["ok", "degraded", "down", "empty"]
+
+
 class UsageServiceHealth(BaseModel):
     availability_percentage: float | None = None
     request_count: int
     success_count: int
     failed_count: int
+    days: int
+    interval_minutes: int
     daily: list[UsageServiceHealthPoint] = Field(default_factory=list)
+    cells: list[UsageServiceHealthCell] = Field(default_factory=list)
 
 
 class UsageRequestTrendPoint(BaseModel):
@@ -202,6 +219,36 @@ class UsageProxyApiKeyReference(BaseModel):
     key_prefix: str | None = None
 
 
+class UsageRequestEventModelFilter(BaseModel):
+    model_id: str
+    label: str
+
+
+class UsageRequestEventEndpointFilter(BaseModel):
+    endpoint_id: int | None = None
+    label: str
+
+
+class UsageRequestEventApiFamilyFilter(BaseModel):
+    api_family: ApiFamily
+    label: str
+
+
+class UsageRequestEventProxyApiKeyFilter(BaseModel):
+    proxy_api_key_id: int | None = None
+    label: str
+    key_prefix: str | None = None
+
+
+class UsageRequestEventAvailableFilters(BaseModel):
+    models: list[UsageRequestEventModelFilter] = Field(default_factory=list)
+    endpoints: list[UsageRequestEventEndpointFilter] = Field(default_factory=list)
+    api_families: list[UsageRequestEventApiFamilyFilter] = Field(default_factory=list)
+    proxy_api_keys: list[UsageRequestEventProxyApiKeyFilter] = Field(
+        default_factory=list
+    )
+
+
 class UsageSnapshotRequestEventItem(BaseModel):
     ingress_request_id: str
     created_at: datetime
@@ -227,6 +274,9 @@ class UsageSnapshotRequestEventItem(BaseModel):
 
 class UsageRequestEventsSection(BaseModel):
     total: int
+    shown_count: int
+    render_limit: int
+    available_filters: UsageRequestEventAvailableFilters
     items: list[UsageSnapshotRequestEventItem] = Field(default_factory=list)
 
 
