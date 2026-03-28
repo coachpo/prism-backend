@@ -36,18 +36,22 @@ backend/
 │   │   ├── models_domains/          # Model CRUD/query helpers
 │   │   ├── pricing_templates_domains/ # Pricing template CRUD + usage helpers
 │   │   ├── profiles_domains/        # Profile lifecycle and activation helpers
+│   │   ├── settings_domains/        # Auth settings, costing, timezone, and proxy-key helpers
 │   │   ├── proxy_domains/           # Proxy setup, attempts, streaming, and outcome-reporting helpers
 │   │   ├── shared/                  # Router-layer shared helpers for profile rows and ordering
 │   │   ├── stats_domains/           # Request log, metrics, spending, and throughput handlers
-│   │   ├── vendors.py               # Vendor CRUD
+│   │   ├── settings.py              # Thin settings route shell
+│   │   ├── vendors.py               # Thin vendor CRUD shell
 │   │   ├── models.py                # Thin model route shell
 │   │   ├── endpoints.py             # Thin endpoint route shell
 │   │   ├── connections.py           # Thin connection route shell
 │   │   ├── stats.py                 # Thin stats route shell
 │   │   ├── audit.py                 # Audit log queries
 │   │   ├── config.py                # Thin config route shell
+│   │   ├── loadbalance.py           # Thin strategy + event route shell
 │   │   ├── pricing_templates.py     # Thin pricing template route shell
 │   │   ├── profiles.py              # Thin profile route shell
+│   │   ├── realtime.py              # WebSocket auth and channel subscription router
 │   │   └── proxy.py                 # Thin /v1/* and /v1beta/* proxy router
 │   └── services/
 │       ├── auth/                    # Split auth, email, session, and proxy-key services
@@ -119,7 +123,10 @@ uv run pytest tests/
 uv run pytest tests/ --cov=app --cov-report=html
 
 # Run specific test file
-uv run pytest tests/test_proxy.py -v
+uv run pytest tests/test_smoke_defect_regressions.py -v
+
+# Run one focused service suite
+uv run pytest tests/services/test_loadbalancer_planner.py -v
 ```
 
 `pyproject.toml` is the dependency declaration source and `uv.lock` pins the resolved
@@ -134,7 +141,7 @@ runtime dependencies with `uv sync --locked --no-dev`.
 
 - `PORT` - Server port for `prism-backend` (default: `8000`)
 - `PRISM_BACKEND_WORKERS` - Worker count when `--reload` is off (default: `4`)
-- `DATABASE_URL` - PostgreSQL DSN (default: `postgresql+asyncpg://prism:prism@localhost:5432/prism`)
+- `DATABASE_URL` - PostgreSQL DSN for direct backend runs. This is required unless a parent launcher or container environment already exports it.
 
 ### Database
 
@@ -145,6 +152,11 @@ For local development, run PostgreSQL via Docker Compose:
 ```bash
 docker compose up -d postgres
 ```
+
+The checked-in compose file exposes PostgreSQL on `localhost:15432`. The root
+launcher uses that same compose file and wires `DATABASE_URL` accordingly.
+If you run `uv run prism-backend` directly against the checked-in compose file,
+point `DATABASE_URL` at `postgresql+asyncpg://prism:prism@localhost:15432/prism`.
 
 ---
 

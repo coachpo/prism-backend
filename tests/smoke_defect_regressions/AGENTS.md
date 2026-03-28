@@ -1,7 +1,7 @@
 # BACKEND SMOKE DEFECT REGRESSIONS KNOWLEDGE BASE
 
 ## OVERVIEW
-`smoke_defect_regressions/` is the named-defect regression corpus. It groups DEF cases by concern, then re-exports them through `../test_smoke_defect_regressions.py`. The current top-level range reaches DEF080.
+`smoke_defect_regressions/` is the named-defect regression corpus. It groups DEF cases by concern, then re-exports them through `../test_smoke_defect_regressions.py`. The current top-level range reaches DEF087.
 
 ## STRUCTURE
 ```
@@ -10,6 +10,7 @@ smoke_defect_regressions/
 ├── test_config_cases/                # Config export or import, schema validation, user-settings seed cases
 ├── test_costing_cases/               # Token parsing, special-token rules, pricing template CAS
 ├── test_startup_cases/               # Auth, CORS, batch delete, model health, migrations, startup contracts
+│   └── AGENTS.md                     # Dense startup/auth/migration regression cluster
 ├── test_proxy.py                     # Proxy-domain aggregator
 ├── test_config.py                    # Config-domain aggregator
 ├── test_costing.py                   # Costing-domain aggregator
@@ -23,18 +24,19 @@ smoke_defect_regressions/
 
 ## WHERE TO LOOK
 
-- Top-level export surface and full DEF list through DEF080: `../test_smoke_defect_regressions.py`
+- Top-level export surface and full DEF list through DEF087: `../test_smoke_defect_regressions.py`
 - Proxy-domain aggregators and leaf cases: `test_proxy.py`, `test_proxy_cases/`, `test_proxy_cases/AGENTS.md`
 - Config-domain aggregators and leaf cases: `test_config.py`, `test_config_cases/`
 - Costing-domain aggregators and leaf cases: `test_costing.py`, `test_costing_cases/`
 - Startup-domain aggregators and leaf cases: `test_startup.py`, `test_startup_cases/`
+- Focused startup/auth/migration leaf map: `test_startup_cases/AGENTS.md`
 - Standalone guards outside the grouped folders: `test_failover.py`, `test_headers.py`, `test_connection_priority.py`, `test_conditional_decompression.py`, `test_endpoint_ordering.py`
 - Startup auth and proxy-key management flows: `test_startup_cases/auth_management_flows_tests.py`, `test_startup_cases/auth_proxy_key_generation_tests.py`
 - Startup migration and observability guards: `test_startup_cases/loadbalance_migration_profile_pk_repair_tests.py`, `test_startup_cases/observability_unlogged_migration_tests.py`
 
 ## DEF FACTS
 
-- The current top-level smoke aggregator exports DEF cases through `TestDEF080_VendorApiFamilySchemaSplit`.
+- The current top-level smoke aggregator exports DEF cases through `TestDEF087_HealthEndpointContract`, with nearby startup-side additions `DEF084`, `DEF085`, and `DEF086`, plus proxy-side `DEF081`.
 - Startup cases are split by explicit concern file names, including auth management, proxy-key generation, CORS preflight auth bypass, loadbalance migration repair, observability migration, profile scope or model health eager loading, and stats or batch-delete or endpoint-mapping behavior.
 - The grouped folders already provide the parent structure for their leaf files unless a folder has grown enough to justify its own leaf map.
 - `test_connection_priority.py` remains a standalone smoke leaf outside the top-level smoke re-export surface.
@@ -47,6 +49,7 @@ smoke_defect_regressions/
 ## FOLDER NOTES
 
 - `test_proxy_cases/` now justifies its own leaf doc because it is a topic-specific proxy lookup cluster spanning health classification, logging/auth paths, model-update invariants, runtime target selection, and recovery or streaming behavior.
+- `test_startup_cases/` now justifies its own leaf doc because it has grown into the densest startup-side cluster, spanning auth flows, middleware, health-contract checks, migration guards, usage-snapshot cutover, and vendor/schema regressions.
 
 ## CONVENTIONS
 
