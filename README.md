@@ -129,6 +129,15 @@ uv run pytest tests/test_smoke_defect_regressions.py -v
 uv run pytest tests/services/test_loadbalancer_planner.py -v
 ```
 
+### Test layout
+
+- Most backend pytest runs require Docker because `tests/conftest.py` starts PostgreSQL through `testcontainers` and applies Alembic migrations before the session begins.
+- The small DB-free allowlist currently includes `tests/services/test_background_tasks.py`, `tests/test_backend_version_metadata.py`, and `tests/test_realtime_broadcast.py`.
+- `tests/test_smoke_defect_regressions.py` re-exports the named DEF smoke corpus, including the startup-side health contract and the proxy-side runtime-target guards.
+- `tests/test_multi_profile_isolation.py` owns selected-profile versus active-runtime containment coverage.
+- `tests/test_realtime_broadcast.py` owns websocket auth, subscribe/unsubscribe, and `dashboard.update` coverage.
+- `tests/services/` keeps service-focused auth, loadbalancer, stats, streaming, throughput, and WebAuthn tests out of the smoke and isolation trees.
+
 `pyproject.toml` is the dependency declaration source and `uv.lock` pins the resolved
 environment. Local development uses `uv sync --locked`, while production images install
 runtime dependencies with `uv sync --locked --no-dev`.
@@ -142,6 +151,8 @@ runtime dependencies with `uv sync --locked --no-dev`.
 - `PORT` - Server port for `prism-backend` (default: `8000`)
 - `PRISM_BACKEND_WORKERS` - Worker count when `--reload` is off (default: `4`)
 - `DATABASE_URL` - PostgreSQL DSN for direct backend runs. This is required unless a parent launcher or container environment already exports it.
+
+For direct runs, other common settings come from `../.env.example`, especially `HOST`, `CORS_ALLOWED_ORIGINS`, auth or WebAuthn settings, and SMTP settings for email verification or password reset flows.
 
 ### Database
 
