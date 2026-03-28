@@ -371,6 +371,8 @@ class TestDEF009_ConnectionDefaultsPersist:
         template.id = 11
         template_result = MagicMock()
         template_result.scalar_one_or_none.return_value = template
+        clear_round_robin_result = MagicMock()
+        clear_round_robin_result.rowcount = 0
         mock_db.execute = AsyncMock(
             side_effect=[
                 model_result,
@@ -380,6 +382,7 @@ class TestDEF009_ConnectionDefaultsPersist:
                 template_result,
                 lock_result,
                 ordered_connections_result,
+                clear_round_robin_result,
             ]
         )
         mock_db.flush = AsyncMock()

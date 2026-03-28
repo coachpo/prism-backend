@@ -40,12 +40,18 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
                 .all()
             )
 
+        preset_strategies = [
+            strategy
+            for strategy in strategies
+            if strategy.name == startup.DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
+        ]
+
         assert default_profile.is_default is True
-        assert len(strategies) == 1
-        assert strategies[0].profile_id == default_profile.id
-        assert strategies[0].strategy_type == "failover"
-        assert strategies[0].failover_recovery_enabled is True
-        assert strategies[0].failover_status_codes == [
+        assert len(preset_strategies) == 1
+        assert preset_strategies[0].profile_id == default_profile.id
+        assert preset_strategies[0].strategy_type == "failover"
+        assert preset_strategies[0].failover_recovery_enabled is True
+        assert preset_strategies[0].failover_status_codes == [
             403,
             422,
             429,
