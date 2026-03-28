@@ -10,6 +10,7 @@ test_proxy_cases/
 ├── logging_model_auth_path_tests.py
 ├── model_update_proxy_invariant_tests.py
 ├── proxy_target_runtime_selection_tests.py
+├── proxy_unroutable_target_rejection_tests.py
 └── recovery_runtime_and_streaming_tests.py
 ```
 
@@ -19,11 +20,12 @@ test_proxy_cases/
 - Logging, model, and auth-path cases: `logging_model_auth_path_tests.py`
 - Proxy-model update invariant cases: `model_update_proxy_invariant_tests.py`
 - Runtime target selection cases: `proxy_target_runtime_selection_tests.py`
+- Unroutable-target rejection and path-guard cases: `proxy_unroutable_target_rejection_tests.py`
 - Recovery and streaming cases: `recovery_runtime_and_streaming_tests.py`
 
 ## FOLDER NOTES
 
-- This folder is distinct because its five files map to one proxy-focused regression cluster instead of a grab-bag of nearby defect numbers.
+- This folder is distinct because its six files map to one proxy-focused regression cluster instead of a grab-bag of nearby defect numbers.
 - Keep the leaf names explicit so the proxy regression map stays readable when the smoke aggregator expands.
 - Keep the parent `test_proxy.py` and top-level smoke aggregator in sync when a new proxy leaf should be re-exported.
 
