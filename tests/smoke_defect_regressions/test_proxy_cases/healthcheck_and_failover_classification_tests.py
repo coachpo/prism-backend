@@ -557,7 +557,9 @@ class TestDEF060_ProxyApiFamilyPathValidation:
         model_config.api_family = "anthropic"
         model_config.model_id = "gemini-3.1-pro-preview"
         requested_model_result = MagicMock()
-        requested_model_result.scalars.return_value.one_or_none.return_value = None
+        requested_model_result.scalars.return_value.one_or_none.return_value = (
+            model_config
+        )
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=requested_model_result)
 
