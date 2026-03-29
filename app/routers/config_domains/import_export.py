@@ -40,6 +40,6 @@ async def import_config(
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     validate_import_payload(data)
-    if data.version != 9:
-        raise HTTPException(status_code=400, detail="Config import requires version=9")
+    if data.version != 1:
+        raise HTTPException(status_code=400, detail="Config import requires version=1")
     return await execute_import_payload(db, profile_id=profile_id, data=data)

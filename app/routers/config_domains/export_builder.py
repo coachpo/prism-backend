@@ -313,7 +313,7 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=9,
+        version=1,
         exported_at=utc_now(),
         vendors=exported_vendors,
         endpoints=exported_endpoints,

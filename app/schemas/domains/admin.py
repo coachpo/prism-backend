@@ -201,7 +201,7 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[9] = 9
+    version: Literal[1] = 1
     exported_at: datetime
     vendors: list[ConfigVendorExport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
@@ -217,7 +217,7 @@ class ConfigExportResponse(BaseModel):
 class ConfigImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[9] = 9
+    version: Literal[1] = 1
     exported_at: datetime | None = None
     vendors: list[ConfigVendorImport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]
