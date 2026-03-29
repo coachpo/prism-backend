@@ -203,7 +203,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         assert "failover_auth_error_cooldown_seconds" in str(exc_info.value)
 
-    def test_config_export_version_9_allows_fill_first_strategy(self):
+    def test_config_export_version_1_allows_fill_first_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -250,13 +250,13 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 9
+        assert exported["version"] == 1
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "fill-first"
         assert (
             exported["loadbalance_strategies"][0]["auto_recovery"]["mode"] == "enabled"
         )
 
-    def test_config_export_version_9_allows_round_robin_strategy(self):
+    def test_config_export_version_1_allows_round_robin_strategy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -303,7 +303,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         exported = config.model_dump(mode="json")
 
-        assert exported["version"] == 9
+        assert exported["version"] == 1
         assert exported["loadbalance_strategies"][0]["strategy_type"] == "round-robin"
         assert (
             exported["loadbalance_strategies"][0]["auto_recovery"]["mode"] == "enabled"
@@ -314,7 +314,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [],
                 "endpoints": [],
                 "pricing_templates": [],
@@ -326,7 +326,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert validation.loadbalance_strategies == []
         assert validation.models == []
 
-    def test_config_import_requires_explicit_auto_recovery_under_version_9(
+    def test_config_import_requires_explicit_auto_recovery_under_version_1(
         self,
     ):
         from app.schemas.schemas import ConfigImportRequest
@@ -335,7 +335,7 @@ class TestLoadbalanceStrategyFieldValidation:
         with pytest.raises(ValidationError):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 9,
+                    "version": 1,
                     "vendors": [
                         {
                             "key": "openai",
@@ -379,7 +379,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
@@ -430,7 +430,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",

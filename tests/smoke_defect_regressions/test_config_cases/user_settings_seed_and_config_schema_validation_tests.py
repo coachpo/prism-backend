@@ -213,10 +213,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
-    def test_config_export_schema_defaults_to_version_9(self):
+    def test_config_export_schema_defaults_to_version_1(self):
         from app.schemas.schemas import ConfigExportResponse
 
-        assert ConfigExportResponse.model_fields["version"].default == 9
+        assert ConfigExportResponse.model_fields["version"].default == 1
 
     def test_export_schema_includes_top_level_vendors_field(self):
         from app.schemas.schemas import ConfigExportResponse
@@ -407,12 +407,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert reimported.vendors[0].icon_key == "openai"
         assert "icon_key" not in exported["models"][0]
 
-    def test_version_9_import_schema_accepts_fill_first_strategy(self):
+    def test_version_1_import_schema_accepts_fill_first_strategy(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
@@ -478,7 +478,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
@@ -525,7 +525,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         with pytest.raises(ValidationError, match="icon_key"):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 9,
+                    "version": 1,
                     "vendors": [
                         {
                             "key": "openrouter",
@@ -566,7 +566,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
     def test_config_import_schema_rejects_legacy_version_7_payloads(self):
         from app.schemas.schemas import ConfigImportRequest
 
-        with pytest.raises(ValidationError, match="9"):
+        with pytest.raises(ValidationError, match="1"):
             ConfigImportRequest.model_validate(
                 {
                     "version": 7,
@@ -617,7 +617,7 @@ class TestDEF023_ConfigImportReferenceValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 9,
+                    "version": 1,
                     "vendors": [
                         {
                             "key": "openai",
@@ -681,7 +681,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
@@ -744,7 +744,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
