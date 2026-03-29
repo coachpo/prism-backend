@@ -15,16 +15,16 @@ This is the backend component of Prism, handling LLM API-family routing, load ba
 
 ---
 
-## Project Structure
+## Project structure
 
-```
+```text
 backend/
 ├── app/
 │   ├── alembic/                     # Packaged Alembic env + revisions used at runtime
 │   ├── alembic.ini                  # Package-local Alembic config for startup migrations
 │   ├── main.py                      # CLI entrypoint, FastAPI app wiring, lifespan, and shared worker setup
 │   ├── bootstrap/                   # Startup sequence and auth middleware helpers
-│   ├── core/database.py             # SQLAlchemy async engine + session factory
+│   ├── core/                        # Settings, database, auth, crypto, migrations, time, version helpers
 │   ├── models/
 │   │   ├── domains/                 # Split ORM model domains
 │   │   └── models.py                # Explicit model export boundary
@@ -83,28 +83,26 @@ backend/
 ## Setup
 
 ### Prerequisites
+
 - Python 3.13+
 - uv
 
 ### Installation
 
 ```bash
-# Create or update the uv-managed environment
 uv sync --locked
 ```
 
-If your Python 3.13 interpreter is exposed under a different command name, set
-`BACKEND_PYTHON_BIN=<your-python-3.13-command>` before using `../start.sh`.
+If your Python 3.13 interpreter is exposed under a different command name, set `BACKEND_PYTHON_BIN=<your-python-3.13-command>` before using `../start.sh`.
 
 ### Running
 
 ```bash
-# Development server with auto-reload
 uv run prism-backend --reload
-
-# Production defaults (4 workers, proxy headers enabled)
 uv run prism-backend
 ```
+
+Direct backend runs default to port `8000`. When you launch through `../start.sh`, the root launcher exposes the backend on `http://localhost:18000` and wires the checked-in PostgreSQL compose helper plus frontend integration settings.
 
 The API will be available at:
 - **Swagger UI**: http://localhost:8000/docs
@@ -116,16 +114,9 @@ The API will be available at:
 ## Testing
 
 ```bash
-# Run all tests
 uv run pytest tests/
-
-# Run with coverage
 uv run pytest tests/ --cov=app --cov-report=html
-
-# Run specific test file
 uv run pytest tests/test_smoke_defect_regressions.py -v
-
-# Run one focused service suite
 uv run pytest tests/services/test_loadbalancer_planner.py -v
 ```
 
@@ -133,24 +124,22 @@ uv run pytest tests/services/test_loadbalancer_planner.py -v
 
 - Most backend pytest runs require Docker because `tests/conftest.py` starts PostgreSQL through `testcontainers` and applies Alembic migrations before the session begins.
 - The small DB-free allowlist currently includes `tests/services/test_background_tasks.py`, `tests/test_backend_version_metadata.py`, and `tests/test_realtime_broadcast.py`.
-- `tests/test_smoke_defect_regressions.py` re-exports the named DEF smoke corpus, including the startup-side health contract and the proxy-side runtime-target guards.
+- `tests/test_smoke_defect_regressions.py` re-exports the named DEF smoke corpus, including grouped config, costing, startup, and proxy regressions.
 - `tests/test_multi_profile_isolation.py` owns selected-profile versus active-runtime containment coverage.
 - `tests/test_realtime_broadcast.py` owns websocket auth, subscribe/unsubscribe, and `dashboard.update` coverage.
 - `tests/services/` keeps service-focused auth, loadbalancer, stats, streaming, throughput, and WebAuthn tests out of the smoke and isolation trees.
 
-`pyproject.toml` is the dependency declaration source and `uv.lock` pins the resolved
-environment. Local development uses `uv sync --locked`, while production images install
-runtime dependencies with `uv sync --locked --no-dev`.
+`pyproject.toml` is the dependency declaration source and `uv.lock` pins the resolved environment. Local development uses `uv sync --locked`, while production images install runtime dependencies with `uv sync --locked --no-dev`.
 
 ---
 
 ## Configuration
 
-### Environment Variables
+### Environment variables
 
 - `PORT` - Server port for `prism-backend` (default: `8000`)
 - `PRISM_BACKEND_WORKERS` - Worker count when `--reload` is off (default: `4`)
-- `DATABASE_URL` - PostgreSQL DSN for direct backend runs. This is required unless a parent launcher or container environment already exports it.
+- `DATABASE_URL` - PostgreSQL DSN for direct backend runs
 
 For direct runs, other common settings come from `../.env.example`, especially `HOST`, `CORS_ALLOWED_ORIGINS`, auth or WebAuthn settings, and SMTP settings for email verification or password reset flows.
 
@@ -164,52 +153,21 @@ For local development, run PostgreSQL via Docker Compose:
 docker compose up -d postgres
 ```
 
-The checked-in compose file exposes PostgreSQL on `localhost:15432`. The root
-launcher uses that same compose file and wires `DATABASE_URL` accordingly.
-If you run `uv run prism-backend` directly against the checked-in compose file,
-point `DATABASE_URL` at `postgresql+asyncpg://prism:prism@localhost:15432/prism`.
+The checked-in compose file exposes PostgreSQL on `localhost:15432`. The root launcher uses that same compose file and wires `DATABASE_URL` accordingly. If you run `uv run prism-backend` directly against the checked-in compose file, point `DATABASE_URL` at `postgresql+asyncpg://prism:prism@localhost:15432/prism`.
 
 ---
 
-## API Overview
+## API overview
 
 ### Management API
 
-- `GET /api/vendors` - List vendor metadata
-- `GET /api/vendors/{id}` - Get one vendor record
-- `PATCH /api/vendors/{id}` - Update vendor metadata
-
-- `GET /api/models` - List all models
-- `POST /api/models` - Create model
-- `PUT /api/models/{id}` - Update model
-- `DELETE /api/models/{id}` - Delete model
-
-- `GET /api/endpoints` - List profile-scoped endpoints
-- `POST /api/endpoints` - Create profile-scoped endpoint
-- `PUT /api/endpoints/{id}` - Update profile-scoped endpoint
-- `DELETE /api/endpoints/{id}` - Delete profile-scoped endpoint
-
-- `GET /api/models/{id}/connections` - List connections for model
-- `POST /api/models/{id}/connections` - Create connection for model
-- `PUT /api/connections/{id}` - Update connection
-- `DELETE /api/connections/{id}` - Delete connection
-- `POST /api/connections/{id}/health-check` - Manual health check
-
-- `GET /api/stats/requests` - Request logs with filters
-- `GET /api/stats/summary` - Aggregated statistics
-- `GET /api/stats/connection-success-rates` - Per-connection success rates
-
-- `GET /api/audit/logs` - Audit logs with filters
-- `GET /api/audit/logs/{id}` - Audit log detail
-
-- `GET /api/loadbalance/current-state` - List persisted current-state rows for a model
-- `POST /api/loadbalance/current-state/{connection_id}/reset` - Reset persisted current-state for one connection
-- `GET /api/loadbalance/events` - List loadbalance transition events for a model
-- `GET /api/loadbalance/events/{id}` - Get loadbalance event detail
-- `DELETE /api/loadbalance/events` - Batch-delete loadbalance events
-
-- `GET /api/config/export` - Export full configuration
-- `POST /api/config/import` - Import configuration
+- `GET /api/auth/*`, `GET /api/vendors`, `GET /api/models`, `GET /api/endpoints`, `GET /api/connections/*`
+- `GET /api/profiles`, `GET /api/settings`, `GET /api/pricing-templates`
+- `GET /api/stats/requests`, `GET /api/stats/summary`, `GET /api/stats/connection-success-rates`
+- `GET /api/audit/logs`, `GET /api/audit/logs/{id}`
+- `GET /api/loadbalance/current-state`, `GET /api/loadbalance/events`
+- `GET /api/config/export`, `POST /api/config/import`
+- `GET /health` and `/api/realtime/ws` round out the live backend surface for health checks and dashboard updates
 
 ### Proxy API
 
@@ -221,82 +179,31 @@ Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, An
 
 ---
 
-## Key Concepts
+## Key concepts
 
-### Native vs Proxy Models
+### Native vs proxy models
 
-- **Native**: Real models with their own connection configurations and load balancing
-- **Proxy**: Models that forward requests to native targets while keeping their own routing metadata — no direct connections of their own
+- **Native**: real models with their own connection configurations and load balancing
+- **Proxy**: models that forward requests to native targets while keeping their own routing metadata
 
-### Load Balancing Strategies
+### Load balancing strategies
 
-- **single**: Always use the first active connection (priority 0)
-- **round-robin**: Rotate the primary attempt across active connections in order
-- **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and status-aware cooldown handling)
-- **fill-first**: Strict priority spillover after the active target is exhausted
+- **single**: always use the first active connection
+- **round-robin**: rotate the primary attempt across active connections in order
+- **failover**: try connections in priority order with adaptive auto-recovery
+- **fill-first**: strict priority spillover after the active target is exhausted
 
-### Success Rate Tracking
-
-Connections display a success rate badge computed from `request_logs` data (last 24h):
-- ≥98% = green
-- 75-98% = yellow
-- <75% = red
-- No data = gray (N/A)
-
-### Audit Logging
+### Audit logging
 
 Optional per-vendor request/response body capture with automatic header redaction:
-- Redacted headers: `authorization`, `x-api-key`, `x-goog-api-key`, and any header matching `key|secret|token|auth` pattern
-- Body capture can be disabled per vendor
+- `authorization`, `x-api-key`, `x-goog-api-key`, and headers matching `key|secret|token|auth`
+- body capture can be disabled per vendor
 
 ---
 
-## Development Notes
+## Development notes
 
-### Async Everywhere
-
-All database operations and HTTP requests use async/await. Never use blocking I/O.
-
-### Streaming Logs
-
-Streaming responses use a separate `AsyncSessionLocal()` in the generator's `finally` block because the request-scoped session is closed before streaming completes.
-
-### API-Family Auth Headers
-
-API-family-specific auth headers are built in `proxy_service.py`:
-- OpenAI: `Authorization: Bearer {api_key}`
-- Anthropic: `x-api-key: {api_key}`
-- Gemini: `Authorization: Bearer {api_key}`
-
-### Schema Migrations
-
-Alembic migrations are the source of truth. Create revisions with `uv run alembic revision --autogenerate -m "message"` and apply with `uv run alembic upgrade head`.
-
----
-
-## Troubleshooting
-
-### Database Connection Errors
-
-If startup fails to connect to PostgreSQL, verify your `DATABASE_URL` and ensure the Postgres service is healthy (`docker compose ps`).
-
-### Import Errors
-
-Make sure you're running from the `backend/` directory and the uv environment is synced (`uv sync --locked`).
-
-### Port Already in Use
-
-Change the port with `--port` or set the `PORT` environment variable.
-
----
-
-## Contributing
-
-This repo does not currently include a shared `CONTRIBUTING.md`; follow the backend
-module conventions in `AGENTS.md` and the surrounding code.
-
----
-
-## License
-
-This repo does not currently include a standalone `LICENSE` file.
+- All database operations and HTTP requests use async/await.
+- Streaming responses use a separate `AsyncSessionLocal()` in the generator's `finally` block.
+- API-family-specific auth headers are built in `proxy_service.py`.
+- Alembic revisions are the source of truth; create them with `uv run alembic revision --autogenerate -m "message"`.
