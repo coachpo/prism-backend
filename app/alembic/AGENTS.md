@@ -24,7 +24,7 @@ alembic/
 - `env.py` sets `target_metadata = Base.metadata` and supports both offline and online runs.
 - `env.py` uses async migrations when no connection is provided by the caller.
 - `../core/migrations.py` is the programmatic seam that startup code uses to run upgrades.
-- `versions/0001_prism_v9_schema_baseline.py` is the current authoritative fresh-install baseline.
+- `versions/0001_prism_v1_schema_baseline.py` is the current authoritative fresh-install baseline.
 - `versions/` remains the schema source of truth, not ORM model state or startup side effects.
 
 ## CONVENTIONS
