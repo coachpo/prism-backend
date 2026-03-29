@@ -21,12 +21,22 @@ async def update_connection_record(
         profile_id=profile_id,
         connection_id=connection_id,
     )
+    model_config = await deps.load_model_or_404_fn(
+        db,
+        profile_id=profile_id,
+        model_config_id=connection.model_config_id,
+    )
     update_data = await build_connection_update_data(
         body=body,
         db=db,
         profile_id=profile_id,
         deps=deps,
     )
+    if (
+        "openai_probe_endpoint_variant" in update_data
+        and getattr(model_config, "api_family", None) != "openai"
+    ):
+        update_data["openai_probe_endpoint_variant"] = "responses"
     clear_recovery_state = should_clear_recovery_state(connection, update_data)
     clear_round_robin_state = (
         "is_active" in update_data and update_data["is_active"] != connection.is_active

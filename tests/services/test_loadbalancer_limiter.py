@@ -11,14 +11,15 @@ from sqlalchemy import select
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
     Connection,
-    ConnectionLimiterLease,
-    ConnectionLimiterState,
     Endpoint,
+    LoadbalanceStrategy,
     ModelConfig,
     Profile,
+    RoutingConnectionRuntimeLease,
+    RoutingConnectionRuntimeState,
     Vendor,
 )
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
 
 
 async def _create_connection_fixture(
@@ -50,9 +51,10 @@ async def _create_connection_fixture(
             api_family="openai",
             model_id=f"model-{suffix}",
             model_type="native",
-            loadbalance_strategy=make_loadbalance_strategy(
+            loadbalance_strategy=LoadbalanceStrategy(
                 profile=profile,
-                strategy_type="failover",
+                name=f"limiter-strategy-{suffix}",
+                routing_policy=make_routing_policy_adaptive(),
             ),
             is_enabled=True,
         )
@@ -273,9 +275,10 @@ class TestLoadbalancerLimiter:
             remaining_leases = list(
                 (
                     await session.execute(
-                        select(ConnectionLimiterLease).where(
-                            ConnectionLimiterLease.profile_id == profile_id,
-                            ConnectionLimiterLease.connection_id == connection_id,
+                        select(RoutingConnectionRuntimeLease).where(
+                            RoutingConnectionRuntimeLease.profile_id == profile_id,
+                            RoutingConnectionRuntimeLease.connection_id
+                            == connection_id,
                         )
                     )
                 )
@@ -284,15 +287,65 @@ class TestLoadbalancerLimiter:
             )
             state_row = (
                 await session.execute(
-                    select(ConnectionLimiterState).where(
-                        ConnectionLimiterState.profile_id == profile_id,
-                        ConnectionLimiterState.connection_id == connection_id,
+                    select(RoutingConnectionRuntimeState).where(
+                        RoutingConnectionRuntimeState.profile_id == profile_id,
+                        RoutingConnectionRuntimeState.connection_id == connection_id,
                     )
                 )
             ).scalar_one_or_none()
 
         assert len(remaining_leases) == 1
         assert state_row is not None
+
+    @pytest.mark.asyncio
+    async def test_heartbeat_connection_lease_extends_stream_slot_until_new_expiry(
+        self,
+    ):
+        from app.services.loadbalancer.limiter import (
+            acquire_connection_limit,
+            heartbeat_connection_lease,
+        )
+
+        profile_id, connection_id = await _create_connection_fixture(
+            max_in_flight_stream=1,
+        )
+        connection = await _load_connection(connection_id)
+        start = datetime(2026, 3, 26, 12, 30, tzinfo=timezone.utc)
+
+        acquired = await acquire_connection_limit(
+            profile_id=profile_id,
+            connection=connection,
+            lease_kind="stream",
+            now_at=start,
+            lease_ttl_seconds=5,
+        )
+        heartbeated = await heartbeat_connection_lease(
+            profile_id=profile_id,
+            lease_token=acquired.lease_token,
+            now_at=start + timedelta(seconds=4),
+            lease_ttl_seconds=5,
+        )
+        blocked = await acquire_connection_limit(
+            profile_id=profile_id,
+            connection=connection,
+            lease_kind="stream",
+            now_at=start + timedelta(seconds=6),
+            lease_ttl_seconds=5,
+        )
+        reacquired = await acquire_connection_limit(
+            profile_id=profile_id,
+            connection=connection,
+            lease_kind="stream",
+            now_at=start + timedelta(seconds=10),
+            lease_ttl_seconds=5,
+        )
+
+        assert acquired.admitted is True
+        assert acquired.lease_token is not None
+        assert heartbeated is True
+        assert blocked.admitted is False
+        assert blocked.deny_reason == "in_flight_limit"
+        assert reacquired.admitted is True
 
     @pytest.mark.asyncio
     async def test_lifespan_runs_limiter_reconciliation_after_startup_sequence(self):

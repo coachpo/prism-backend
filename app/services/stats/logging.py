@@ -9,6 +9,7 @@ from app.core.time import utc_now
 from app.models.domains.routing import Connection, Endpoint, ModelConfig
 from app.models.models import RequestLog
 from app.services.background_tasks import background_task_manager
+from app.services.monitoring_service import record_passive_request_outcome
 from app.schemas.domains.stats import (
     DashboardRealtimeUpdateResponse,
     DashboardRouteSnapshotResponse,
@@ -518,8 +519,27 @@ async def log_request(
         )
         async with AsyncSessionLocal() as log_db:
             log_db.add(entry)
-            await log_db.commit()
+            await log_db.flush()
             await log_db.refresh(entry)
+
+            try:
+                if entry.connection_id is not None:
+                    await record_passive_request_outcome(
+                        profile_id=entry.profile_id,
+                        connection_id=entry.connection_id,
+                        status_code=entry.status_code,
+                        response_time_ms=entry.response_time_ms,
+                        success_flag=entry.success_flag,
+                        observed_at=entry.created_at,
+                        session=log_db,
+                    )
+            except Exception:
+                logger.exception(
+                    "Failed to apply monitoring routing feedback for request_log_id=%s",
+                    entry.id,
+                )
+
+            await log_db.commit()
 
             try:
                 enqueue_dashboard_update_broadcast(

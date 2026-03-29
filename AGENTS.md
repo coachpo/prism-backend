@@ -1,7 +1,7 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-Prism's backend owns the management API on `/api/*` and the runtime proxy API on `/v1/*` and `/v1beta/*`. It is uv-managed from `pyproject.toml` and `uv.lock`, packages `app*`, runs against PostgreSQL, applies Alembic migrations during startup, and owns auth, proxy keys, passkeys, realtime updates, load balancing, costing, and observability.
+Prism's backend owns the management API on `/api/*` and the runtime proxy API on `/v1/*` and `/v1beta/*`. It is uv-managed from `pyproject.toml` and `uv.lock`, packages `app*`, runs against PostgreSQL, applies Alembic migrations during startup, and owns auth, proxy keys, passkeys, realtime updates, adaptive routing, backend-run monitoring, costing, and observability.
 
 ## STRUCTURE
 ```
@@ -12,12 +12,15 @@ backend/
 ├── app/core/AGENTS.md                                           # Settings, database, auth helpers, crypto, migrations
 ├── app/models/AGENTS.md                                         # ORM domain ownership and `models.py` boundary
 ├── app/routers/AGENTS.md                                        # Router map, standalone routers, and leaf handoff
+├── app/routers/monitoring.py                                    # Monitoring overview, drill-down, and manual-probe router
 ├── app/routers/shared/AGENTS.md                                 # Reusable router-layer helpers
 ├── app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md
 ├── app/routers/connections_domains/AGENTS.md                    # Dense connection-management leaf
 ├── app/routers/proxy_domains/AGENTS.md                          # Dense runtime proxy leaf
 ├── app/schemas/AGENTS.md                                        # Contract ownership and `schemas.py` boundary
 ├── app/services/AGENTS.md                                       # Service-root boundaries, worker infra, reporting helpers
+├── app/services/monitoring/                                     # Probe runner, scheduler, queries, routing feedback
+├── app/services/monitoring_service.py                           # Public monitoring facade
 ├── app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md
 ├── tests/AGENTS.md                                              # Test map and aggregators
 ├── tests/services/AGENTS.md                                     # Focused service-test handoff
@@ -45,8 +48,8 @@ backend/
 ## RUNTIME FACTS
 
 - `pyproject.toml` exposes `prism-backend = "app.main:main"` as the CLI entrypoint.
-- `app/main.py` builds the FastAPI app, installs CORS and auth middleware, mounts routers, and exposes `/health`.
-- FastAPI lifespan runs `bootstrap.run_startup_sequence()`, builds one shared `httpx.AsyncClient`, configures the shared `BackgroundTaskManager`, starts it, then shuts those resources down in reverse order while also stopping dashboard-update lifecycle helpers.
+- `app/main.py` builds the FastAPI app, installs CORS and auth middleware, mounts routers including `/api/monitoring`, and exposes `/health`.
+- FastAPI lifespan runs `bootstrap.run_startup_sequence()`, builds one shared `httpx.AsyncClient`, configures the shared `BackgroundTaskManager`, starts the backend-owned `MonitoringScheduler`, then shuts those resources down in reverse order while also stopping dashboard-update lifecycle helpers.
 - Multi-worker CLI startup pre-runs `run_startup_sequence()` and sets `PRISM_SKIP_STARTUP_SEQUENCE=1` before worker imports `app.main:app`.
 - Management requests use effective profile scope. Runtime proxy traffic uses the active profile only.
 - When auth is enabled, `/api/*` uses operator session cookies while `/v1/*` and `/v1beta/*` use proxy API keys.
@@ -55,11 +58,11 @@ backend/
 ## WHERE TO LOOK
 
 - App assembly, router registration, lifespan startup, and shared infra wiring: `app/main.py`
-- Startup sequencing, vendor and profile seeding, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
+- Startup sequencing, vendor and profile seeding, adaptive-routing preset seeding, monitoring cadence defaults, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
 - Management versus runtime scope rules: `app/dependencies.py`
-- Router map, shared router helpers, and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/shared/AGENTS.md`, `app/routers/`
+- Router map, shared router helpers, monitoring routes, and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/shared/AGENTS.md`, `app/routers/monitoring.py`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
-- Shared worker lifecycle, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
+- Shared worker lifecycle, backend monitoring scheduler, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/monitoring_service.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
 - Migration source of truth: `alembic.ini`, `app/alembic/`, `app/alembic/AGENTS.md`, `app/core/migrations.py`
 - Backend test hierarchy and suite leaves: `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md`, `tests/smoke_defect_regressions/test_startup_cases/AGENTS.md`, `tests/multi_profile_isolation/AGENTS.md`
 

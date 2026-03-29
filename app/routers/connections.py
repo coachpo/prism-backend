@@ -17,14 +17,11 @@ from app.schemas.schemas import (
     ConnectionUpdate,
     HealthCheckResponse,
 )
-from app.services.loadbalancer.recovery import record_connection_recovery
 from app.services.loadbalancer.state import (
     clear_connection_state,
     clear_round_robin_state_for_model,
 )
-from app.services.proxy_service import (
-    build_upstream_headers,
-)
+from app.services.monitoring_service import run_connection_probe
 from app.routers.connections_domains.connection_crud_helpers import (
     _create_endpoint_from_inline,
     _ensure_model_config_ids_exist,
@@ -235,9 +232,7 @@ async def health_check_connection(
         request=request,
         db=db,
         profile_id=profile_id,
-        build_upstream_headers_fn=build_upstream_headers,
-        probe_connection_health_fn=_probe_connection_health,
-        record_connection_recovery_fn=record_connection_recovery,
+        run_connection_probe_fn=run_connection_probe,
     )
 
 

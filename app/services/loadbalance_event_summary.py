@@ -42,12 +42,12 @@ def describe_loadbalance_event(
 
     if event_type == "max_cooldown_strike":
         return {
-            "event": "Connection hit max cooldown",
+            "event": "Connection hit max open interval",
             "reason": (
-                f"The {failure_label} pushed the connection to the configured max cooldown after {consecutive_failures} consecutive failures."
+                f"The {failure_label} pushed the connection to the configured maximum open interval after {consecutive_failures} consecutive failures."
             ),
             "operation": (
-                "Prism recorded a max-cooldown strike for ban escalation tracking."
+                "Prism recorded a max-open strike so operators can track whether the connection should escalate into a ban."
             ),
             "cooldown": cooldown_label,
         }
@@ -59,7 +59,7 @@ def describe_loadbalance_event(
                 f"The {failure_label} reached the ban escalation threshold after {consecutive_failures} consecutive failures."
             ),
             "operation": (
-                "Prism removed the connection from normal failover planning until the ban clears or is reset."
+                "Prism removed the connection from normal adaptive routing until the ban clears or an operator resets it."
             ),
             "cooldown": cooldown_label,
         }
@@ -70,11 +70,10 @@ def describe_loadbalance_event(
             f"meeting {threshold_label}."
         )
         return {
-            "event": "Connection entered cooldown",
+            "event": "Connection opened its circuit",
             "reason": reason,
             "operation": (
-                f"Prism blocked this connection for {cooldown_label} before it becomes eligible "
-                "for recovery."
+                f"Prism opened the circuit for {cooldown_label} before the connection becomes eligible for another probe attempt."
             ),
             "cooldown": cooldown_label,
         }
@@ -85,10 +84,10 @@ def describe_loadbalance_event(
             f"{consecutive_failures} consecutive failures."
         )
         return {
-            "event": "Cooldown was extended",
+            "event": "Circuit open interval was extended",
             "reason": reason,
             "operation": (
-                f"Prism kept the connection blocked and restarted its recovery cooldown for {cooldown_label}."
+                f"Prism kept the circuit open and restarted the recovery timer for {cooldown_label}."
             ),
             "cooldown": cooldown_label,
         }
@@ -97,12 +96,12 @@ def describe_loadbalance_event(
         return {
             "event": "Connection became probe eligible",
             "reason": (
-                f"The cooldown after the last {failure_label} completed, so the connection can be checked again."
+                f"The open interval after the last {failure_label} completed, so the connection can be checked again."
             ),
             "operation": (
-                "Prism can let this connection receive another attempt to confirm whether it has recovered."
+                "Prism can let this connection receive another probe or traffic attempt to confirm whether it recovered."
             ),
-            "cooldown": f"{cooldown_label} cooldown completed",
+            "cooldown": f"{cooldown_label} open interval completed",
         }
 
     if event_type == "recovered":
@@ -112,9 +111,9 @@ def describe_loadbalance_event(
                 f"The connection was marked healthy again after the last {failure_label}."
             ),
             "operation": (
-                "Prism cleared the recovery block and returned the connection to normal routing."
+                "Prism closed the circuit and returned the connection to normal adaptive routing."
             ),
-            "cooldown": f"Recovered after a {cooldown_label} cooldown",
+            "cooldown": f"Recovered after a {cooldown_label} open interval",
         }
 
     return {
@@ -124,9 +123,9 @@ def describe_loadbalance_event(
             f"which is still below {threshold_label}."
         ),
         "operation": (
-            "Prism kept the connection available and only updated the failure streak, so no cooldown was opened."
+            "Prism kept the connection available and only updated the runtime failure streak, so no circuit-open interval started."
         ),
-        "cooldown": "No cooldown opened",
+        "cooldown": "No open interval started",
     }
 
 

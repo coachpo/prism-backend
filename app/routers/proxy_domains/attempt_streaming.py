@@ -15,10 +15,12 @@ from .attempt_outcome_reporting import (
     persist_stream_request_log_inline_fallback,
 )
 from .attempt_types import (
+    PreparedExecutionResponse,
     ProxyAttemptTarget,
     ProxyRequestState,
     ProxyRuntimeDependencies,
 )
+from .proxy_request_helpers import classify_failover_failure, is_recovery_success_status
 
 logger = logging.getLogger(__name__)
 TokenUsage = dict[str, int | None]
@@ -489,7 +491,7 @@ def _extract_stream_tokens(payload: bytes) -> dict[str, int | None] | None:
         return None
 
 
-async def build_streaming_response(
+def build_streaming_response(
     *,
     deps: ProxyRuntimeDependencies,
     state: ProxyRequestState,
@@ -497,108 +499,198 @@ async def build_streaming_response(
     upstream_resp: httpx.Response,
     response_headers: dict[str, str],
     elapsed_ms: int,
-) -> StreamingResponse:
-    async def _iter_and_log(resp: httpx.Response):
-        is_sse_stream = _is_sse_stream(
-            resp.headers.get("content-type")
-            if isinstance(resp.headers.get("content-type"), str)
-            else None
-        )
-        finalization_buffer = _StreamingFinalizationBuffer(
-            keep_payload=(
-                not is_sse_stream
-                or (state.setup.audit_enabled and state.setup.audit_capture_bodies)
-            ),
-            parse_sse_tokens=is_sse_stream,
-        )
-        stream_cancelled = False
-        try:
-            async for chunk in resp.aiter_bytes():
-                if chunk:
-                    finalization_buffer.append(chunk)
-                    yield chunk
-        except GeneratorExit:
-            stream_cancelled = True
+) -> PreparedExecutionResponse:
+    async def _release_stream_lease() -> None:
+        if target.limiter_lease_token is None:
             return
+        try:
+            await deps.release_connection_lease_fn(
+                profile_id=state.profile_id,
+                lease_token=target.limiter_lease_token,
+                now_at=None,
+            )
         except asyncio.CancelledError:
-            stream_cancelled = True
-            logger.debug("Streaming response cancelled by client")
             raise
-        except Exception as exc:
-            logger.warning("Stream iteration failed: %s", exc)
-        finally:
-            try:
-                await asyncio.shield(resp.aclose())
-            except BaseException:
-                pass
-
-            payload, token_usage, provider_correlation_id = (
-                finalization_buffer.finalize()
-            )
-            if token_usage is None and payload is not None:
-                token_usage = _extract_stream_tokens(payload)
-
-            snapshot = build_stream_finalization_snapshot(
-                deps=deps,
-                state=state,
-                target=target,
-                response_headers=response_headers,
-                status_code=resp.status_code,
-                elapsed_ms=elapsed_ms,
-                payload=payload,
-                provider_correlation_id=provider_correlation_id,
-                token_usage=token_usage,
+        except Exception:
+            logger.exception(
+                "Failed to release streaming limiter lease: profile_id=%d connection_id=%d",
+                state.profile_id,
+                target.connection.id,
             )
 
-            request_log_ready: asyncio.Future[int | None] | None = None
+    async def discard_response() -> None:
+        try:
+            await asyncio.shield(upstream_resp.aclose())
+        except BaseException:
+            pass
+        await _release_stream_lease()
+
+    async def commit_response(attempt_count: int) -> StreamingResponse:
+        async def _iter_and_log(resp: httpx.Response):
+            is_sse_stream = _is_sse_stream(
+                resp.headers.get("content-type")
+                if isinstance(resp.headers.get("content-type"), str)
+                else None
+            )
+            finalization_buffer = _StreamingFinalizationBuffer(
+                keep_payload=(
+                    not is_sse_stream
+                    or (state.setup.audit_enabled and state.setup.audit_capture_bodies)
+                ),
+                parse_sse_tokens=is_sse_stream,
+            )
+            heartbeat_stop = asyncio.Event()
+            heartbeat_task: asyncio.Task[None] | None = None
+            lease_ttl_seconds = target.limiter_lease_ttl_seconds
+            if (
+                target.limiter_lease_token is not None
+                and lease_ttl_seconds is not None
+                and lease_ttl_seconds > 0
+            ):
+                interval_seconds = max(float(lease_ttl_seconds) / 2.0, 0.1)
+
+                async def _heartbeat_stream_lease() -> None:
+                    while True:
+                        try:
+                            await asyncio.wait_for(
+                                heartbeat_stop.wait(),
+                                timeout=interval_seconds,
+                            )
+                            return
+                        except asyncio.TimeoutError:
+                            pass
+                        await deps.heartbeat_connection_lease_fn(
+                            profile_id=state.profile_id,
+                            lease_token=target.limiter_lease_token,
+                            lease_ttl_seconds=lease_ttl_seconds,
+                            now_at=None,
+                        )
+
+                heartbeat_task = asyncio.create_task(_heartbeat_stream_lease())
+
+            stream_cancelled = False
+            stream_error: Exception | None = None
+            stream_error_detail: str | None = None
             try:
-                request_log_ready = enqueue_stream_finalize(snapshot)
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        finalization_buffer.append(chunk)
+                        yield chunk
+            except GeneratorExit:
+                stream_cancelled = True
+                return
             except asyncio.CancelledError:
+                stream_cancelled = True
+                logger.debug("Streaming response cancelled by client")
                 raise
-            except Exception:
-                logger.exception(
-                    "Failed to enqueue stream finalization: profile_id=%d connection_id=%d status_code=%d",
-                    snapshot.profile_id,
-                    snapshot.connection_id,
-                    snapshot.status_code,
+            except Exception as exc:
+                stream_error = exc
+                stream_error_detail = str(exc)[:500]
+                logger.warning("Stream iteration failed: %s", exc)
+            finally:
+                heartbeat_stop.set()
+                if heartbeat_task is not None:
+                    await asyncio.gather(heartbeat_task, return_exceptions=True)
+
+                try:
+                    await asyncio.shield(resp.aclose())
+                except BaseException:
+                    pass
+
+                payload, token_usage, provider_correlation_id = (
+                    finalization_buffer.finalize()
                 )
-                try:
-                    _ = await persist_stream_request_log_inline_fallback(snapshot)
-                except asyncio.CancelledError:
-                    logger.debug(
-                        "Streaming request logging cancelled before completion"
-                    )
-                except Exception:
-                    logger.exception("Failed to log streaming request")
+                if token_usage is None and payload is not None:
+                    token_usage = _extract_stream_tokens(payload)
 
-            if request_log_ready is not None and not stream_cancelled:
-                _ = await asyncio.shield(request_log_ready)
+                final_status_code = 0 if stream_error is not None else resp.status_code
+                snapshot = build_stream_finalization_snapshot(
+                    attempt_count=attempt_count,
+                    deps=deps,
+                    state=state,
+                    target=target,
+                    error_detail=stream_error_detail,
+                    response_headers=response_headers,
+                    status_code=final_status_code,
+                    elapsed_ms=elapsed_ms,
+                    payload=payload,
+                    provider_correlation_id=provider_correlation_id,
+                    token_usage=token_usage,
+                )
 
-            if target.limiter_lease_token is not None:
+                request_log_ready: asyncio.Future[int | None] | None = None
                 try:
-                    await deps.release_connection_lease_fn(
-                        profile_id=state.profile_id,
-                        lease_token=target.limiter_lease_token,
-                        now_at=None,
-                    )
+                    request_log_ready = enqueue_stream_finalize(snapshot)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
                     logger.exception(
-                        "Failed to release streaming limiter lease: profile_id=%d connection_id=%d",
+                        "Failed to enqueue stream finalization: profile_id=%d connection_id=%d status_code=%d",
+                        snapshot.profile_id,
+                        snapshot.connection_id,
+                        snapshot.status_code,
+                    )
+                    try:
+                        _ = await persist_stream_request_log_inline_fallback(snapshot)
+                    except asyncio.CancelledError:
+                        logger.debug(
+                            "Streaming request logging cancelled before completion"
+                        )
+                    except Exception:
+                        logger.exception("Failed to log streaming request")
+
+                if request_log_ready is not None and not stream_cancelled:
+                    _ = await asyncio.shield(request_log_ready)
+
+                try:
+                    if stream_error is not None:
+                        await deps.record_connection_failure_fn(
+                            state.profile_id,
+                            target.connection.id,
+                            state.setup.failover_policy.failover_cooldown_seconds,
+                            classify_failover_failure(exception=stream_error),
+                            state.setup.failover_policy,
+                            state.setup.model_id,
+                            target.connection.endpoint_id,
+                            state.setup.vendor_id,
+                            now_at=None,
+                        )
+                    elif is_recovery_success_status(resp.status_code):
+                        await deps.record_connection_recovery_fn(
+                            state.profile_id,
+                            target.connection.id,
+                            state.setup.failover_policy,
+                            state.setup.model_id,
+                            target.connection.endpoint_id,
+                            state.setup.vendor_id,
+                        )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception(
+                        "Failed to update streaming runtime state: profile_id=%d connection_id=%d",
                         state.profile_id,
                         target.connection.id,
                     )
 
-    content_type_header = cast(str | None, upstream_resp.headers.get("content-type"))
-    media_type = content_type_header or "text/event-stream"
-    return StreamingResponse(
-        _iter_and_log(upstream_resp),
-        status_code=upstream_resp.status_code,
-        media_type=media_type,
-        headers={
-            **response_headers,
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-        },
+                await _release_stream_lease()
+
+        content_type_header = cast(
+            str | None, upstream_resp.headers.get("content-type")
+        )
+        media_type = content_type_header or "text/event-stream"
+        return StreamingResponse(
+            _iter_and_log(upstream_resp),
+            status_code=upstream_resp.status_code,
+            media_type=media_type,
+            headers={
+                **response_headers,
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    return PreparedExecutionResponse(
+        commit_response_fn=commit_response,
+        discard_response_fn=discard_response,
     )

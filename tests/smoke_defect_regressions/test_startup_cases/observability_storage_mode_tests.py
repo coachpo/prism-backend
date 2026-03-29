@@ -92,28 +92,29 @@ async def _fetch_current_revision(database_url: str) -> list[str]:
     return [str(revision) for revision in revisions]
 
 
-class TestDEF078_ObservabilityUsesUnloggedPersistence:
+class TestDEF078_RuntimeHotStateUsesUnloggedPersistence:
     @pytest.mark.asyncio
-    async def test_initial_schema_creates_unlogged_observability_tables(
+    async def test_initial_schema_creates_logged_monitoring_history_and_unlogged_runtime_tables(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def078_{uuid4().hex[:12]}"
         )
-        pre_current_state_tables = (
+        logged_tables = (
             "request_logs",
             "audit_logs",
             "loadbalance_events",
+            "usage_request_events",
+            "monitoring_connection_probe_results",
         )
-        limiter_tables = (
+        unlogged_tables = (
+            "routing_connection_runtime_state",
+            "routing_connection_runtime_leases",
+        )
+        replaced_hot_state_tables = (
             "connection_limiter_state",
             "connection_limiter_leases",
-        )
-        all_observability_tables = (
-            *pre_current_state_tables,
             "loadbalance_current_state",
-            *limiter_tables,
-            "usage_request_events",
             "loadbalance_round_robin_state",
         )
         current_head_revision = _get_current_head_revision(migration_database_url)
@@ -125,10 +126,19 @@ class TestDEF078_ObservabilityUsesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 current_head_revision
             ]
-            assert current_head_revision == "0001_initial"
-            for table_name in all_observability_tables:
+            assert current_head_revision != "0001_initial"
+            for table_name in logged_tables:
+                assert (
+                    await _fetch_table_persistence(migration_database_url, table_name)
+                ) == "p"
+            for table_name in unlogged_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)
                 ) == "u"
+            for table_name in replaced_hot_state_tables:
+                assert (
+                    await _fetch_table_persistence(migration_database_url, table_name)
+                    is None
+                )
         finally:
             await _drop_database(migration_database_url)

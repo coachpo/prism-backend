@@ -7,7 +7,9 @@ from app.routers.settings_domains import (
     email_verification_router as _email_verification_router,
     get_auth_settings,
     get_costing_settings,
+    get_monitoring_settings,
     get_timezone_preference,
+    monitoring_router as _monitoring_router,
     get_proxy_api_keys,
     post_email_verification_confirm,
     post_email_verification_request,
@@ -16,12 +18,14 @@ from app.routers.settings_domains import (
     proxy_key_router as _proxy_key_router,
     put_auth_settings,
     remove_proxy_api_key,
+    update_monitoring_settings,
     update_costing_settings,
     update_timezone_preference,
 )
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 router.include_router(_costing_router)
+router.include_router(_monitoring_router)
 router.include_router(_auth_settings_router)
 router.include_router(_email_verification_router)
 router.include_router(_proxy_key_router)
@@ -29,6 +33,7 @@ router.include_router(_proxy_key_router)
 __all__ = [
     "get_auth_settings",
     "get_costing_settings",
+    "get_monitoring_settings",
     "get_timezone_preference",
     "get_proxy_api_keys",
     "post_email_verification_confirm",
@@ -38,6 +43,7 @@ __all__ = [
     "put_auth_settings",
     "remove_proxy_api_key",
     "router",
+    "update_monitoring_settings",
     "update_costing_settings",
     "update_timezone_preference",
 ]

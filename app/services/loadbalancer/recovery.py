@@ -1,12 +1,8 @@
 import random
-from datetime import datetime, timedelta
-
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert
+from datetime import datetime
 
 from app.core.database import AsyncSessionLocal
 from app.core.time import ensure_utc_datetime, utc_now
-from app.models.models import LoadbalanceCurrentState
 
 from .events import (
     record_banned_transition,
@@ -16,6 +12,12 @@ from .events import (
     record_recovered_transition,
 )
 from .policy import EffectiveLoadbalancePolicy
+from .runtime_store import (
+    mark_probe_eligible_logged as mark_runtime_probe_eligible_logged,
+    record_connection_failure_state,
+    record_connection_recovery_state,
+    upsert_and_lock_runtime_state,
+)
 from .state import current_state_to_recovery_entry
 from .types import FailureKind, RecoveryStateEntry
 
@@ -76,6 +78,7 @@ def _compute_base_cooldown(
     consecutive_failures: int,
     failure_kind: FailureKind,
 ) -> float:
+    _ = failure_kind
     if consecutive_failures < policy.failover_failure_threshold:
         return 0.0
 
@@ -105,33 +108,18 @@ async def mark_probe_eligible_logged(
     connection_id: int,
     now_at: datetime | None = None,
 ) -> RecoveryStateEntry | None:
-    normalized_now = ensure_utc_datetime(now_at) or utc_now()
-
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(LoadbalanceCurrentState)
-            .where(
-                LoadbalanceCurrentState.profile_id == profile_id,
-                LoadbalanceCurrentState.connection_id == connection_id,
-            )
-            .with_for_update()
+        claimed_state = await mark_runtime_probe_eligible_logged(
+            session=session,
+            profile_id=profile_id,
+            connection_id=connection_id,
+            now_at=now_at,
         )
-        current_state = result.scalar_one_or_none()
-        blocked_until_at = ensure_utc_datetime(
-            current_state.blocked_until_at if current_state is not None else None
-        )
-        if (
-            current_state is None
-            or current_state.probe_eligible_logged
-            or blocked_until_at is None
-            or blocked_until_at > normalized_now
-        ):
+        if claimed_state is None:
             await session.rollback()
             return None
-
-        current_state.probe_eligible_logged = True
         await session.commit()
-        return current_state_to_recovery_entry(current_state)
+        return claimed_state
 
 
 async def claim_probe_eligible(
@@ -177,37 +165,15 @@ async def record_connection_failure(
     normalized_now = ensure_utc_datetime(now_at) or utc_now()
 
     async with AsyncSessionLocal() as session:
-        _ = await session.execute(
-            insert(LoadbalanceCurrentState)
-            .values(
-                profile_id=profile_id,
-                connection_id=connection_id,
-                consecutive_failures=0,
-                last_failure_kind=None,
-                last_cooldown_seconds=0.0,
-                max_cooldown_strikes=0,
-                ban_mode="off",
-                banned_until_at=None,
-                blocked_until_at=None,
-                probe_eligible_logged=False,
-                created_at=normalized_now,
-                updated_at=normalized_now,
-            )
-            .on_conflict_do_nothing(index_elements=["profile_id", "connection_id"])
+        current_state = await upsert_and_lock_runtime_state(
+            session=session,
+            profile_id=profile_id,
+            connection_id=connection_id,
+            now_at=normalized_now,
         )
-        result = await session.execute(
-            select(LoadbalanceCurrentState)
-            .where(
-                LoadbalanceCurrentState.profile_id == profile_id,
-                LoadbalanceCurrentState.connection_id == connection_id,
-            )
-            .with_for_update()
-        )
-        current_state = result.scalar_one()
-        previous_blocked_until = current_state.blocked_until_at
-        previous_failure_kind = current_state_to_recovery_entry(current_state)[
-            "last_failure_kind"
-        ]
+        previous_state = current_state_to_recovery_entry(current_state)
+        previous_blocked_until = previous_state["blocked_until_at"]
+        previous_failure_kind = previous_state["last_failure_kind"]
         previous_consecutive_failures = current_state.consecutive_failures
         consecutive_failures = current_state.consecutive_failures + 1
 
@@ -219,11 +185,6 @@ async def record_connection_failure(
         )
         cooldown_seconds = _apply_jitter(base_cooldown, policy=policy)
 
-        current_state.consecutive_failures = consecutive_failures
-        current_state.last_failure_kind = failure_kind
-        current_state.last_cooldown_seconds = max(cooldown_seconds, 0.0)
-        current_state.probe_eligible_logged = False
-
         strike_incremented = _should_increment_max_cooldown_strike(
             base_cooldown_seconds=base_cooldown_seconds,
             consecutive_failures=consecutive_failures,
@@ -232,51 +193,30 @@ async def record_connection_failure(
             previous_failure_kind=previous_failure_kind,
             policy=policy,
         )
-        if strike_incremented:
-            current_state.max_cooldown_strikes += 1
-
+        projected_strikes = current_state.max_cooldown_strikes + (
+            1 if strike_incremented else 0
+        )
+        next_ban_mode: str | None = None
+        next_ban_duration_seconds = 0
         if (
             policy.failover_ban_mode != "off"
-            and current_state.max_cooldown_strikes
-            >= policy.failover_max_cooldown_strikes_before_ban
             and strike_incremented
+            and projected_strikes >= policy.failover_max_cooldown_strikes_before_ban
         ):
-            current_state.ban_mode = policy.failover_ban_mode
-            current_state.banned_until_at = (
-                normalized_now + timedelta(seconds=policy.failover_ban_duration_seconds)
-                if policy.failover_ban_mode == "temporary"
-                else None
-            )
+            next_ban_mode = policy.failover_ban_mode
+            next_ban_duration_seconds = policy.failover_ban_duration_seconds
 
-        if cooldown_seconds <= 0.0:
-            current_state.blocked_until_at = None
-            snapshot = current_state_to_recovery_entry(current_state)
-            await session.commit()
-            record_failed_transition(
-                event_type="not_opened",
-                profile_id=profile_id,
-                connection_id=connection_id,
-                failure_kind=failure_kind,
-                policy=policy,
-                consecutive_failures=consecutive_failures,
-                cooldown_seconds=0.0,
-                blocked_until_at=None,
-                model_id=model_id,
-                endpoint_id=endpoint_id,
-                vendor_id=vendor_id,
-            )
-            return
-
-        blocked_until_at = normalized_now + timedelta(seconds=cooldown_seconds)
-        transition = "opened"
-        if (
-            previous_blocked_until is not None
-            and normalized_now < previous_blocked_until
-        ):
-            transition = "extended"
-
-        current_state.blocked_until_at = blocked_until_at
-        snapshot = current_state_to_recovery_entry(current_state)
+        snapshot = await record_connection_failure_state(
+            session=session,
+            profile_id=profile_id,
+            connection_id=connection_id,
+            failure_kind=failure_kind,
+            cooldown_seconds=cooldown_seconds,
+            strike_incremented=strike_incremented,
+            ban_mode=next_ban_mode,
+            ban_duration_seconds=next_ban_duration_seconds,
+            now_at=normalized_now,
+        )
         await session.commit()
 
     if strike_incremented:
@@ -289,6 +229,26 @@ async def record_connection_failure(
             endpoint_id=endpoint_id,
             vendor_id=vendor_id,
         )
+
+    if cooldown_seconds <= 0.0:
+        record_failed_transition(
+            event_type="not_opened",
+            profile_id=profile_id,
+            connection_id=connection_id,
+            failure_kind=failure_kind,
+            policy=policy,
+            consecutive_failures=snapshot["consecutive_failures"],
+            cooldown_seconds=0.0,
+            blocked_until_at=None,
+            model_id=model_id,
+            endpoint_id=endpoint_id,
+            vendor_id=vendor_id,
+        )
+        return
+
+    transition = "opened"
+    if previous_blocked_until is not None and normalized_now < previous_blocked_until:
+        transition = "extended"
 
     record_failed_transition(
         event_type=transition,
@@ -330,21 +290,14 @@ async def record_connection_recovery(
     vendor_id: int | None = None,
 ) -> None:
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(LoadbalanceCurrentState)
-            .where(
-                LoadbalanceCurrentState.profile_id == profile_id,
-                LoadbalanceCurrentState.connection_id == connection_id,
-            )
-            .with_for_update()
+        state = await record_connection_recovery_state(
+            session=session,
+            profile_id=profile_id,
+            connection_id=connection_id,
         )
-        current_state = result.scalar_one_or_none()
-        if current_state is None:
+        if state is None:
             await session.rollback()
             return
-
-        state = current_state_to_recovery_entry(current_state)
-        await session.delete(current_state)
         await session.commit()
 
     record_recovered_transition(
@@ -362,6 +315,7 @@ __all__ = [
     "_apply_jitter",
     "claim_probe_eligible",
     "_compute_base_cooldown",
+    "mark_probe_eligible_logged",
     "record_connection_failure",
     "record_connection_recovery",
 ]

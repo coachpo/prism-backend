@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+import time
+from types import SimpleNamespace
 from typing import Callable, Protocol, cast
 from uuid import uuid4
 
@@ -15,6 +17,7 @@ from app.services.costing_service import (
     compute_cost_fields,
     load_costing_settings,
 )
+from app.services.loadbalancer.executor import ExecutionCandidate
 from app.services.loadbalancer.policy import (
     EffectiveLoadbalancePolicy,
     resolve_effective_loadbalance_policy,
@@ -62,10 +65,12 @@ class ProxyRequestSetup:
     endpoints_to_try: list[Connection]
     failover_policy: EffectiveLoadbalancePolicy
     ingress_request_id: str
+    initial_candidates: list[ExecutionCandidate]
     is_streaming: bool
     method: str
     model_config: ModelConfig
     model_id: str
+    request_deadline_at_monotonic: float
     resolved_target_model_id: str
     vendor_id: int
     vendor_key: str | None
@@ -252,6 +257,7 @@ async def prepare_proxy_request(
         profile_id,
         model_config,
         utc_now(),
+        is_streaming=is_streaming,
     )
     endpoints_to_try = attempt_plan.connections
     if not endpoints_to_try:
@@ -287,13 +293,37 @@ async def prepare_proxy_request(
             settings=costing_settings,
         )
 
-    strategy = model_config.loadbalance_strategy
-    if strategy is None:
-        raise ValueError(
-            f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
+    failover_policy = cast(
+        EffectiveLoadbalancePolicy,
+        getattr(
+            attempt_plan,
+            "policy",
+            resolve_effective_loadbalance_policy(model_config.loadbalance_strategy),
+        ),
+    )
+    raw_candidates = getattr(attempt_plan, "candidates", None)
+    if raw_candidates is None:
+        raw_candidates = [
+            SimpleNamespace(connection=connection)
+            for connection in attempt_plan.connections
+        ]
+    initial_candidates = [
+        ExecutionCandidate(
+            connection=candidate.connection,
+            probe_eligible=(
+                getattr(
+                    candidate.connection,
+                    "id",
+                    getattr(candidate.connection, "endpoint_id", 0),
+                )
+                in attempt_plan.probe_eligible_connection_ids
+            ),
         )
-
-    failover_policy = resolve_effective_loadbalance_policy(strategy)
+        for candidate in raw_candidates
+    ]
+    request_deadline_at_monotonic = time.monotonic() + (
+        failover_policy.deadline_budget_ms / 1000.0
+    )
 
     return ProxyRequestSetup(
         audit_capture_bodies=audit_capture_bodies,
@@ -306,10 +336,12 @@ async def prepare_proxy_request(
         endpoints_to_try=endpoints_to_try,
         failover_policy=failover_policy,
         ingress_request_id=ingress_request_id,
+        initial_candidates=initial_candidates,
         is_streaming=is_streaming,
         method=method,
         model_config=model_config,
         model_id=model_id,
+        request_deadline_at_monotonic=request_deadline_at_monotonic,
         resolved_target_model_id=model_config.model_id,
         vendor_id=vendor_id,
         vendor_key=vendor_key,

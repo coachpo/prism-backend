@@ -127,7 +127,7 @@ def record_probe_eligible_transition(
     vendor_id: int,
 ) -> None:
     logger.info(
-        "Failover transition event=probe_eligible profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
+        "Routing runtime event=probe_eligible profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
         profile_id,
         connection_id,
         state["last_failure_kind"],
@@ -173,7 +173,7 @@ def record_failed_transition(
 ) -> None:
     if event_type == "not_opened":
         logger.debug(
-            "Failover transition event=not_opened profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=0.00 consecutive_failures=%d",
+            "Routing runtime event=not_opened profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=0.00 consecutive_failures=%d",
             profile_id,
             connection_id,
             failure_kind,
@@ -181,7 +181,7 @@ def record_failed_transition(
         )
     else:
         logger.info(
-            "Failover transition event=%s profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d blocked_until_at=%s",
+            "Routing runtime event=%s profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d blocked_until_at=%s",
             event_type,
             profile_id,
             connection_id,
@@ -222,7 +222,7 @@ def record_recovered_transition(
     vendor_id: int | None,
 ) -> None:
     logger.info(
-        "Failover transition event=recovered profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
+        "Routing runtime event=recovered profile_id=%d connection_id=%d failure_kind=%s cooldown_seconds=%.2f consecutive_failures=%d",
         profile_id,
         connection_id,
         state["last_failure_kind"],

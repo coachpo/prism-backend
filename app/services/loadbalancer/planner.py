@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,19 +10,43 @@ from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, ModelConfig, ModelProxyTarget
 
 from .policy import resolve_effective_loadbalance_policy
-from .state import claim_round_robin_cursor_position, get_current_states_for_connections
-from .types import AttemptPlan
+from .runtime_store import get_runtime_states_for_connections
+from .scoring import rank_candidates
+from .types import AttemptCandidateScoreInput, AttemptPlan
 
 logger = logging.getLogger("app.services.loadbalancer")
 
 
 class ProxyTargetsUnroutableError(Exception):
+    proxy_model_id: str
+
     def __init__(self, *, proxy_model_id: str):
         self.proxy_model_id = proxy_model_id
         super().__init__(f"Proxy model '{proxy_model_id}' has no routable targets.")
 
 
-def _is_connection_banned(current_state, *, now_at: datetime) -> bool:
+def _resolve_proxy_target_model_id(proxy_target: object) -> str | None:
+    direct_target_model_id = getattr(proxy_target, "target_model_id", None)
+    if isinstance(direct_target_model_id, str) and direct_target_model_id:
+        return direct_target_model_id
+    target_model = getattr(proxy_target, "target_model_config", None)
+    target_model_id = getattr(target_model, "model_id", None)
+    return target_model_id if isinstance(target_model_id, str) else None
+
+
+def _as_float(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    return None
+
+
+def _as_int(value: object, *, default: int = 0) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return default
+
+
+def _is_connection_banned(current_state: object, *, now_at: datetime) -> bool:
     if getattr(current_state, "ban_mode", "off") == "manual":
         return True
     banned_until_at = ensure_utc_datetime(
@@ -30,13 +55,76 @@ def _is_connection_banned(current_state, *, now_at: datetime) -> bool:
     return banned_until_at is not None and banned_until_at > now_at
 
 
-def _resolve_proxy_target_model_id(proxy_target) -> str | None:
-    direct_target_model_id = getattr(proxy_target, "target_model_id", None)
-    if isinstance(direct_target_model_id, str) and direct_target_model_id:
-        return direct_target_model_id
-    target_model = getattr(proxy_target, "target_model_config", None)
-    target_model_id = getattr(target_model, "model_id", None)
-    return target_model_id if isinstance(target_model_id, str) else None
+def _is_connection_blocked(current_state: object, *, now_at: datetime) -> bool:
+    blocked_until_at = ensure_utc_datetime(
+        getattr(current_state, "blocked_until_at", None)
+    )
+    return blocked_until_at is not None and blocked_until_at > now_at
+
+
+def _is_probe_eligible(current_state: object, *, now_at: datetime) -> bool:
+    blocked_until_at = ensure_utc_datetime(
+        getattr(current_state, "blocked_until_at", None)
+    )
+    if blocked_until_at is None or blocked_until_at > now_at:
+        return False
+    if getattr(current_state, "probe_eligible_logged", False):
+        return False
+    return getattr(current_state, "circuit_state", "closed") == "open"
+
+
+def _build_candidate_score_input(
+    connection: Connection,
+    current_state: object | None,
+) -> AttemptCandidateScoreInput:
+    return AttemptCandidateScoreInput(
+        connection=connection,
+        circuit_state=(
+            getattr(current_state, "circuit_state", "closed")
+            if current_state is not None
+            else "closed"
+        ),
+        blocked_until_at=ensure_utc_datetime(
+            getattr(current_state, "blocked_until_at", None)
+        ),
+        banned_until_at=ensure_utc_datetime(
+            getattr(current_state, "banned_until_at", None)
+        ),
+        probe_available_at=ensure_utc_datetime(
+            getattr(current_state, "probe_available_at", None)
+        ),
+        in_flight_non_stream=_as_int(
+            getattr(current_state, "in_flight_non_stream", 0),
+            default=0,
+        ),
+        in_flight_stream=_as_int(
+            getattr(current_state, "in_flight_stream", 0), default=0
+        ),
+        qps_window_count=_as_int(
+            getattr(current_state, "window_request_count", 0),
+            default=0,
+        ),
+        live_p95_latency_ms=_as_float(
+            getattr(current_state, "live_p95_latency_ms", None)
+        ),
+        last_live_failure_kind=getattr(current_state, "last_live_failure_kind", None),
+        last_live_failure_at=ensure_utc_datetime(
+            getattr(current_state, "last_live_failure_at", None)
+        ),
+        last_live_success_at=ensure_utc_datetime(
+            getattr(current_state, "last_live_success_at", None)
+        ),
+        last_probe_status=getattr(current_state, "last_probe_status", None),
+        last_probe_at=ensure_utc_datetime(
+            getattr(current_state, "last_probe_at", None)
+        ),
+        endpoint_ping_ewma_ms=_as_float(
+            getattr(current_state, "endpoint_ping_ewma_ms", None)
+        ),
+        conversation_delay_ewma_ms=_as_float(
+            getattr(current_state, "conversation_delay_ewma_ms", None)
+        ),
+    )
 
 
 MODEL_CONFIG_WITH_CONNECTION_OPTIONS = (
@@ -89,8 +177,10 @@ async def get_model_config_with_connections(
         return config
 
     for proxy_target in sorted(
-        getattr(config, "proxy_targets", []),
-        key=lambda proxy_target: proxy_target.position,
+        cast(list[object], getattr(config, "proxy_targets", [])),
+        key=lambda proxy_target: _as_int(
+            getattr(proxy_target, "position", 0), default=0
+        ),
     ):
         target_model_id = _resolve_proxy_target_model_id(proxy_target)
         if target_model_id is None:
@@ -115,11 +205,11 @@ async def get_model_config_with_connections(
             utc_now(),
             advance_round_robin=False,
         )
-        if attempt_plan.connections:
+        if attempt_plan.candidates:
             return target
 
     logger.warning(
-        "Proxy model_id=%r has no enabled target model with an attempt plan for profile_id=%d",
+        "Proxy model_id=%r has no enabled target model with live-ranked candidates for profile_id=%d",
         model_id,
         profile_id,
     )
@@ -127,85 +217,21 @@ async def get_model_config_with_connections(
 
 
 def get_active_connections(model_config: ModelConfig) -> list[Connection]:
+    all_connections = cast(list[Connection], getattr(model_config, "connections", []))
     active_connections = [
         connection
-        for connection in model_config.connections
+        for connection in all_connections
         if connection.is_active and connection.endpoint_rel is not None
     ]
     logger.debug(
         "get_active_connections for model %s: %d/%d active",
         model_config.model_id,
         len(active_connections),
-        len(model_config.connections),
+        len(all_connections),
     )
     return sorted(
         active_connections,
         key=lambda connection: (connection.priority, connection.id),
-    )
-
-
-def _failover_sort_key(connection: Connection) -> tuple[bool, int, int]:
-    return (connection.health_status == "unhealthy", connection.priority, connection.id)
-
-
-def _rotate_connections_by_start_index(
-    *, ordered_connections: list[Connection], start_index: int
-) -> list[Connection]:
-    if len(ordered_connections) < 2:
-        return ordered_connections
-
-    next_index = start_index % len(ordered_connections)
-
-    if next_index == 0:
-        return ordered_connections
-
-    return ordered_connections[next_index:] + ordered_connections[:next_index]
-
-
-async def _filter_blocked_connections_preserving_order(
-    *,
-    db: AsyncSession,
-    profile_id: int,
-    ordered_connections: list[Connection],
-    now_at: datetime | None,
-) -> AttemptPlan:
-    normalized_now = ensure_utc_datetime(now_at) or utc_now()
-    state_by_connection_id = await get_current_states_for_connections(
-        db,
-        profile_id=profile_id,
-        connection_ids=[connection.id for connection in ordered_connections],
-    )
-
-    attempt_plan: list[Connection] = []
-    blocked_connection_ids: list[int] = []
-    probe_eligible_connection_ids: list[int] = []
-
-    for connection in ordered_connections:
-        current_state = state_by_connection_id.get(connection.id)
-        if current_state is None:
-            attempt_plan.append(connection)
-            continue
-
-        if _is_connection_banned(current_state, now_at=normalized_now):
-            blocked_connection_ids.append(connection.id)
-            continue
-
-        blocked_until_at = ensure_utc_datetime(current_state.blocked_until_at)
-        if blocked_until_at is not None and normalized_now < blocked_until_at:
-            blocked_connection_ids.append(connection.id)
-            continue
-
-        if blocked_until_at is not None and not getattr(
-            current_state, "probe_eligible_logged", False
-        ):
-            probe_eligible_connection_ids.append(connection.id)
-
-        attempt_plan.append(connection)
-
-    return AttemptPlan(
-        connections=attempt_plan,
-        blocked_connection_ids=blocked_connection_ids,
-        probe_eligible_connection_ids=probe_eligible_connection_ids,
     )
 
 
@@ -216,136 +242,78 @@ async def build_attempt_plan(
     now_at: datetime | None = None,
     *,
     advance_round_robin: bool = True,
+    is_streaming: bool = False,
 ) -> AttemptPlan:
-    strategy = model_config.loadbalance_strategy
+    _ = advance_round_robin
+    strategy = cast(object | None, getattr(model_config, "loadbalance_strategy", None))
     if strategy is None:
         raise ValueError(
             f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
         )
-    policy = resolve_effective_loadbalance_policy(strategy)
 
-    active = get_active_connections(model_config)
-    if not active:
+    policy = resolve_effective_loadbalance_policy(strategy)
+    normalized_now = ensure_utc_datetime(now_at) or utc_now()
+    active_connections = get_active_connections(model_config)
+    if not active_connections:
         logger.warning(
             "build_attempt_plan: No active connections for profile_id=%d model %s",
             profile_id,
             model_config.model_id,
         )
         return AttemptPlan(
-            connections=[],
+            policy=policy,
+            candidates=[],
             blocked_connection_ids=[],
             probe_eligible_connection_ids=[],
         )
 
-    if policy.strategy_type == "single":
-        logger.debug(
-            "build_attempt_plan: single strategy profile_id=%d using connection %d",
-            profile_id,
-            active[0].id,
-        )
-        return AttemptPlan(
-            connections=[active[0]],
-            blocked_connection_ids=[],
-            probe_eligible_connection_ids=[],
-        )
-
-    if policy.strategy_type == "fill-first":
-        ordered_active = list(active)
-
-        if not policy.failover_recovery_enabled:
-            logger.debug(
-                "build_attempt_plan: fill-first without recovery profile_id=%d trying %d connections",
-                profile_id,
-                len(ordered_active),
-            )
-            return AttemptPlan(
-                connections=ordered_active,
-                blocked_connection_ids=[],
-                probe_eligible_connection_ids=[],
-            )
-
-        plan = await _filter_blocked_connections_preserving_order(
-            db=db,
-            profile_id=profile_id,
-            ordered_connections=ordered_active,
-            now_at=now_at,
-        )
-        logger.debug(
-            "build_attempt_plan: profile_id=%d fill-first with recovery attempt_plan=%s blocked=%s",
-            profile_id,
-            [connection.id for connection in plan.connections],
-            plan.blocked_connection_ids,
-        )
-        return plan
-
-    if policy.strategy_type == "round-robin":
-        ordered_active = list(active)
-        if advance_round_robin and len(ordered_active) > 1:
-            cursor_position = await claim_round_robin_cursor_position(
-                profile_id=profile_id,
-                model_config_id=model_config.id,
-                connection_count=len(ordered_active),
-                now_at=now_at,
-            )
-            ordered_active = _rotate_connections_by_start_index(
-                ordered_connections=ordered_active,
-                start_index=cursor_position,
-            )
-
-        if not policy.failover_recovery_enabled:
-            logger.debug(
-                "build_attempt_plan: round-robin without recovery profile_id=%d trying %d connections",
-                profile_id,
-                len(ordered_active),
-            )
-            return AttemptPlan(
-                connections=ordered_active,
-                blocked_connection_ids=[],
-                probe_eligible_connection_ids=[],
-            )
-
-        plan = await _filter_blocked_connections_preserving_order(
-            db=db,
-            profile_id=profile_id,
-            ordered_connections=ordered_active,
-            now_at=now_at,
-        )
-        logger.debug(
-            "build_attempt_plan: profile_id=%d round-robin with recovery attempt_plan=%s blocked=%s",
-            profile_id,
-            [connection.id for connection in plan.connections],
-            plan.blocked_connection_ids,
-        )
-        return plan
-
-    ordered_active = sorted(active, key=_failover_sort_key)
-
-    if not policy.failover_recovery_enabled:
-        logger.debug(
-            "build_attempt_plan: failover without recovery profile_id=%d trying %d connections",
-            profile_id,
-            len(ordered_active),
-        )
-        return AttemptPlan(
-            connections=ordered_active,
-            blocked_connection_ids=[],
-            probe_eligible_connection_ids=[],
-        )
-
-    plan = await _filter_blocked_connections_preserving_order(
-        db=db,
+    state_by_connection_id = await get_runtime_states_for_connections(
+        db,
         profile_id=profile_id,
-        ordered_connections=ordered_active,
-        now_at=now_at,
+        connection_ids=[connection.id for connection in active_connections],
     )
 
-    logger.debug(
-        "build_attempt_plan: profile_id=%d failover with recovery attempt_plan=%s blocked=%s",
-        profile_id,
-        [connection.id for connection in plan.connections],
-        plan.blocked_connection_ids,
+    blocked_connection_ids: list[int] = []
+    probe_eligible_connection_ids: list[int] = []
+    candidate_inputs: list[AttemptCandidateScoreInput] = []
+
+    for connection in active_connections:
+        current_state = state_by_connection_id.get(connection.id)
+        if current_state is not None and (
+            _is_connection_banned(current_state, now_at=normalized_now)
+            or _is_connection_blocked(current_state, now_at=normalized_now)
+        ):
+            blocked_connection_ids.append(connection.id)
+            continue
+
+        if current_state is not None and _is_probe_eligible(
+            current_state,
+            now_at=normalized_now,
+        ):
+            probe_eligible_connection_ids.append(connection.id)
+
+        candidate_inputs.append(_build_candidate_score_input(connection, current_state))
+
+    ranked_candidates = rank_candidates(
+        policy=policy,
+        candidate_inputs=candidate_inputs,
+        now_at=normalized_now,
+        is_streaming=is_streaming,
     )
-    return plan
+    logger.debug(
+        "build_attempt_plan: profile_id=%d model=%s candidate_order=%s blocked=%s probe_eligible=%s",
+        profile_id,
+        model_config.model_id,
+        [candidate.connection.id for candidate in ranked_candidates],
+        blocked_connection_ids,
+        probe_eligible_connection_ids,
+    )
+    return AttemptPlan(
+        policy=policy,
+        candidates=ranked_candidates,
+        blocked_connection_ids=blocked_connection_ids,
+        probe_eligible_connection_ids=probe_eligible_connection_ids,
+    )
 
 
 __all__ = [

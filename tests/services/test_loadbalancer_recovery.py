@@ -11,60 +11,52 @@ from app.models.models import (
     Connection,
     Endpoint,
     LoadbalanceCurrentState,
+    LoadbalanceStrategy,
     ModelConfig,
     Profile,
+    RoutingConnectionRuntimeState,
     Vendor,
 )
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
     make_auto_recovery_disabled,
     make_auto_recovery_enabled,
-    make_loadbalance_strategy,
+    make_routing_policy_adaptive,
 )
 
 
 def _policy(**overrides):
-    from app.services.loadbalancer.policy import EffectiveLoadbalancePolicy
+    from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
 
-    return EffectiveLoadbalancePolicy(
-        strategy_type=cast(
-            Literal["single", "fill-first", "round-robin", "failover"],
-            overrides.get("strategy_type", "failover"),
+    routing_policy = make_routing_policy_adaptive(
+        failure_status_codes=cast(
+            list[int],
+            overrides.get("failover_status_codes", DEFAULT_FAILOVER_STATUS_CODES),
         ),
-        failover_recovery_enabled=cast(
-            bool, overrides.get("failover_recovery_enabled", True)
-        ),
-        failover_cooldown_seconds=float(
+        base_open_seconds=int(
             cast(float | int, overrides.get("failover_cooldown_seconds", 30.0))
         ),
-        failover_failure_threshold=cast(
-            int, overrides.get("failover_failure_threshold", 3)
-        ),
-        failover_backoff_multiplier=float(
+        failure_threshold=cast(int, overrides.get("failover_failure_threshold", 3)),
+        backoff_multiplier=float(
             cast(float | int, overrides.get("failover_backoff_multiplier", 2.0))
         ),
-        failover_max_cooldown_seconds=cast(
-            int, overrides.get("failover_max_cooldown_seconds", 900)
-        ),
-        failover_jitter_ratio=float(
+        max_open_seconds=cast(int, overrides.get("failover_max_cooldown_seconds", 900)),
+        jitter_ratio=float(
             cast(float | int, overrides.get("failover_jitter_ratio", 0.2))
         ),
-        failover_status_codes=tuple(
-            cast(
-                list[int],
-                overrides.get("failover_status_codes", DEFAULT_FAILOVER_STATUS_CODES),
-            )
-        ),
-        failover_ban_mode=cast(
-            Literal["off", "temporary", "manual"],
+        ban_mode=cast(
+            Literal["off", "manual", "temporary"],
             overrides.get("failover_ban_mode", "off"),
         ),
-        failover_max_cooldown_strikes_before_ban=cast(
+        max_open_strikes_before_ban=cast(
             int, overrides.get("failover_max_cooldown_strikes_before_ban", 0)
         ),
-        failover_ban_duration_seconds=cast(
+        ban_duration_seconds=cast(
             int, overrides.get("failover_ban_duration_seconds", 0)
         ),
+    )
+    return resolve_effective_loadbalance_policy(
+        SimpleNamespace(routing_policy=routing_policy)
     )
 
 
@@ -99,11 +91,10 @@ async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
     async with AsyncSessionLocal() as session:
         vendor = await _get_or_create_vendor(session)
         profile = Profile(name=f"Recovery Profile {suffix}", is_active=False, version=0)
-        strategy = make_loadbalance_strategy(
+        strategy = LoadbalanceStrategy(
             profile=profile,
-            strategy_type="failover",
-            failover_recovery_enabled=True,
             name=f"recovery-strategy-{suffix}",
+            routing_policy=make_routing_policy_adaptive(),
         )
         model = ModelConfig(
             profile=profile,
@@ -168,7 +159,7 @@ class TestLoadbalancerRecovery:
         )
         assert policy.failover_status_codes == (429, 503)
 
-    def test_resolve_effective_loadbalance_policy_disables_recovery_for_disabled_branch(
+    def test_resolve_effective_loadbalance_policy_normalizes_legacy_disabled_branch(
         self,
     ):
         from app.services.loadbalancer.policy import (
@@ -182,11 +173,12 @@ class TestLoadbalancerRecovery:
 
         policy = resolve_effective_loadbalance_policy(strategy)
 
-        assert policy.strategy_type == "round-robin"
-        assert policy.failover_recovery_enabled is False
+        assert policy.strategy_type == "adaptive"
+        assert policy.failover_recovery_enabled is True
         assert policy.failover_ban_mode == "off"
         assert policy.failover_max_cooldown_strikes_before_ban == 0
         assert policy.failover_ban_duration_seconds == 0
+        assert policy.monitoring_enabled is True
 
     @pytest.mark.asyncio
     async def test_record_loadbalance_event_persists_max_cooldown_strike_and_banned(
@@ -522,6 +514,72 @@ class TestLoadbalancerRecovery:
         assert current_state.max_cooldown_strikes == 1
         assert current_state.ban_mode == "temporary"
         assert current_state.banned_until_at is not None
+
+    @pytest.mark.asyncio
+    async def test_record_connection_recovery_preserves_monitoring_fields_when_runtime_row_is_not_empty(
+        self,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.services.loadbalancer.recovery import record_connection_recovery
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+        now_at = datetime(2026, 3, 26, 14, 30, tzinfo=timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            session.add(
+                RoutingConnectionRuntimeState(
+                    profile_id=profile_id,
+                    connection_id=connection_id,
+                    consecutive_failures=3,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=60.0,
+                    blocked_until_at=now_at,
+                    probe_eligible_logged=False,
+                    circuit_state="open",
+                    probe_available_at=now_at,
+                    last_probe_status="healthy",
+                    last_probe_at=now_at - timedelta(minutes=5),
+                    endpoint_ping_ewma_ms=120.0,
+                    conversation_delay_ewma_ms=240.0,
+                )
+            )
+            await session.commit()
+
+        await record_connection_recovery(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            policy=_policy(),
+            model_id=f"recovery-model-{suffix}",
+            endpoint_id=None,
+            vendor_id=None,
+        )
+
+        async with AsyncSessionLocal() as session:
+            runtime_state = (
+                await session.execute(
+                    select(RoutingConnectionRuntimeState).where(
+                        RoutingConnectionRuntimeState.profile_id == profile_id,
+                        RoutingConnectionRuntimeState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one()
+
+        assert runtime_state.consecutive_failures == 0
+        assert runtime_state.last_failure_kind is None
+        assert float(runtime_state.last_cooldown_seconds) == 0.0
+        assert runtime_state.blocked_until_at is None
+        assert runtime_state.ban_mode == "off"
+        assert runtime_state.banned_until_at is None
+        assert runtime_state.circuit_state == "closed"
+        assert runtime_state.probe_available_at is None
+        assert runtime_state.last_probe_status == "healthy"
+        assert runtime_state.last_probe_at == now_at - timedelta(minutes=5)
+        assert runtime_state.endpoint_ping_ewma_ms is not None
+        assert runtime_state.conversation_delay_ewma_ms is not None
+        assert float(runtime_state.endpoint_ping_ewma_ms) == pytest.approx(120.0)
+        assert float(runtime_state.conversation_delay_ewma_ms) == pytest.approx(240.0)
 
     @pytest.mark.asyncio
     async def test_reset_connection_current_state_clears_ban_and_strike_state(self):

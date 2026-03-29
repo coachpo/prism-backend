@@ -168,9 +168,7 @@ async def build_export_payload(
                 {
                     "name": strategy.name,
                     "strategy_type": strategy.strategy_type,
-                    "auto_recovery": serialize_auto_recovery(
-                        resolve_effective_loadbalance_policy(strategy)
-                    ),
+                    "auto_recovery": strategy.auto_recovery,
                 }
             )
         )

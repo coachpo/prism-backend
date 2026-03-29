@@ -5,6 +5,11 @@ from typing import Awaitable, Callable
 import httpx
 
 from app.models.models import Connection
+from app.services.loadbalancer.executor import (
+    AttemptExecutionResult,
+    ExecutionCandidate,
+    PreparedExecutionResponse,
+)
 from app.services.loadbalancer.limiter import LeaseKind, LimiterAcquireResult
 
 from .request_setup import ProxyRequestSetup
@@ -18,6 +23,7 @@ class ProxyRuntimeDependencies:
     claim_probe_eligible_fn: Callable[..., Awaitable[None]]
     clear_connection_state_fn: Callable[..., Awaitable[bool]]
     filter_response_headers_fn: Callable[..., dict[str, str]]
+    heartbeat_connection_lease_fn: Callable[..., Awaitable[bool]]
     log_request_fn: Callable[..., Awaitable[int | None]]
     log_usage_request_event_fn: Callable[..., Awaitable[int | None]]
     record_connection_failure_fn: Callable[..., Awaitable[None]]
@@ -43,10 +49,14 @@ class ProxyAttemptTarget:
     endpoint_body: bytes | None
     headers: dict[str, str]
     limiter_lease_token: str | None
+    limiter_lease_ttl_seconds: int | None
     upstream_url: str
 
 
 __all__ = [
+    "AttemptExecutionResult",
+    "ExecutionCandidate",
+    "PreparedExecutionResponse",
     "ProxyAttemptTarget",
     "ProxyRequestState",
     "ProxyRuntimeDependencies",

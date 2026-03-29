@@ -10,32 +10,43 @@ from .health_check_request_helpers import _execute_health_check_request
 logger = logging.getLogger(__name__)
 
 
+def _openai_model_supports_reasoning_effort(model_id: str) -> bool:
+    normalized_model_id = model_id.strip().lower()
+    return normalized_model_id.startswith("o") or normalized_model_id.startswith(
+        "gpt-5"
+    )
+
+
 def _build_health_check_request(
-    api_family: str, model_id: str
+    api_family: str,
+    model_id: str,
+    *,
+    openai_variant: str = "responses",
 ) -> tuple[str, dict[str, object]]:
     if api_family == "openai":
-        return "/v1/responses", {
+        if openai_variant == "chat_completions":
+            return _build_openai_chat_completions_health_check_request(model_id)
+
+        body: dict[str, object] = {
             "model": model_id,
-            "input": [
-                {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hi"}],
-                }
-            ],
+            "input": "ping",
             "max_output_tokens": 1,
         }
+        if _openai_model_supports_reasoning_effort(model_id):
+            body["reasoning"] = {"effort": "low"}
+        return "/v1/responses", body
     if api_family == "anthropic":
         return "/v1/messages", {
             "model": model_id,
             "max_tokens": 1,
-            "messages": [{"role": "user", "content": "hi"}],
+            "messages": [{"role": "user", "content": "ping"}],
         }
     if api_family == "gemini":
         return f"/v1beta/models/{model_id}:generateContent", {
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": "hi"}],
+                    "parts": [{"text": "ping"}],
                 }
             ],
             "generationConfig": {"maxOutputTokens": 1},
@@ -46,11 +57,14 @@ def _build_health_check_request(
 def _build_openai_chat_completions_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    return "/v1/chat/completions", {
+    body: dict[str, object] = {
         "model": model_id,
-        "messages": [{"role": "user", "content": "hi"}],
+        "messages": [{"role": "user", "content": "ping"}],
         "max_tokens": 1,
     }
+    if _openai_model_supports_reasoning_effort(model_id):
+        body["reasoning_effort"] = "low"
+    return "/v1/chat/completions", body
 
 
 def _build_openai_responses_basic_health_check_request(
@@ -58,8 +72,23 @@ def _build_openai_responses_basic_health_check_request(
 ) -> tuple[str, dict[str, object]]:
     return "/v1/responses", {
         "model": model_id,
-        "input": "hi",
+        "input": "ping",
     }
+
+
+def _build_endpoint_ping_request(
+    api_family: str,
+    model_id: str,
+    *,
+    openai_variant: str = "responses",
+) -> tuple[str, dict[str, object]]:
+    if api_family == "openai" and openai_variant == "responses":
+        return _build_openai_responses_basic_health_check_request(model_id)
+    return _build_health_check_request(
+        api_family,
+        model_id,
+        openai_variant=openai_variant,
+    )
 
 
 async def _probe_connection_health(
@@ -146,6 +175,7 @@ async def _probe_connection_health(
 
 __all__ = [
     "_build_health_check_request",
+    "_build_endpoint_ping_request",
     "_build_openai_chat_completions_health_check_request",
     "_build_openai_responses_basic_health_check_request",
     "_probe_connection_health",

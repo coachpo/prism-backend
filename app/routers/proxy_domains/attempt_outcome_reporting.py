@@ -294,6 +294,7 @@ async def log_and_audit_attempt(
 
 @dataclass(frozen=True, slots=True)
 class StreamFinalizationSnapshot:
+    attempt_count: int
     attempt_number: int
     audit_capture_bodies: bool
     audit_enabled: bool
@@ -322,6 +323,7 @@ class StreamFinalizationSnapshot:
     request_headers: dict[str, str]
     request_method: str
     request_path: str
+    error_detail: str | None
     response_headers: dict[str, str]
     status_code: int
     token_usage: TokenUsage | None
@@ -330,9 +332,11 @@ class StreamFinalizationSnapshot:
 
 def build_stream_finalization_snapshot(
     *,
+    attempt_count: int,
     deps: ProxyRuntimeDependencies,
     state: ProxyRequestState,
     target: ProxyAttemptTarget,
+    error_detail: str | None,
     response_headers: dict[str, str],
     status_code: int,
     elapsed_ms: int,
@@ -349,6 +353,7 @@ def build_stream_finalization_snapshot(
 
     return StreamFinalizationSnapshot(
         audit_capture_bodies=state.setup.audit_capture_bodies,
+        attempt_count=attempt_count,
         attempt_number=target.attempt_number,
         audit_enabled=state.setup.audit_enabled,
         build_cost_fields=build_cost_fields,
@@ -378,6 +383,7 @@ def build_stream_finalization_snapshot(
         request_headers=dict(target.headers),
         request_method=state.setup.method,
         request_path=state.request_path,
+        error_detail=error_detail,
         response_headers=dict(response_headers),
         status_code=status_code,
         token_usage=token_usage,
@@ -417,7 +423,7 @@ async def _persist_stream_request_log(
         response_time_ms=snapshot.elapsed_ms,
         is_stream=True,
         request_path=snapshot.request_path,
-        error_detail=None,
+        error_detail=snapshot.error_detail,
         input_tokens=token_values.get("input_tokens"),
         output_tokens=token_values.get("output_tokens"),
         total_tokens=token_values.get("total_tokens"),
@@ -446,7 +452,7 @@ async def _persist_stream_usage_request_event(
         input_tokens=token_values.get("input_tokens"),
         output_tokens=token_values.get("output_tokens"),
         total_tokens=token_values.get("total_tokens"),
-        attempt_count=snapshot.attempt_number,
+        attempt_count=snapshot.attempt_count,
         request_path=snapshot.request_path,
         **_final_usage_event_cost_fields(cost_fields),
     )

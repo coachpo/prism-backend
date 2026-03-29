@@ -15,7 +15,7 @@ async def create_connection_record(
     profile_id: int,
     deps: ConnectionCrudDependencies,
 ) -> Connection:
-    await deps.load_model_or_404_fn(
+    model_config = await deps.load_model_or_404_fn(
         db,
         profile_id=profile_id,
         model_config_id=model_config_id,
@@ -50,6 +50,11 @@ async def create_connection_record(
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=deps.serialize_custom_headers_fn(body.custom_headers),
+        openai_probe_endpoint_variant=(
+            body.openai_probe_endpoint_variant
+            if getattr(model_config, "api_family", None) == "openai"
+            else "responses"
+        ),
         pricing_template_id=pricing_template_id,
         **build_connection_limiter_data(body=body, exclude_unset=False),
     )

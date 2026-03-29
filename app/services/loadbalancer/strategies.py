@@ -13,10 +13,10 @@ from app.schemas.schemas import (
 )
 
 from .policy import (
-    canonicalize_auto_recovery_document,
+    canonicalize_routing_policy_document,
     resolve_effective_loadbalance_policy,
 )
-from .policy import serialize_auto_recovery
+from .policy import serialize_routing_policy
 from .state import clear_strategy_state
 
 
@@ -65,8 +65,7 @@ def _build_strategy_response(
             "id": strategy.id,
             "profile_id": strategy.profile_id,
             "name": strategy.name,
-            "strategy_type": strategy.strategy_type,
-            "auto_recovery": serialize_auto_recovery(
+            "routing_policy": serialize_routing_policy(
                 resolve_effective_loadbalance_policy(strategy)
             ),
             "attached_model_count": attached_model_count,
@@ -111,10 +110,8 @@ async def create_loadbalance_strategy(
     strategy = LoadbalanceStrategy(
         profile_id=profile_id,
         name=body.name,
-        strategy_type=body.strategy_type,
-        auto_recovery=canonicalize_auto_recovery_document(
-            strategy_type=body.strategy_type,
-            auto_recovery=body.auto_recovery,
+        routing_policy=canonicalize_routing_policy_document(
+            body.routing_policy,
         ),
     )
     db.add(strategy)
@@ -185,10 +182,8 @@ async def update_loadbalance_strategy(
         )
 
     strategy.name = body.name
-    strategy.strategy_type = body.strategy_type
-    strategy.auto_recovery = canonicalize_auto_recovery_document(
-        strategy_type=body.strategy_type,
-        auto_recovery=body.auto_recovery,
+    strategy.routing_policy = canonicalize_routing_policy_document(
+        body.routing_policy,
     )
     strategy.updated_at = utc_now()
 

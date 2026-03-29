@@ -1,17 +1,20 @@
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
     Connection,
     Endpoint,
-    LoadbalanceCurrentState,
+    LoadbalanceStrategy,
     ModelConfig,
     Profile,
+    RoutingConnectionRuntimeLease,
+    RoutingConnectionRuntimeState,
     Vendor,
 )
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
 
 
 class TestLoadbalancerState:
@@ -57,9 +60,10 @@ class TestLoadbalancerState:
                 api_family="openai",
                 model_id=f"model-one-{suffix}",
                 model_type="native",
-                loadbalance_strategy=make_loadbalance_strategy(
+                loadbalance_strategy=LoadbalanceStrategy(
                     profile=profile_one,
-                    strategy_type="failover",
+                    name=f"state-strategy-one-{suffix}",
+                    routing_policy=make_routing_policy_adaptive(),
                 ),
                 is_enabled=True,
             )
@@ -69,9 +73,10 @@ class TestLoadbalancerState:
                 api_family="openai",
                 model_id=f"model-two-{suffix}",
                 model_type="native",
-                loadbalance_strategy=make_loadbalance_strategy(
+                loadbalance_strategy=LoadbalanceStrategy(
                     profile=profile_two,
-                    strategy_type="failover",
+                    name=f"state-strategy-two-{suffix}",
+                    routing_policy=make_routing_policy_adaptive(),
                 ),
                 is_enabled=True,
             )
@@ -143,7 +148,7 @@ class TestLoadbalancerState:
 
             session.add_all(
                 [
-                    LoadbalanceCurrentState(
+                    RoutingConnectionRuntimeState(
                         profile_id=profile_one.id,
                         connection_id=connection_later.id,
                         consecutive_failures=3,
@@ -151,7 +156,7 @@ class TestLoadbalancerState:
                         last_cooldown_seconds=60.0,
                         probe_eligible_logged=False,
                     ),
-                    LoadbalanceCurrentState(
+                    RoutingConnectionRuntimeState(
                         profile_id=profile_one.id,
                         connection_id=connection_first.id,
                         consecutive_failures=1,
@@ -159,7 +164,7 @@ class TestLoadbalancerState:
                         last_cooldown_seconds=0.0,
                         probe_eligible_logged=False,
                     ),
-                    LoadbalanceCurrentState(
+                    RoutingConnectionRuntimeState(
                         profile_id=profile_two.id,
                         connection_id=other_connection.id,
                         consecutive_failures=2,
@@ -182,3 +187,106 @@ class TestLoadbalancerState:
             connection_first.id,
             connection_later.id,
         ]
+
+    @pytest.mark.asyncio
+    async def test_clear_connection_state_removes_runtime_row_and_leases(self):
+        from app.services.loadbalancer.state import clear_connection_state
+
+        suffix = uuid4().hex[:8]
+
+        async with AsyncSessionLocal() as session:
+            vendor = Vendor(
+                key=f"openai-state-clear-{suffix}",
+                name=f"OpenAI Clear {suffix}",
+                audit_enabled=False,
+                audit_capture_bodies=False,
+            )
+            profile = Profile(
+                name=f"Profile Clear {suffix}", is_active=False, version=0
+            )
+            model = ModelConfig(
+                vendor=vendor,
+                profile=profile,
+                api_family="openai",
+                model_id=f"model-clear-{suffix}",
+                model_type="native",
+                loadbalance_strategy=LoadbalanceStrategy(
+                    profile=profile,
+                    name=f"state-clear-strategy-{suffix}",
+                    routing_policy=make_routing_policy_adaptive(),
+                ),
+                is_enabled=True,
+            )
+            endpoint = Endpoint(
+                profile=profile,
+                name=f"endpoint-clear-{suffix}",
+                base_url="https://clear.example.com/v1",
+                api_key="sk-clear",
+                position=0,
+            )
+            connection = Connection(
+                profile=profile,
+                model_config_rel=model,
+                endpoint_rel=endpoint,
+                is_active=True,
+                priority=0,
+                max_in_flight_non_stream=1,
+                name=f"connection-clear-{suffix}",
+            )
+
+            session.add_all([vendor, profile, model, endpoint, connection])
+            await session.commit()
+            await session.refresh(profile)
+            await session.refresh(connection)
+
+            session.add(
+                RoutingConnectionRuntimeState(
+                    profile_id=profile.id,
+                    connection_id=connection.id,
+                    in_flight_non_stream=1,
+                    consecutive_failures=2,
+                    last_failure_kind="timeout",
+                    last_cooldown_seconds=60.0,
+                    circuit_state="open",
+                    probe_eligible_logged=False,
+                )
+            )
+            session.add(
+                RoutingConnectionRuntimeLease(
+                    lease_token=f"lease-{suffix}",
+                    profile_id=profile.id,
+                    connection_id=connection.id,
+                    lease_kind="non_stream",
+                    expires_at=connection.created_at,
+                )
+            )
+            await session.commit()
+
+        cleared = await clear_connection_state(profile.id, connection.id)
+
+        async with AsyncSessionLocal() as session:
+            state_row = (
+                await session.execute(
+                    select(RoutingConnectionRuntimeState).where(
+                        RoutingConnectionRuntimeState.profile_id == profile.id,
+                        RoutingConnectionRuntimeState.connection_id == connection.id,
+                    )
+                )
+            ).scalar_one_or_none()
+            leases = list(
+                (
+                    await session.execute(
+                        select(RoutingConnectionRuntimeLease).where(
+                            RoutingConnectionRuntimeLease.profile_id == profile.id,
+                            RoutingConnectionRuntimeLease.connection_id
+                            == connection.id,
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert cleared is True
+        assert state_row is None
+        assert leases == []

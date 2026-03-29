@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.services.loadbalance_event_summary import describe_loadbalance_event
 from app.schemas.domains.core import ApiFamily, _CURRENCY_CODE_RE
@@ -279,6 +279,15 @@ class TimezonePreferenceUpdate(BaseModel):
         return timezone
 
 
+class MonitoringSettingsResponse(BaseModel):
+    profile_id: int | None = None
+    monitoring_probe_interval_seconds: int
+
+
+class MonitoringSettingsUpdate(BaseModel):
+    monitoring_probe_interval_seconds: int = Field(ge=1)
+
+
 class SpendingSummaryResponse(BaseModel):
     total_cost_micros: int
     successful_request_count: int
@@ -416,6 +425,12 @@ class LoadbalanceCurrentStateItem(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     connection_id: int
+    circuit_state: str | None = None
+    probe_available_at: datetime | None = None
+    window_started_at: datetime | None = None
+    window_request_count: int = 0
+    in_flight_non_stream: int = 0
+    in_flight_stream: int = 0
     consecutive_failures: int
     last_failure_kind: str | None
     last_cooldown_seconds: float
@@ -424,6 +439,13 @@ class LoadbalanceCurrentStateItem(BaseModel):
     banned_until_at: datetime | None
     blocked_until_at: datetime | None
     probe_eligible_logged: bool
+    live_p95_latency_ms: int | None = None
+    last_live_failure_at: datetime | None = None
+    last_live_success_at: datetime | None = None
+    last_probe_status: str | None = None
+    last_probe_at: datetime | None = None
+    endpoint_ping_ewma_ms: float | None = None
+    conversation_delay_ewma_ms: float | None = None
     state: LoadbalanceCurrentStateValue
     created_at: datetime
     updated_at: datetime

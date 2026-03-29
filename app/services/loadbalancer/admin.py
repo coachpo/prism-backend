@@ -77,6 +77,12 @@ async def list_model_current_state(
         items=[
             LoadbalanceCurrentStateItem(
                 connection_id=row.connection_id,
+                circuit_state=row.circuit_state,
+                probe_available_at=row.probe_available_at,
+                window_started_at=row.window_started_at,
+                window_request_count=row.window_request_count,
+                in_flight_non_stream=row.in_flight_non_stream,
+                in_flight_stream=row.in_flight_stream,
                 consecutive_failures=row.consecutive_failures,
                 last_failure_kind=row.last_failure_kind,
                 last_cooldown_seconds=float(row.last_cooldown_seconds),
@@ -85,6 +91,21 @@ async def list_model_current_state(
                 banned_until_at=row.banned_until_at,
                 blocked_until_at=row.blocked_until_at,
                 probe_eligible_logged=row.probe_eligible_logged,
+                live_p95_latency_ms=row.live_p95_latency_ms,
+                last_live_failure_at=row.last_live_failure_at,
+                last_live_success_at=row.last_live_success_at,
+                last_probe_status=row.last_probe_status,
+                last_probe_at=row.last_probe_at,
+                endpoint_ping_ewma_ms=(
+                    float(row.endpoint_ping_ewma_ms)
+                    if row.endpoint_ping_ewma_ms is not None
+                    else None
+                ),
+                conversation_delay_ewma_ms=(
+                    float(row.conversation_delay_ewma_ms)
+                    if row.conversation_delay_ewma_ms is not None
+                    else None
+                ),
                 state=_derive_current_state_value(
                     ban_mode=row.ban_mode,
                     banned_until_at=row.banned_until_at,

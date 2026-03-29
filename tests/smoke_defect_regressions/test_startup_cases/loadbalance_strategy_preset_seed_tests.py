@@ -5,11 +5,12 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import LoadbalanceStrategy, Profile
+from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
 
 
 class TestDEF085_LoadbalanceStrategyPresetSeed:
     @pytest.mark.asyncio
-    async def test_seed_loadbalance_strategy_preset_creates_failover_strategy_on_default_profile(
+    async def test_seed_loadbalance_strategy_preset_creates_adaptive_strategy_on_default_profile(
         self,
     ):
         from app.main import seed_profile_invariants
@@ -49,19 +50,8 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
         assert default_profile.is_default is True
         assert len(preset_strategies) == 1
         assert preset_strategies[0].profile_id == default_profile.id
-        assert preset_strategies[0].strategy_type == "failover"
-        assert preset_strategies[0].auto_recovery == {
-            "mode": "enabled",
-            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
-            "cooldown": {
-                "base_seconds": 60,
-                "failure_threshold": 2,
-                "backoff_multiplier": 2.0,
-                "max_cooldown_seconds": 900,
-                "jitter_ratio": 0.2,
-            },
-            "ban": {"mode": "off"},
-        }
+        assert preset_strategies[0].strategy_type == "adaptive"
+        assert preset_strategies[0].routing_policy == make_routing_policy_adaptive()
 
     @pytest.mark.asyncio
     async def test_run_startup_sequence_seeds_preset_after_profile_invariants(self):

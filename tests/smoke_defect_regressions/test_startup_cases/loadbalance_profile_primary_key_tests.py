@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -25,6 +26,11 @@ def _build_alembic_config(database_url: str) -> Config:
     )
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
     return config
+
+
+def _get_current_head_revision(database_url: str) -> str:
+    script = ScriptDirectory.from_config(_build_alembic_config(database_url))
+    return str(script.get_current_head())
 
 
 def _upgrade_database(database_url: str, revision: str) -> None:
@@ -63,6 +69,7 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
         drift_database_url = _database_url_with_name(
             test_database_url, f"prism_def075_{uuid4().hex[:12]}"
         )
+        current_head_revision = _get_current_head_revision(drift_database_url)
 
         await _create_database(drift_database_url)
         try:
@@ -117,13 +124,27 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
                     .scalars()
                     .all()
                 )
+                connection_columns = set(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'connections'"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
             await engine.dispose()
 
-            assert version == ["0001_initial"]
+            assert version == [current_head_revision]
+            assert current_head_revision != "0001_initial"
             assert profiles_pk == ["PRIMARY KEY (id)"]
             assert vendors_pk == ["PRIMARY KEY (id)"]
             assert loadbalance_table == "loadbalance_events"
-            assert "auto_recovery" in strategy_columns
-            assert "failover_recovery_enabled" not in strategy_columns
+            assert "routing_policy" in strategy_columns
+            assert "strategy_type" not in strategy_columns
+            assert "auto_recovery" not in strategy_columns
+            assert "openai_probe_endpoint_variant" in connection_columns
         finally:
             await _drop_database(drift_database_url)

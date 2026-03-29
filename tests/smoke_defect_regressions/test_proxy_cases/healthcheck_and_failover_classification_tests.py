@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 from types import SimpleNamespace
@@ -28,12 +29,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == {
             "model": "gpt-4o-mini",
-            "input": [
-                {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "hi"}],
-                }
-            ],
+            "input": "ping",
             "max_output_tokens": 1,
         }
 
@@ -47,7 +43,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/chat/completions"
         assert body == {
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "hi"}],
+            "messages": [{"role": "user", "content": "ping"}],
             "max_tokens": 1,
         }
 
@@ -61,7 +57,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == {
             "model": "gpt-4o-mini",
-            "input": "hi",
+            "input": "ping",
         }
 
     def test_gemini_health_check_uses_generate_content_endpoint(self):
@@ -74,7 +70,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         generation_config = cast(dict[str, int], payload["generationConfig"])
 
         assert path == "/v1beta/models/gemini-3.1-pro-preview:generateContent"
-        assert parts[0]["text"] == "hi"
+        assert parts[0]["text"] == "ping"
         assert generation_config["maxOutputTokens"] == 1
 
     def test_cross_vendor_model_id_still_uses_api_family_native_path(self):
@@ -86,9 +82,71 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert body["model"] == "gemini-3.1-pro-preview"
 
     @pytest.mark.asyncio
-    async def test_health_route_uses_model_api_family_even_when_vendor_metadata_differs(
+    async def test_probe_runner_uses_model_api_family_even_when_vendor_metadata_differs(
         self,
     ):
+        from app.services.monitoring_service import run_connection_probe
+
+        vendor = MagicMock()
+        vendor.id = 19
+        vendor.key = "openai"
+
+        endpoint = MagicMock()
+        endpoint.id = 501
+        endpoint.base_url = "https://api.anthropic.com"
+
+        connection = MagicMock()
+        connection.id = 1001
+        connection.profile_id = 1
+        connection.endpoint_id = 501
+        connection.openai_probe_endpoint_variant = "responses"
+        connection.endpoint_rel = endpoint
+        connection.model_config_rel = MagicMock(
+            id=301,
+            api_family="anthropic",
+            model_id="claude-sonnet-4-5",
+            vendor=vendor,
+            loadbalance_strategy=MagicMock(
+                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
+            ),
+        )
+
+        execute_probe_request_fn = AsyncMock(
+            side_effect=[
+                ("healthy", "Connection successful", 7),
+                ("healthy", "Connection successful", 11),
+            ]
+        )
+
+        result = await run_connection_probe(
+            db=AsyncMock(),
+            client=AsyncMock(),
+            profile_id=1,
+            connection_id=connection.id,
+            load_connection_fn=AsyncMock(return_value=connection),
+            load_blocklist_rules_fn=AsyncMock(return_value=[]),
+            build_upstream_headers_fn=MagicMock(return_value={"x-api-key": "sk-test"}),
+            execute_probe_request_fn=execute_probe_request_fn,
+            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
+        )
+
+        assert result.fused_status == "healthy"
+        assert execute_probe_request_fn.await_count == 2
+        assert (
+            execute_probe_request_fn.await_args_list[0]
+            .kwargs["upstream_url"]
+            .endswith("/v1/messages")
+        )
+        assert (
+            execute_probe_request_fn.await_args_list[1]
+            .kwargs["upstream_url"]
+            .endswith("/v1/messages")
+        )
+
+
+class TestMonitoringManualHealthChecksAndPersistence:
+    @pytest.mark.asyncio
+    async def test_health_route_delegates_to_shared_probe_runner(self):
         from fastapi import FastAPI
         from starlette.requests import Request
 
@@ -114,55 +172,139 @@ class TestDEF059_HealthCheckRequestBuilder:
             }
         )
 
-        vendor = MagicMock()
-        vendor.id = 19
-        vendor.key = "openai"
+        probe_result = SimpleNamespace(
+            connection_id=123,
+            checked_at=datetime.now(timezone.utc),
+            health_status="healthy",
+            detail="probe completed",
+            conversation_delay_ms=17,
+        )
+        run_connection_probe_fn = AsyncMock(return_value=probe_result)
 
-        endpoint = MagicMock()
-        endpoint.id = 501
-
-        connection = MagicMock()
-        connection.id = 1001
-        connection.endpoint_id = 501
-        connection.endpoint_rel = endpoint
-        connection.model_config_rel = MagicMock(
-            api_family="anthropic",
-            model_id="claude-sonnet-4-5",
-            vendor=vendor,
+        response = await perform_connection_health_check(
+            connection_id=123,
+            request=request,
+            db=AsyncMock(),
+            profile_id=1,
+            run_connection_probe_fn=run_connection_probe_fn,
         )
 
-        build_upstream_headers_fn = MagicMock(return_value={"x-api-key": "sk-test"})
-        probe_connection_health_fn = AsyncMock(
-            return_value=("healthy", "ok", 7, "https://api.anthropic.com/v1/messages")
+        assert response.connection_id == 123
+        assert response.health_status == "healthy"
+        assert response.response_time_ms == 17
+        assert run_connection_probe_fn.await_args is not None
+        assert run_connection_probe_fn.await_args.kwargs["connection_id"] == 123
+        assert (
+            run_connection_probe_fn.await_args.kwargs["client"] is app.state.http_client
         )
-        record_connection_recovery_fn = AsyncMock()
-        db = AsyncMock()
-        db.flush = AsyncMock()
 
-        with (
-            patch(
-                "app.routers.connections_domains.health_route_handlers._load_health_check_connection_or_404",
-                AsyncMock(return_value=connection),
+    @pytest.mark.asyncio
+    async def test_create_connection_record_persists_openai_probe_endpoint_variant(
+        self,
+    ):
+        from app.routers.connections_domains.crud_dependencies import (
+            ConnectionCrudDependencies,
+        )
+        from app.routers.connections_domains.crud_handlers.creation import (
+            create_connection_record,
+        )
+        from app.schemas.schemas import ConnectionCreate
+
+        endpoint = SimpleNamespace(id=77)
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        deps = ConnectionCrudDependencies(
+            clear_connection_state_fn=AsyncMock(),
+            clear_round_robin_state_for_model_fn=AsyncMock(),
+            create_endpoint_from_inline_fn=AsyncMock(),
+            ensure_model_config_ids_exist_fn=AsyncMock(),
+            list_ordered_connections_fn=AsyncMock(return_value=[]),
+            list_ordered_connections_for_models_fn=AsyncMock(),
+            load_connection_or_404_fn=AsyncMock(return_value=SimpleNamespace(id=1)),
+            load_model_or_404_fn=AsyncMock(
+                return_value=SimpleNamespace(api_family="openai")
             ),
-            patch(
-                "app.routers.connections_domains.health_route_handlers._load_enabled_blocklist_rules",
-                AsyncMock(return_value=[]),
-            ),
+            lock_profile_row_fn=AsyncMock(),
+            normalize_connection_priorities_fn=MagicMock(),
+            serialize_custom_headers_fn=MagicMock(return_value=None),
+            validate_pricing_template_id_fn=AsyncMock(return_value=None),
+        )
+
+        with patch(
+            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
+            AsyncMock(return_value=endpoint),
         ):
-            response = await perform_connection_health_check(
-                connection_id=connection.id,
-                request=request,
-                db=db,
+            await create_connection_record(
+                model_config_id=9,
+                body=ConnectionCreate(
+                    endpoint_id=endpoint.id,
+                    openai_probe_endpoint_variant="chat_completions",
+                ),
+                db=mock_db,
                 profile_id=1,
-                build_upstream_headers_fn=build_upstream_headers_fn,
-                probe_connection_health_fn=probe_connection_health_fn,
-                record_connection_recovery_fn=record_connection_recovery_fn,
+                deps=deps,
             )
 
-        assert response.health_status == "healthy"
-        assert build_upstream_headers_fn.call_args.args[1] == "anthropic"
-        assert probe_connection_health_fn.await_args is not None
-        assert probe_connection_health_fn.await_args.kwargs["api_family"] == "anthropic"
+        created_connection = mock_db.add.call_args.args[0]
+        assert created_connection.openai_probe_endpoint_variant == "chat_completions"
+
+    @pytest.mark.asyncio
+    async def test_update_connection_record_persists_openai_probe_endpoint_variant(
+        self,
+    ):
+        from app.routers.connections_domains.crud_dependencies import (
+            ConnectionCrudDependencies,
+        )
+        from app.routers.connections_domains.crud_handlers.updating import (
+            update_connection_record,
+        )
+        from app.schemas.schemas import ConnectionUpdate
+
+        connection = SimpleNamespace(
+            id=55,
+            profile_id=1,
+            endpoint_id=11,
+            model_config_id=9,
+            is_active=True,
+            auth_type=None,
+            custom_headers=None,
+            updated_at=None,
+        )
+        deps = ConnectionCrudDependencies(
+            clear_connection_state_fn=AsyncMock(),
+            clear_round_robin_state_for_model_fn=AsyncMock(),
+            create_endpoint_from_inline_fn=AsyncMock(),
+            ensure_model_config_ids_exist_fn=AsyncMock(),
+            list_ordered_connections_fn=AsyncMock(),
+            list_ordered_connections_for_models_fn=AsyncMock(),
+            load_connection_or_404_fn=AsyncMock(return_value=connection),
+            load_model_or_404_fn=AsyncMock(
+                return_value=SimpleNamespace(api_family="openai")
+            ),
+            lock_profile_row_fn=AsyncMock(),
+            normalize_connection_priorities_fn=MagicMock(),
+            serialize_custom_headers_fn=MagicMock(),
+            validate_pricing_template_id_fn=AsyncMock(),
+        )
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+
+        with patch(
+            "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
+            AsyncMock(
+                return_value={"openai_probe_endpoint_variant": "chat_completions"}
+            ),
+        ):
+            await update_connection_record(
+                connection_id=connection.id,
+                body=ConnectionUpdate(openai_probe_endpoint_variant="chat_completions"),
+                db=mock_db,
+                profile_id=1,
+                deps=deps,
+            )
+
+        assert connection.openai_probe_endpoint_variant == "chat_completions"
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
@@ -250,14 +392,9 @@ class TestDEF066_OpenAIHealthCheckFallback:
             .kwargs["upstream_url"]
             .endswith("/v1/responses")
         )
-        assert (
-            execute_mock.await_args_list[0].kwargs["body"]["input"][0]["content"][0][
-                "text"
-            ]
-            == "hi"
-        )
+        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "ping"
         assert execute_mock.await_args_list[0].kwargs["body"]["max_output_tokens"] == 1
-        assert execute_mock.await_args_list[1].kwargs["body"]["input"] == "hi"
+        assert execute_mock.await_args_list[1].kwargs["body"]["input"] == "ping"
 
     @pytest.mark.asyncio
     async def test_openai_health_check_uses_chat_completions_fallback_when_responses_fallback_fails(

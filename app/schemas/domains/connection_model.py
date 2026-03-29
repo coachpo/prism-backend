@@ -15,9 +15,8 @@ from pydantic import (
 from app.services.loadbalancer.policy import (
     normalize_failover_status_codes,
     resolve_effective_loadbalance_policy,
-    serialize_auto_recovery,
+    serialize_routing_policy,
 )
-from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
 from .common import ApiFamily, AuthType
 from .endpoint_pricing import (
@@ -37,6 +36,9 @@ class ConnectionBase(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
+    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
+        "responses"
+    )
 
 
 class ConnectionCreate(ConnectionBase):
@@ -69,6 +71,9 @@ class ConnectionUpdate(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
+    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] | None = (
+        None
+    )
 
     @model_validator(mode="after")
     def validate_update(self):
@@ -96,6 +101,9 @@ class ConnectionResponse(BaseModel):
     qps_limit: int | None = None
     max_in_flight_non_stream: int | None = None
     max_in_flight_stream: int | None = None
+    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
+        "responses"
+    )
     pricing_template: ConnectionPricingTemplateSummary | None = Field(
         default=None,
         validation_alias=AliasChoices("pricing_template", "pricing_template_rel"),
@@ -116,6 +124,15 @@ class ConnectionResponse(BaseModel):
         if isinstance(v, dict):
             return v
         return json.loads(v)
+
+    @field_validator("openai_probe_endpoint_variant", mode="before")
+    @classmethod
+    def normalize_openai_probe_endpoint_variant(
+        cls, value: str | None
+    ) -> Literal["responses", "chat_completions"]:
+        if value == "chat_completions":
+            return "chat_completions"
+        return "responses"
 
 
 class HealthCheckResponse(BaseModel):
@@ -215,7 +232,7 @@ class AutoRecoveryEnabled(BaseModel):
 
     mode: Literal["enabled"] = "enabled"
     status_codes: list[int] = Field(
-        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
+        default_factory=lambda: [403, 422, 429, 500, 502, 503, 504, 529]
     )
     cooldown: AutoRecoveryCooldown
     ban: AutoRecoveryBan
@@ -232,12 +249,100 @@ AutoRecovery = Annotated[
 ]
 
 
+class RoutingPolicyHedge(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    delay_ms: int = Field(default=1500, ge=0, le=300_000)
+    max_additional_attempts: int = Field(default=1, ge=1, le=10)
+
+
+class RoutingPolicyCircuitBreaker(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    failure_status_codes: list[int] = Field(
+        default_factory=lambda: [403, 422, 429, 500, 502, 503, 504, 529]
+    )
+    base_open_seconds: int = Field(default=60, ge=0, le=86_400)
+    failure_threshold: int = Field(default=2, ge=1, le=50)
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    max_open_seconds: int = Field(default=900, ge=1, le=86_400)
+    jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+    ban_mode: Literal["off", "manual", "temporary"] = "off"
+    max_open_strikes_before_ban: int = Field(default=0, ge=0, le=100)
+    ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @field_validator("failure_status_codes", mode="before")
+    @classmethod
+    def validate_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
+
+    @model_validator(mode="after")
+    def validate_ban_policy(self):
+        if self.ban_mode == "off":
+            if self.max_open_strikes_before_ban != 0:
+                raise ValueError(
+                    "ban_mode='off' requires max_open_strikes_before_ban=0"
+                )
+            if self.ban_duration_seconds != 0:
+                raise ValueError("ban_mode='off' requires ban_duration_seconds=0")
+        if self.ban_mode == "manual":
+            if self.max_open_strikes_before_ban < 1:
+                raise ValueError(
+                    "ban_mode='manual' requires max_open_strikes_before_ban >= 1"
+                )
+            if self.ban_duration_seconds != 0:
+                raise ValueError("ban_mode='manual' requires ban_duration_seconds=0")
+        if self.ban_mode == "temporary":
+            if self.max_open_strikes_before_ban < 1:
+                raise ValueError(
+                    "ban_mode='temporary' requires max_open_strikes_before_ban >= 1"
+                )
+            if self.ban_duration_seconds < 1:
+                raise ValueError(
+                    "ban_mode='temporary' requires ban_duration_seconds >= 1"
+                )
+        return self
+
+
+class RoutingPolicyAdmission(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    respect_qps_limit: bool = True
+    respect_in_flight_limits: bool = True
+
+
+class RoutingPolicyMonitoring(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    stale_after_seconds: int = Field(default=300, ge=1, le=86_400)
+    endpoint_ping_weight: float = Field(default=1.0, ge=0.0, le=10.0)
+    conversation_delay_weight: float = Field(default=1.0, ge=0.0, le=10.0)
+    failure_penalty_weight: float = Field(default=2.0, ge=0.0, le=10.0)
+
+
+class RoutingPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["adaptive"] = "adaptive"
+    routing_objective: Literal["minimize_latency", "maximize_availability"] = (
+        "minimize_latency"
+    )
+    deadline_budget_ms: int = Field(default=30_000, ge=1, le=300_000)
+    hedge: RoutingPolicyHedge = Field(default_factory=RoutingPolicyHedge)
+    circuit_breaker: RoutingPolicyCircuitBreaker = Field(
+        default_factory=RoutingPolicyCircuitBreaker
+    )
+    admission: RoutingPolicyAdmission = Field(default_factory=RoutingPolicyAdmission)
+    monitoring: RoutingPolicyMonitoring = Field(default_factory=RoutingPolicyMonitoring)
+
+
 class LoadbalanceStrategyBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
-    auto_recovery: AutoRecovery
+    routing_policy: RoutingPolicy
 
     @field_validator("name")
     @classmethod
@@ -246,12 +351,6 @@ class LoadbalanceStrategyBase(BaseModel):
         if not normalized:
             raise ValueError("name must not be empty")
         return normalized
-
-    @model_validator(mode="after")
-    def validate_strategy_behavior(self):
-        if self.strategy_type == "single" and self.auto_recovery.mode != "disabled":
-            raise ValueError("single strategies must not enable failover recovery")
-        return self
 
 
 class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
@@ -266,6 +365,8 @@ class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    strategy_type: str = Field(default="adaptive", exclude=True)
+    auto_recovery: AutoRecovery | None = Field(default=None, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -277,10 +378,45 @@ class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
 
         policy = resolve_effective_loadbalance_policy(value)
         return {
+            **(
+                {
+                    "strategy_type": getattr(value, "strategy_type", policy.kind),
+                }
+            ),
             "id": getattr(value, "id"),
             "name": getattr(value, "name"),
-            "strategy_type": policy.strategy_type,
-            "auto_recovery": serialize_auto_recovery(policy),
+            "auto_recovery": getattr(
+                value,
+                "auto_recovery",
+                AutoRecoveryEnabled.model_validate(
+                    {
+                        "mode": "enabled",
+                        "status_codes": policy.circuit_failure_status_codes,
+                        "cooldown": {
+                            "base_seconds": int(policy.circuit_base_open_seconds),
+                            "failure_threshold": policy.circuit_failure_threshold,
+                            "backoff_multiplier": policy.circuit_backoff_multiplier,
+                            "max_cooldown_seconds": policy.circuit_max_open_seconds,
+                            "jitter_ratio": policy.circuit_jitter_ratio,
+                        },
+                        "ban": (
+                            {"mode": "off"}
+                            if policy.circuit_ban_mode == "off"
+                            else {
+                                "mode": "manual",
+                                "max_cooldown_strikes_before_ban": policy.circuit_max_open_strikes_before_ban,
+                            }
+                            if policy.circuit_ban_mode == "manual"
+                            else {
+                                "mode": "temporary",
+                                "max_cooldown_strikes_before_ban": policy.circuit_max_open_strikes_before_ban,
+                                "ban_duration_seconds": policy.circuit_ban_duration_seconds,
+                            }
+                        ),
+                    }
+                ),
+            ),
+            "routing_policy": serialize_routing_policy(policy),
         }
 
 
@@ -427,6 +563,14 @@ class EndpointModelsBatchResponse(BaseModel):
 
 
 __all__ = [
+    "AutoRecovery",
+    "AutoRecoveryBan",
+    "AutoRecoveryBanManual",
+    "AutoRecoveryBanOff",
+    "AutoRecoveryBanTemporary",
+    "AutoRecoveryCooldown",
+    "AutoRecoveryDisabled",
+    "AutoRecoveryEnabled",
     "ConnectionBase",
     "ConnectionCreate",
     "ConnectionOwnerResponse",

@@ -1,6 +1,7 @@
+import asyncio
 import logging
 import time
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, cast
 
 import httpx
 from fastapi import HTTPException
@@ -8,6 +9,7 @@ from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.models import Connection
+from app.services.loadbalancer.executor import execute_deadline_aware_attempts
 
 from .attempt_handlers import (
     handle_buffered_attempt,
@@ -16,6 +18,8 @@ from .attempt_handlers import (
 )
 from .attempt_outcome_reporting import record_final_usage_event
 from .attempt_types import (
+    AttemptExecutionResult,
+    ExecutionCandidate,
     ProxyAttemptTarget,
     ProxyRequestState,
     ProxyRuntimeDependencies,
@@ -44,6 +48,7 @@ def _build_attempt_target(
     attempt_number: int,
     connection: Connection,
     limiter_lease_token: str | None,
+    limiter_lease_ttl_seconds: int | None,
     request_query: str | None,
     setup: ProxyRequestSetup,
     deps: ProxyRuntimeDependencies,
@@ -70,6 +75,7 @@ def _build_attempt_target(
             request_compressed=setup.request_compressed,
         ),
         limiter_lease_token=limiter_lease_token,
+        limiter_lease_ttl_seconds=limiter_lease_ttl_seconds,
         upstream_url=upstream_url,
     )
 
@@ -84,23 +90,29 @@ async def execute_proxy_attempts(
     setup: ProxyRequestSetup,
     deps: ProxyRuntimeDependencies,
 ) -> Response | StreamingResponse:
-    last_error = None
     last_attempt_target: ProxyAttemptTarget | None = None
-    attempted_any_endpoint = False
-    limiter_denied_any_endpoint = False
     state = ProxyRequestState(
         profile_id=profile_id,
         request_path=request_path,
         setup=setup,
     )
 
-    for attempt_number, connection in enumerate(setup.endpoints_to_try, start=1):
+    async def run_attempt(
+        candidate: ExecutionCandidate,
+        attempt_number: int,
+    ) -> AttemptExecutionResult:
+        nonlocal last_attempt_target
+        connection = candidate.connection
         if connection.endpoint_rel is None:
             logger.warning(
                 "Skipping connection %d because endpoint is missing",
                 connection.id,
             )
-            continue
+            return AttemptExecutionResult(
+                attempted=False,
+                accepted=False,
+                error_detail=f"Connection {connection.id} is missing an endpoint",
+            )
 
         if not await endpoint_is_active_now_fn(db, connection.id):
             await deps.clear_connection_state_fn(
@@ -111,9 +123,13 @@ async def execute_proxy_attempts(
                 "Skipping endpoint %d because it is currently disabled",
                 connection.id,
             )
-            continue
+            return AttemptExecutionResult(
+                attempted=False,
+                accepted=False,
+                error_detail=f"Connection {connection.id} is disabled",
+            )
 
-        if connection.id in setup.probe_eligible_connection_ids:
+        if candidate.probe_eligible:
             await deps.claim_probe_eligible_fn(
                 profile_id=profile_id,
                 connection_id=connection.id,
@@ -125,68 +141,113 @@ async def execute_proxy_attempts(
             )
 
         limiter_lease_token = None
+        limiter_lease_ttl_seconds: int | None = None
         if _connection_has_limiter_config(connection):
+            limiter_lease_ttl_seconds = DEFAULT_LIMITER_LEASE_TTL_SECONDS
             limiter_result = await deps.acquire_connection_limit_fn(
                 profile_id=profile_id,
                 connection=connection,
                 lease_kind="stream" if setup.is_streaming else "non_stream",
-                lease_ttl_seconds=DEFAULT_LIMITER_LEASE_TTL_SECONDS,
+                lease_ttl_seconds=limiter_lease_ttl_seconds,
                 now_at=None,
             )
             if not limiter_result.admitted:
-                limiter_denied_any_endpoint = True
-                last_error = (
-                    f"Connection {connection.id} rejected by limiter: "
-                    f"{limiter_result.deny_reason}"
+                logger.info(
+                    "Connection %d rejected by limiter: %s",
+                    connection.id,
+                    limiter_result.deny_reason,
                 )
-                logger.info(last_error)
-                continue
+                return AttemptExecutionResult(
+                    attempted=False,
+                    accepted=False,
+                    limiter_denied=True,
+                    error_detail=(
+                        f"Connection {connection.id} rejected by limiter: "
+                        f"{limiter_result.deny_reason}"
+                    ),
+                )
             limiter_lease_token = limiter_result.lease_token
 
-        attempted_any_endpoint = True
         target = _build_attempt_target(
             attempt_number=attempt_number,
             connection=connection,
             limiter_lease_token=limiter_lease_token,
+            limiter_lease_ttl_seconds=limiter_lease_ttl_seconds,
             request_query=request_query,
             setup=setup,
             deps=deps,
         )
-        start_time = time.monotonic()
         last_attempt_target = target
+        start_time = time.monotonic()
 
         try:
             if setup.is_streaming:
-                response, last_error = await handle_streaming_attempt(
+                return await handle_streaming_attempt(
                     deps=deps,
                     state=state,
                     target=target,
                     client=setup.client,
                     start_time=start_time,
                 )
-            else:
-                response, last_error = await handle_buffered_attempt(
-                    deps=deps,
-                    state=state,
-                    target=target,
-                    client=setup.client,
-                    start_time=start_time,
-                )
+            return await handle_buffered_attempt(
+                deps=deps,
+                state=state,
+                target=target,
+                client=setup.client,
+                start_time=start_time,
+            )
         except (httpx.ConnectError, httpx.TimeoutException) as exc:
-            last_error = await handle_transport_exception(
+            return await handle_transport_exception(
                 deps=deps,
                 state=state,
                 target=target,
                 start_time=start_time,
                 exc=exc,
             )
-            continue
+        except asyncio.CancelledError:
+            if limiter_lease_token is not None:
+                await deps.release_connection_lease_fn(
+                    profile_id=profile_id,
+                    lease_token=limiter_lease_token,
+                    now_at=None,
+                )
+            raise
 
-        if response is not None:
-            return response
+    execution_result = await execute_deadline_aware_attempts(
+        db=db,
+        profile_id=profile_id,
+        model_config=setup.model_config,
+        policy=setup.failover_policy,
+        initial_candidates=setup.initial_candidates,
+        is_streaming=setup.is_streaming,
+        request_deadline_at_monotonic=setup.request_deadline_at_monotonic,
+        run_attempt_fn=run_attempt,
+    )
 
-    if not attempted_any_endpoint:
-        if limiter_denied_any_endpoint:
+    if execution_result.response is not None:
+        return cast(Response | StreamingResponse, execution_result.response)
+
+    final_status_code = 504 if execution_result.deadline_exhausted else 502
+    if last_attempt_target is not None:
+        _ = await record_final_usage_event(
+            deps=deps,
+            state=state,
+            target=last_attempt_target,
+            status_code=final_status_code,
+            attempt_count=max(execution_result.attempt_count, 1),
+        )
+
+    if execution_result.deadline_exhausted:
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"Request deadline exhausted for model '{setup.model_id}'. "
+                f"Last error: {execution_result.last_error}"
+            ),
+        )
+
+    if not execution_result.attempted_any_endpoint:
+        if execution_result.limiter_denied_any_endpoint:
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -199,20 +260,11 @@ async def execute_proxy_attempts(
             detail=f"No active connections available for model '{setup.model_id}'.",
         )
 
-    if last_attempt_target is not None:
-        _ = await record_final_usage_event(
-            deps=deps,
-            state=state,
-            target=last_attempt_target,
-            status_code=502,
-            attempt_count=last_attempt_target.attempt_number,
-        )
-
     raise HTTPException(
         status_code=502,
         detail=(
             f"All connections failed for model '{setup.model_id}'. "
-            f"Last error: {last_error}"
+            f"Last error: {execution_result.last_error}"
         ),
     )
 

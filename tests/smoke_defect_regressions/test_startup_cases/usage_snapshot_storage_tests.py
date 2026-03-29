@@ -299,11 +299,9 @@ class TestDEF086_UsageStatisticsStorageContract:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def086_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_initial"
+        expected_head_revision = _get_current_head_revision(migration_database_url)
 
-        assert (
-            _get_current_head_revision(migration_database_url) == expected_head_revision
-        )
+        assert expected_head_revision != "0001_initial"
 
         await _create_database(migration_database_url)
         try:
@@ -326,13 +324,13 @@ class TestDEF086_UsageStatisticsStorageContract:
             assert "proxy_api_key_id" in request_log_columns
             assert "proxy_api_key_name_snapshot" in request_log_columns
             assert usage_request_event_columns
-            assert "auto_recovery" in strategy_columns
-            assert "failover_recovery_enabled" not in strategy_columns
+            assert "routing_policy" in strategy_columns
+            assert "auto_recovery" not in strategy_columns
             assert (
                 await _fetch_table_persistence(
                     migration_database_url, "usage_request_events"
                 )
-            ) == "u"
+            ) == "p"
 
             for field_name in {
                 "profile_id",

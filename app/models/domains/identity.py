@@ -92,7 +92,7 @@ class Profile(Base):
         "LoadbalanceEvent", back_populates="profile", cascade="all, delete-orphan"
     )
     loadbalance_current_states: Mapped[list[Any]] = relationship(
-        "LoadbalanceCurrentState",
+        "RoutingConnectionRuntimeState",
         back_populates="profile",
         cascade="all, delete-orphan",
     )

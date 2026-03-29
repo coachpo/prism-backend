@@ -21,7 +21,7 @@ from app.models.models import (
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
-from app.services.loadbalancer.policy import canonicalize_auto_recovery_document
+from app.services.loadbalancer.policy import canonicalize_routing_policy_document
 from app.services.loadbalancer.state import clear_profile_state
 from app.services.proxy_service import normalize_base_url
 
@@ -339,16 +339,13 @@ async def execute_import_payload(
             id=strategy_id_allocator.take(),
             profile_id=profile_id,
             name=strategy_name,
-            strategy_type=cast(
-                Literal["single", "fill-first", "round-robin", "failover"],
-                strategy_data.strategy_type,
-            ),
-            auto_recovery=canonicalize_auto_recovery_document(
-                strategy_type=cast(
+            routing_policy=canonicalize_routing_policy_document(
+                None,
+                legacy_strategy_type=cast(
                     Literal["single", "fill-first", "round-robin", "failover"],
                     strategy_data.strategy_type,
                 ),
-                auto_recovery=strategy_data.auto_recovery,
+                legacy_auto_recovery=strategy_data.auto_recovery,
             ),
         )
         db.add(strategy)

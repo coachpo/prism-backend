@@ -18,7 +18,10 @@ from app.models.models import (
     UserSetting,
     Vendor,
 )
-from app.services.loadbalancer.policy import canonicalize_auto_recovery_document
+from app.services.loadbalancer.policy import canonicalize_routing_policy_document
+from app.services.monitoring.scheduler import (
+    DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
+)
 from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 from app.services.profile_invariants import ensure_profile_invariants
 
@@ -87,7 +90,8 @@ SYSTEM_BLOCKLIST_DEFAULTS: list[dict[str, str]] = [
     },
 ]
 
-DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
+DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default adaptive routing"
+LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
 
 
 async def seed_vendors() -> None:
@@ -113,14 +117,12 @@ async def seed_vendors() -> None:
 
 async def seed_profile_invariants() -> None:
     async with database_core.AsyncSessionLocal() as session:
-        await ensure_profile_invariants(session)
+        _ = await ensure_profile_invariants(session)
         await session.commit()
         logger.info("Ensured default profile invariants")
 
 
 async def seed_loadbalance_strategy_preset() -> None:
-    settings = get_settings()
-
     async with database_core.AsyncSessionLocal() as session:
         default_profile = (
             await session.execute(
@@ -133,39 +135,78 @@ async def seed_loadbalance_strategy_preset() -> None:
         if default_profile is None:
             return
 
-        existing = (
-            await session.execute(
-                select(LoadbalanceStrategy)
-                .where(
-                    LoadbalanceStrategy.profile_id == default_profile.id,
-                    LoadbalanceStrategy.name
-                    == DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
+        matching_presets = list(
+            (
+                await session.execute(
+                    select(LoadbalanceStrategy)
+                    .where(
+                        LoadbalanceStrategy.profile_id == default_profile.id,
+                        LoadbalanceStrategy.name.in_(
+                            [
+                                DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
+                                LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
+                            ]
+                        ),
+                    )
+                    .order_by(LoadbalanceStrategy.id.asc())
                 )
-                .limit(1)
             )
-        ).scalar_one_or_none()
-        if existing is not None:
+            .scalars()
+            .all()
+        )
+        if any(
+            strategy.name == DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
+            for strategy in matching_presets
+        ):
+            return
+
+        legacy_preset = next(
+            (
+                strategy
+                for strategy in matching_presets
+                if strategy.name == LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+            ),
+            None,
+        )
+        if legacy_preset is not None:
+            legacy_preset.name = DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
+            await session.commit()
+            logger.info(
+                "Renamed default loadbalance strategy preset for profile %d",
+                default_profile.id,
+            )
             return
 
         session.add(
             LoadbalanceStrategy(
                 profile_id=default_profile.id,
                 name=DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
-                strategy_type="failover",
-                auto_recovery=canonicalize_auto_recovery_document(
-                    strategy_type="failover",
-                    auto_recovery={
-                        "mode": "enabled",
-                        "status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),
-                        "cooldown": {
-                            "base_seconds": settings.failover_cooldown_seconds,
-                            "failure_threshold": settings.failover_failure_threshold,
-                            "backoff_multiplier": settings.failover_backoff_multiplier,
-                            "max_cooldown_seconds": settings.failover_max_cooldown_seconds,
-                            "jitter_ratio": settings.failover_jitter_ratio,
+                routing_policy=canonicalize_routing_policy_document(
+                    {
+                        "kind": "adaptive",
+                        "routing_objective": "minimize_latency",
+                        "deadline_budget_ms": 30_000,
+                        "hedge": {
+                            "enabled": False,
+                            "delay_ms": 1_500,
+                            "max_additional_attempts": 1,
                         },
-                        "ban": {"mode": "off"},
-                    },
+                        "circuit_breaker": {
+                            "failure_status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),
+                            "ban_mode": "off",
+                        },
+                        "admission": {
+                            "respect_qps_limit": True,
+                            "respect_in_flight_limits": True,
+                        },
+                        "monitoring": {
+                            "enabled": True,
+                            "stale_after_seconds": 300,
+                            "endpoint_ping_weight": 1.0,
+                            "conversation_delay_weight": 1.0,
+                            "failure_penalty_weight": 2.0,
+                        },
+                    }
                 ),
             )
         )
@@ -219,22 +260,40 @@ async def seed_user_settings() -> None:
         if not profile_ids:
             return
 
-        existing_profile_ids = set(
+        existing_settings = list(
             (
                 await session.execute(
-                    select(UserSetting.profile_id).where(
-                        UserSetting.profile_id.in_(profile_ids)
-                    )
+                    select(UserSetting).where(UserSetting.profile_id.in_(profile_ids))
                 )
             )
             .scalars()
             .all()
         )
+        existing_profile_ids: set[int] = set()
+        for settings in existing_settings:
+            if hasattr(settings, "profile_id"):
+                existing_profile_ids.add(settings.profile_id)
+            elif isinstance(settings, int) and not isinstance(settings, bool):
+                existing_profile_ids.add(settings)
         missing_profile_ids = [
             profile_id
             for profile_id in profile_ids
             if profile_id not in existing_profile_ids
         ]
+        repaired_monitoring_defaults = 0
+
+        for settings_row in existing_settings:
+            if not hasattr(settings_row, "monitoring_probe_interval_seconds"):
+                continue
+            interval_seconds = getattr(
+                settings_row, "monitoring_probe_interval_seconds", None
+            )
+            if interval_seconds is not None:
+                continue
+            settings_row.monitoring_probe_interval_seconds = (
+                DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
+            )
+            repaired_monitoring_defaults += 1
 
         for profile_id in missing_profile_ids:
             session.add(
@@ -243,14 +302,18 @@ async def seed_user_settings() -> None:
                     report_currency_code="USD",
                     report_currency_symbol="$",
                     timezone_preference=None,
+                    monitoring_probe_interval_seconds=(
+                        DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
+                    ),
                 )
             )
 
-        if missing_profile_ids:
+        if missing_profile_ids or repaired_monitoring_defaults:
             await session.commit()
             logger.info(
-                "Seeded default user settings for %d profile(s)",
+                "Seeded default user settings for %d profile(s) and repaired monitoring cadence for %d profile(s)",
                 len(missing_profile_ids),
+                repaired_monitoring_defaults,
             )
 
 

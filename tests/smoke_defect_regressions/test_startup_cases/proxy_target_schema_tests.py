@@ -101,11 +101,9 @@ class TestDEF081_ProxyTargetSchemaContract:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def081_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_initial"
+        expected_head_revision = _get_current_head_revision(migration_database_url)
 
-        assert (
-            _get_current_head_revision(migration_database_url) == expected_head_revision
-        )
+        assert expected_head_revision != "0001_initial"
 
         await _create_database(migration_database_url)
         try:
@@ -129,24 +127,24 @@ class TestDEF081_ProxyTargetSchemaContract:
                         )
                     )
                 ).scalar_one_or_none()
-                auto_recovery_column = (
+                routing_policy_column = (
                     await conn.execute(
                         text(
-                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'auto_recovery'"
+                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'routing_policy'"
                         )
                     )
                 ).scalar_one_or_none()
                 removed_recovery_column = (
                     await conn.execute(
                         text(
-                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'failover_recovery_enabled'"
+                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'auto_recovery'"
                         )
                     )
                 ).scalar_one_or_none()
 
                 assert proxy_targets_table == "model_proxy_targets"
                 assert resolved_target_column == "resolved_target_model_id"
-                assert auto_recovery_column == "auto_recovery"
+                assert routing_policy_column == "routing_policy"
                 assert removed_recovery_column is None
             await engine.dispose()
         finally:

@@ -8,16 +8,60 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.models import Connection
+from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+from app.services.loadbalancer.types import (
+    AttemptCandidate,
+    AttemptCandidateScoreInput,
+    AttemptPlan,
+)
 from app.services.background_tasks import BackgroundTaskManager
-from app.services.loadbalancer.types import AttemptPlan
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
 
 
-def _attempt_plan(*connections):
+def _attempt_candidate(connection: object) -> AttemptCandidate:
+    connection_id = getattr(connection, "id", getattr(connection, "endpoint_id", 0))
+    return AttemptCandidate(
+        connection=cast(Connection, connection),
+        score_input=AttemptCandidateScoreInput(
+            connection=cast(Connection, connection),
+            circuit_state="closed",
+            blocked_until_at=None,
+            banned_until_at=None,
+            probe_available_at=None,
+            in_flight_non_stream=0,
+            in_flight_stream=0,
+            qps_window_count=0,
+            live_p95_latency_ms=None,
+            last_live_failure_kind=None,
+            last_live_failure_at=None,
+            last_live_success_at=None,
+            last_probe_status=None,
+            last_probe_at=None,
+            endpoint_ping_ewma_ms=None,
+            conversation_delay_ewma_ms=None,
+        ),
+        score=0.0,
+        sort_key=(0.0, getattr(connection, "priority", 0), connection_id),
+    )
+
+
+def _attempt_plan(
+    *connections: object,
+    policy: object | None = None,
+    probe_eligible_connection_ids: list[int] | None = None,
+):
+    resolved_policy = resolve_effective_loadbalance_policy(
+        SimpleNamespace(
+            routing_policy=policy
+            or make_routing_policy_adaptive(deadline_budget_ms=30_000)
+        )
+    )
     return AttemptPlan(
-        connections=list(connections),
+        policy=resolved_policy,
+        candidates=[_attempt_candidate(connection) for connection in connections],
         blocked_connection_ids=[],
-        probe_eligible_connection_ids=[],
+        probe_eligible_connection_ids=probe_eligible_connection_ids or [],
     )
 
 
@@ -90,7 +134,28 @@ class TestDEF062_NonFailover4xxRecoveryState:
             ),
             patch(
                 "app.routers.proxy_domains.request_setup.build_attempt_plan",
-                AsyncMock(return_value=_attempt_plan(connection)),
+                AsyncMock(
+                    return_value=_attempt_plan(
+                        connection,
+                        policy=make_routing_policy_adaptive(
+                            base_open_seconds=45,
+                            failure_threshold=4,
+                            backoff_multiplier=3.5,
+                            max_open_seconds=720,
+                            jitter_ratio=0.35,
+                            failure_status_codes=[
+                                403,
+                                422,
+                                429,
+                                500,
+                                502,
+                                503,
+                                504,
+                                529,
+                            ],
+                        ),
+                    )
+                ),
             ),
             patch(
                 "app.routers.proxy_domains.request_setup.load_costing_settings",
@@ -1196,6 +1261,7 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
         from app.models.models import (
             Connection,
             Endpoint,
+            LoadbalanceStrategy,
             ModelConfig,
             Profile,
             Vendor,
@@ -1258,9 +1324,10 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     model_id="gpt-4o-mini-def012",
                     display_name="GPT-4o Mini DEF012",
                     model_type="native",
-                    loadbalance_strategy=make_loadbalance_strategy(
+                    loadbalance_strategy=LoadbalanceStrategy(
                         profile=profile,
-                        strategy_type="failover",
+                        name=f"def012-strategy-{uuid4().hex[:8]}",
+                        routing_policy=make_routing_policy_adaptive(),
                     ),
                     is_enabled=True,
                 )
@@ -1345,13 +1412,19 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                 toggle_applied = False
 
                 async def build_plan_with_assert(
-                    current_db, profile_id, model_config, now_at
+                    current_db,
+                    profile_id,
+                    model_config,
+                    now_at,
+                    *,
+                    is_streaming=False,
                 ):
                     plan = await real_build_attempt_plan(
                         current_db,
                         profile_id,
                         model_config,
                         now_at,
+                        is_streaming=is_streaming,
                     )
                     assert [ep.id for ep in plan.connections] == [
                         primary_id,
@@ -3959,4 +4032,295 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert "Failed to log streaming request" not in caplog.text
         finally:
             release_log.set()
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_long_lived_stream_heartbeats_limiter_lease_before_release(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class SlowHeartbeatStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+                self.continue_stream = asyncio.Event()
+
+            async def aiter_bytes(self):
+                yield (
+                    b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,'
+                    b'"total_tokens":2}}\n\n'
+                )
+                await self.continue_stream.wait()
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = SlowHeartbeatStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, connection = self._build_model_config_and_endpoint()
+        connection.max_in_flight_stream = 1
+        manager = BackgroundTaskManager()
+        await manager.start()
+        heartbeat_connection_lease = AsyncMock(return_value=True)
+        release_connection_lease = AsyncMock()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(connection),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch("app.routers.proxy.log_request", AsyncMock(return_value=778)),
+                patch("app.routers.proxy.record_audit_log", AsyncMock()),
+                patch(
+                    "app.routers.proxy.acquire_connection_limit",
+                    AsyncMock(
+                        return_value=LimiterAcquireResult(
+                            admitted=True,
+                            lease_token="stream-lease",
+                        )
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy.release_connection_lease",
+                    release_connection_lease,
+                ),
+                patch(
+                    "app.routers.proxy.heartbeat_connection_lease",
+                    heartbeat_connection_lease,
+                    create=True,
+                ),
+                patch(
+                    "app.routers.proxy_domains.attempt_execution.DEFAULT_LIMITER_LEASE_TTL_SECONDS",
+                    1,
+                ),
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+
+                first = await stream.__anext__()
+                assert first.startswith(b"data: ")
+
+                for _ in range(20):
+                    if heartbeat_connection_lease.await_count > 0:
+                        break
+                    await asyncio.sleep(0.05)
+
+                upstream_resp.continue_stream.set()
+                async for _ in stream:
+                    pass
+
+                assert heartbeat_connection_lease.await_count >= 1
+                heartbeat_call = heartbeat_connection_lease.await_args
+                assert heartbeat_call is not None
+                assert heartbeat_call.kwargs["lease_token"] == "stream-lease"
+                release_connection_lease.assert_awaited_once()
+                assert upstream_resp.closed is True
+        finally:
+            upstream_resp.continue_stream.set()
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_mid_stream_failure_is_accounted_as_failure_not_recovery(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class BrokenStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield (
+                    b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,'
+                    b'"total_tokens":2}}\n\n'
+                )
+                raise RuntimeError("upstream stream broke")
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self, upstream_resp):
+                self._upstream_resp = upstream_resp
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                return self._upstream_resp
+
+        app = FastAPI()
+        upstream_resp = BrokenStreamResponse()
+        app.state.http_client = DummyHttpClient(upstream_resp)
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hello"}],
+            }
+        ).encode("utf-8")
+        request = self._build_request(app, raw_body)
+        mock_db = self._build_db_mock()
+        model_config, connection = self._build_model_config_and_endpoint()
+        connection.max_in_flight_stream = 1
+        manager = BackgroundTaskManager()
+        await manager.start()
+        log_request = AsyncMock(return_value=999)
+        record_connection_failure = AsyncMock()
+        record_connection_recovery = AsyncMock()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    return_value=_attempt_plan(connection),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch("app.routers.proxy.log_request", log_request),
+                patch("app.routers.proxy.record_audit_log", AsyncMock()),
+                patch(
+                    "app.routers.proxy.acquire_connection_limit",
+                    AsyncMock(
+                        return_value=LimiterAcquireResult(
+                            admitted=True,
+                            lease_token="stream-lease",
+                        )
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy.release_connection_lease",
+                    AsyncMock(),
+                ),
+                patch(
+                    "app.routers.proxy.record_connection_failure",
+                    record_connection_failure,
+                ),
+                patch(
+                    "app.routers.proxy.record_connection_recovery",
+                    record_connection_recovery,
+                ),
+                patch(
+                    "app.routers.proxy.heartbeat_connection_lease",
+                    AsyncMock(return_value=True),
+                    create=True,
+                ),
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/responses",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                async for _ in stream:
+                    pass
+
+                await self._wait_for_asyncmock_calls(log_request)
+
+                record_connection_failure.assert_awaited_once()
+                record_connection_recovery.assert_not_awaited()
+                log_call = log_request.await_args
+                assert log_call is not None
+                assert log_call.kwargs["status_code"] == 0
+                assert log_call.kwargs["is_stream"] is True
+                assert upstream_resp.closed is True
+        finally:
             await manager.shutdown()

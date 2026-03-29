@@ -24,6 +24,7 @@ async def get_or_create_user_settings(
             report_currency_code="USD",
             report_currency_symbol="$",
             timezone_preference=None,
+            monitoring_probe_interval_seconds=300,
         )
         db.add(settings_row)
         await db.flush()

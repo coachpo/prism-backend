@@ -12,6 +12,7 @@ from app.services.loadbalancer.recovery import (
 )
 from app.services.loadbalancer.limiter import (
     acquire_connection_limit,
+    heartbeat_connection_lease,
     release_connection_lease,
 )
 from app.services.loadbalancer.state import clear_connection_state
@@ -115,6 +116,7 @@ async def _handle_proxy(
             claim_probe_eligible_fn=claim_probe_eligible,
             clear_connection_state_fn=clear_connection_state,
             filter_response_headers_fn=filter_response_headers,
+            heartbeat_connection_lease_fn=heartbeat_connection_lease,
             log_request_fn=log_request,
             log_usage_request_event_fn=log_final_usage_request_event,
             record_connection_failure_fn=record_connection_failure,

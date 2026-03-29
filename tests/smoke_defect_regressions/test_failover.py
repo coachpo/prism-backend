@@ -65,14 +65,14 @@ class TestLoadbalanceStrategyFieldValidation:
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            LoadbalanceStrategyCreate(
-                name="single-with-recovery",
-                strategy_type="single",
-                auto_recovery=as_auto_recovery(make_auto_recovery_enabled()),
+            LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "single-with-recovery",
+                    "strategy_type": "single",
+                    "auto_recovery": as_auto_recovery(make_auto_recovery_enabled()),
+                }
             )
-        assert "single strategies must not enable failover recovery" in str(
-            exc_info.value
-        )
+        assert "routing_policy" in str(exc_info.value)
 
     def test_config_export_includes_strategy_reference(self):
         from app.schemas.schemas import (
@@ -146,9 +146,9 @@ class TestLoadbalanceStrategyFieldValidation:
         assert all(not field.startswith("failover_") for field in exported)
 
     def test_strategy_contract_accepts_sorted_unique_failover_status_codes(self):
-        from app.schemas.schemas import LoadbalanceStrategyCreate
+        from app.schemas.schemas import ConfigLoadbalanceStrategyImport
 
-        strategy = LoadbalanceStrategyCreate(
+        strategy = ConfigLoadbalanceStrategyImport(
             name="failover-primary",
             strategy_type="failover",
             auto_recovery=as_auto_recovery(
@@ -162,11 +162,11 @@ class TestLoadbalanceStrategyFieldValidation:
         ]
 
     def test_strategy_contract_rejects_out_of_range_failover_status_codes(self):
-        from app.schemas.schemas import LoadbalanceStrategyCreate
+        from app.schemas.schemas import ConfigLoadbalanceStrategyImport
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            LoadbalanceStrategyCreate(
+            ConfigLoadbalanceStrategyImport(
                 name="failover-primary",
                 strategy_type="failover",
                 auto_recovery=as_auto_recovery(
@@ -177,11 +177,11 @@ class TestLoadbalanceStrategyFieldValidation:
         assert "status_codes" in str(exc_info.value)
 
     def test_strategy_contract_rejects_auth_cooldown_field(self):
-        from app.schemas.schemas import LoadbalanceStrategyCreate
+        from app.schemas.schemas import ConfigLoadbalanceStrategyImport
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
-            LoadbalanceStrategyCreate.model_validate(
+            ConfigLoadbalanceStrategyImport.model_validate(
                 {
                     "name": "failover-primary",
                     "strategy_type": "failover",

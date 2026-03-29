@@ -16,6 +16,7 @@ from app.core.database import get_engine
 from app.core.version import get_backend_version
 from app.services.background_tasks import background_task_manager
 from app.services.loadbalancer.limiter import reconcile_all_connection_limits
+from app.services.monitoring_service import MonitoringScheduler
 from app.services.stats.logging import shutdown_dashboard_update_lifecycle
 from app.routers import (
     audit,
@@ -25,6 +26,7 @@ from app.routers import (
     endpoints,
     loadbalance,
     models,
+    monitoring,
     pricing_templates,
     profiles,
     proxy,
@@ -35,7 +37,9 @@ from app.routers import (
 )
 
 DEFAULT_VENDORS = bootstrap.DEFAULT_VENDORS
-DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
+DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = (
+    bootstrap.DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
+)
 SYSTEM_BLOCKLIST_DEFAULTS = bootstrap.SYSTEM_BLOCKLIST_DEFAULTS
 build_auth_error_response = bootstrap.build_auth_error_response
 encrypt_endpoint_secrets = bootstrap.encrypt_endpoint_secrets
@@ -123,6 +127,7 @@ def _create_app(settings: Settings) -> FastAPI:
         endpoints.router,
         connections.router,
         stats.router,
+        monitoring.router,
         audit.router,
         loadbalance.router,
         config.router,
@@ -168,7 +173,9 @@ def main(argv: Sequence[str] | None = None) -> None:
 async def lifespan(app: FastAPI):
     app.state.background_task_manager = None
     app.state.http_client = None
+    app.state.monitoring_scheduler = None
     http_client = None
+    monitoring_scheduler = None
     settings = get_settings()
 
     try:
@@ -179,6 +186,8 @@ async def lifespan(app: FastAPI):
             worker_count=settings.background_task_worker_count
         )
         await background_task_manager.start()
+        monitoring_scheduler = MonitoringScheduler(http_client=http_client)
+        await monitoring_scheduler.start()
     except Exception:
         if http_client is not None:
             await http_client.aclose()
@@ -187,15 +196,19 @@ async def lifespan(app: FastAPI):
 
     app.state.http_client = http_client
     app.state.background_task_manager = background_task_manager
+    app.state.monitoring_scheduler = monitoring_scheduler
 
     try:
         yield
     finally:
         try:
+            if monitoring_scheduler is not None:
+                await monitoring_scheduler.stop()
             await shutdown_dashboard_update_lifecycle()
             await background_task_manager.shutdown()
         finally:
             app.state.background_task_manager = None
+            app.state.monitoring_scheduler = None
             try:
                 if http_client is not None:
                     await http_client.aclose()

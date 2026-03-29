@@ -1,7 +1,7 @@
 # BACKEND ROUTERS KNOWLEDGE BASE
 
 ## OVERVIEW
-`routers/` is the backend API surface. `main.py` mounts the top-level routers here, and the management surface stays thin by handing dense request logic to documented `*_domains/` packages. The main parent-covered exceptions are the standalone routers `audit.py`, `loadbalance.py`, `vendors.py`, and `realtime.py`, while reusable router helpers now have their own `shared/AGENTS.md` leaf.
+`routers/` is the backend API surface. `main.py` mounts the top-level routers here, and the management surface stays thin by handing dense request logic to documented `*_domains/` packages. The main parent-covered exceptions are the standalone routers `audit.py`, `loadbalance.py`, `monitoring.py`, `vendors.py`, and `realtime.py`, while reusable router helpers now have their own `shared/AGENTS.md` leaf.
 
 ## STRUCTURE
 ```
@@ -15,6 +15,7 @@ routers/
 ├── profiles.py + profiles_domains/AGENTS.md             # Profile lifecycle, activation, and invariants handoff
 ├── settings.py + settings_domains/AGENTS.md             # Auth settings, costing, timezone, email verification, proxy keys
 ├── stats.py + stats_domains/AGENTS.md                   # Request logs, summary, throughput, spending, metrics batch APIs
+├── monitoring.py                                        # Monitoring overview, vendor, model, and manual-probe APIs
 ├── proxy.py + proxy_domains/AGENTS.md                   # Runtime `/v1*` and `/v1beta*` proxy execution
 ├── shared/AGENTS.md                                     # Router-layer ordering, endpoint-record, and profile-row helpers
 ├── audit.py                                             # Audit log queries and retention delete responses
@@ -31,6 +32,7 @@ routers/
 - `endpoints_domains/AGENTS.md`, `models_domains/AGENTS.md`, `pricing_templates_domains/AGENTS.md`, `profiles_domains/AGENTS.md`: management CRUD/query leaves.
 - `settings_domains/AGENTS.md`: auth-settings, costing/timezone, email-verification, and proxy-key route handlers.
 - `stats_domains/AGENTS.md`: request-log, summary, throughput, spending, and metrics batch helpers.
+- `monitoring.py`: monitoring overview, vendor drill-down, model detail, and manual-probe routes. Its dense logic lives behind `../services/monitoring_service.py`.
 - `proxy_domains/AGENTS.md`: runtime proxy setup, attempts, streaming, and reporting.
 - `shared/AGENTS.md`: reusable router-layer ordering, endpoint-record, and profile-row helpers.
 - `loadbalance.py`: strategy CRUD plus current-state and event management. Its internals are covered through `../services/loadbalancer/AGENTS.md`.
@@ -43,6 +45,7 @@ routers/
 - Model, pricing template, and profile management: `models.py`, `models_domains/AGENTS.md`, `pricing_templates.py`, `pricing_templates_domains/AGENTS.md`, `profiles.py`, `profiles_domains/AGENTS.md`
 - Settings composition router and subdomains: `settings.py`, `settings_domains/AGENTS.md`
 - Stats request-log, throughput, summary, spending, and metrics batch handlers: `stats.py`, `stats_domains/AGENTS.md`
+- Monitoring overview, vendor drill-down, model detail, and manual probes: `monitoring.py`, `../services/monitoring_service.py`
 - Loadbalance strategy CRUD, current-state reads or resets, and event management: `loadbalance.py`, `../services/loadbalancer/AGENTS.md`
 - Runtime proxy path handling, attempts, streaming, and outcome reporting: `proxy.py`, `proxy_domains/AGENTS.md`
 - Shared router helpers reused across management routes: `shared/AGENTS.md`, `shared/endpoint_records.py`, `shared/ordering.py`, `shared/profile_rows.py`
@@ -53,6 +56,7 @@ routers/
 
 - Route shells stay intentionally thin when a matching domain package exists.
 - `proxy.py` is the runtime entrypoint and is not an `/api` management router.
+- `monitoring.py` is a standalone management router that stays thin by delegating monitoring queries and manual probes to the monitoring service facade.
 - `realtime.py` owns websocket authentication, supported-channel validation, profile existence checks, and subscribe/unsubscribe messages.
 - `realtime.py` delegates connection tracking and room membership to `services/realtime/connection_manager.py`.
 - The management `*_domains/` folders now have leaf AGENTS docs. Parent coverage mainly remains for the standalone routers.

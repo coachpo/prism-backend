@@ -3,6 +3,7 @@ from __future__ import annotations
 # ruff: noqa: F821,F401
 from datetime import datetime
 from typing import Any
+from typing import cast
 
 from sqlalchemy import (
     Boolean,
@@ -40,10 +41,6 @@ class LoadbalanceStrategy(Base):
             "id",
             name="uq_loadbalance_strategies_profile_id_id",
         ),
-        CheckConstraint(
-            "strategy_type IN ('single', 'fill-first', 'round-robin', 'failover')",
-            name="chk_loadbalance_strategies_type",
-        ),
         Index("idx_loadbalance_strategies_profile_id", "profile_id"),
     )
 
@@ -52,13 +49,10 @@ class LoadbalanceStrategy(Base):
         ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    strategy_type: Mapped[str] = mapped_column(
-        String(20), default="single", nullable=False
-    )
-    auto_recovery: Mapped[dict[str, Any]] = mapped_column(
+    routing_policy: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
-        default=lambda: {"mode": "disabled"},
+        default=lambda: {"kind": "adaptive"},
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
@@ -73,6 +67,46 @@ class LoadbalanceStrategy(Base):
         back_populates="loadbalance_strategy",
         overlaps="model_configs,profile",
     )
+
+    @property
+    def strategy_type(self) -> str:
+        legacy_strategy_type = self.routing_policy.get("legacy_strategy_type")
+        if isinstance(legacy_strategy_type, str) and legacy_strategy_type:
+            return legacy_strategy_type
+        return str(self.routing_policy.get("kind", "adaptive"))
+
+    @property
+    def auto_recovery(self) -> dict[str, Any]:
+        legacy_auto_recovery = self.routing_policy.get("legacy_auto_recovery")
+        if isinstance(legacy_auto_recovery, dict):
+            return cast(dict[str, Any], legacy_auto_recovery)
+        circuit_breaker = cast(
+            dict[str, Any], self.routing_policy.get("circuit_breaker", {})
+        )
+        ban_mode = str(circuit_breaker.get("ban_mode", "off"))
+        ban: dict[str, Any] = {"mode": ban_mode}
+        if ban_mode in {"manual", "temporary"}:
+            ban["max_cooldown_strikes_before_ban"] = int(
+                circuit_breaker.get("max_open_strikes_before_ban", 0)
+            )
+        if ban_mode == "temporary":
+            ban["ban_duration_seconds"] = int(
+                circuit_breaker.get("ban_duration_seconds", 0)
+            )
+        return {
+            "mode": "enabled",
+            "status_codes": list(circuit_breaker.get("failure_status_codes", [])),
+            "cooldown": {
+                "base_seconds": int(circuit_breaker.get("base_open_seconds", 0)),
+                "failure_threshold": int(circuit_breaker.get("failure_threshold", 1)),
+                "backoff_multiplier": float(
+                    circuit_breaker.get("backoff_multiplier", 1.0)
+                ),
+                "max_cooldown_seconds": int(circuit_breaker.get("max_open_seconds", 0)),
+                "jitter_ratio": float(circuit_breaker.get("jitter_ratio", 0.0)),
+            },
+            "ban": ban,
+        }
 
 
 class ModelConfig(Base):
@@ -297,6 +331,10 @@ class Connection(Base):
         Index("idx_connections_priority", "priority"),
         Index("idx_connections_profile_id", "profile_id"),
         Index("idx_connections_pricing_template_id", "pricing_template_id"),
+        CheckConstraint(
+            "openai_probe_endpoint_variant IN ('responses', 'chat_completions')",
+            name="ck_connections_openai_probe_endpoint_variant",
+        ),
         Index(
             "idx_connections_profile_model_active_priority",
             "profile_id",
@@ -329,6 +367,11 @@ class Connection(Base):
     custom_headers: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # JSON object of custom HTTP headers
+    openai_probe_endpoint_variant: Mapped[str] = mapped_column(
+        String(30),
+        default="responses",
+        nullable=False,
+    )
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy
