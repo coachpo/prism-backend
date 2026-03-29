@@ -175,7 +175,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openai",
@@ -387,7 +387,7 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 9
+        assert payload["version"] == 1
         assert payload["vendors"] == [
             {
                 "key": "openai",
@@ -634,7 +634,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": "openrouter",
@@ -1073,7 +1073,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": conflict_vendor_key,

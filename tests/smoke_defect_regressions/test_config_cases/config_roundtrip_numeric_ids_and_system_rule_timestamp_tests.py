@@ -136,7 +136,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -333,7 +333,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -518,7 +518,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 9,
+                    "version": 1,
                     "endpoints": [],
                     "vendors": [],
                     "models": [],
@@ -571,7 +571,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -701,7 +701,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": vendor_key,

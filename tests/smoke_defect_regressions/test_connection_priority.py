@@ -499,7 +499,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 9,
+                "version": 1,
                 "vendors": [
                     {
                         "key": vendor.key,
