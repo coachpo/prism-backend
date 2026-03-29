@@ -125,7 +125,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 current_head_revision
             ]
-            assert current_head_revision == "0001_prism_v9_schema_baseline"
+            assert current_head_revision == "0001_prism_v1_schema_baseline"
             for table_name in all_observability_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)

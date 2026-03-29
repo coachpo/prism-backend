@@ -96,13 +96,13 @@ class TestDEF081_ProxyTargetSchemaMigration:
         assert "resolved_target_model_id" in RequestLogResponse.model_fields
 
     @pytest.mark.asyncio
-    async def test_head_migration_creates_proxy_target_table_and_v9_strategy_storage(
+    async def test_head_migration_creates_proxy_target_table_and_v1_strategy_storage(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def081_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_prism_v9_schema_baseline"
+        expected_head_revision = "0001_prism_v1_schema_baseline"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision

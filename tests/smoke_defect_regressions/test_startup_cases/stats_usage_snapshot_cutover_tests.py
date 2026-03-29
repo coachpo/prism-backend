@@ -299,7 +299,7 @@ class TestDEF086_UsageStatisticsStorageCutover:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def086_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_prism_v9_schema_baseline"
+        expected_head_revision = "0001_prism_v1_schema_baseline"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision
