@@ -1,5 +1,6 @@
 import json
 from datetime import datetime
+from typing import Annotated
 from typing import Literal
 
 from pydantic import (
@@ -12,11 +13,9 @@ from pydantic import (
 )
 
 from app.services.loadbalancer.policy import (
-    BanMode,
     normalize_failover_status_codes,
-    normalize_strategy_ban_policy,
     resolve_effective_loadbalance_policy,
-    validate_strategy_ban_policy,
+    serialize_auto_recovery,
 )
 from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
@@ -168,23 +167,77 @@ class ModelConnectionsBatchResponse(BaseModel):
     items: list[ModelConnectionsBatchItem]
 
 
+class AutoRecoveryCooldown(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_seconds: int = Field(ge=0)
+    failure_threshold: int = Field(ge=1, le=10)
+    backoff_multiplier: float = Field(ge=1.0, le=10.0)
+    max_cooldown_seconds: int = Field(ge=1, le=86_400)
+    jitter_ratio: float = Field(ge=0.0, le=1.0)
+
+
+class AutoRecoveryBanOff(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["off"] = "off"
+
+
+class AutoRecoveryBanManual(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["manual"] = "manual"
+    max_cooldown_strikes_before_ban: int = Field(ge=1, le=100)
+
+
+class AutoRecoveryBanTemporary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["temporary"] = "temporary"
+    max_cooldown_strikes_before_ban: int = Field(ge=1, le=100)
+    ban_duration_seconds: int = Field(ge=1, le=86_400)
+
+
+AutoRecoveryBan = Annotated[
+    AutoRecoveryBanOff | AutoRecoveryBanManual | AutoRecoveryBanTemporary,
+    Field(discriminator="mode"),
+]
+
+
+class AutoRecoveryDisabled(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled"] = "disabled"
+
+
+class AutoRecoveryEnabled(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["enabled"] = "enabled"
+    status_codes: list[int] = Field(
+        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
+    )
+    cooldown: AutoRecoveryCooldown
+    ban: AutoRecoveryBan
+
+    @field_validator("status_codes", mode="before")
+    @classmethod
+    def validate_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
+
+
+AutoRecovery = Annotated[
+    AutoRecoveryDisabled | AutoRecoveryEnabled,
+    Field(discriminator="mode"),
+]
+
+
 class LoadbalanceStrategyBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
-    failover_recovery_enabled: bool = False
-    failover_status_codes: list[int] = Field(
-        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
-    )
-    failover_cooldown_seconds: int = Field(default=60, ge=0)
-    failover_failure_threshold: int = Field(default=2, ge=1, le=10)
-    failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
-    failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
-    failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    failover_ban_mode: BanMode = "off"
-    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
-    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
+    auto_recovery: AutoRecovery
 
     @field_validator("name")
     @classmethod
@@ -194,22 +247,10 @@ class LoadbalanceStrategyBase(BaseModel):
             raise ValueError("name must not be empty")
         return normalized
 
-    @field_validator("failover_status_codes", mode="before")
-    @classmethod
-    def validate_failover_status_codes(cls, value: object) -> list[int]:
-        return list(normalize_failover_status_codes(value))
-
     @model_validator(mode="after")
     def validate_strategy_behavior(self):
-        if self.strategy_type == "single" and self.failover_recovery_enabled:
+        if self.strategy_type == "single" and self.auto_recovery.mode != "disabled":
             raise ValueError("single strategies must not enable failover recovery")
-        validate_strategy_ban_policy(
-            strategy_type=self.strategy_type,
-            failover_recovery_enabled=self.failover_recovery_enabled,
-            failover_ban_mode=self.failover_ban_mode,
-            failover_max_cooldown_strikes_before_ban=self.failover_max_cooldown_strikes_before_ban,
-            failover_ban_duration_seconds=self.failover_ban_duration_seconds,
-        )
         return self
 
 
@@ -217,66 +258,14 @@ class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
     pass
 
 
-class LoadbalanceStrategyUpdate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str | None = None
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] | None = (
-        None
-    )
-    failover_recovery_enabled: bool | None = None
-    failover_status_codes: list[int] | None = None
-    failover_cooldown_seconds: int | None = Field(default=None, ge=0)
-    failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
-    failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
-    failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
-    failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
-    failover_ban_mode: BanMode | None = None
-    failover_max_cooldown_strikes_before_ban: int | None = Field(
-        default=None, ge=0, le=100
-    )
-    failover_ban_duration_seconds: int | None = Field(default=None, ge=0, le=86_400)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("name must not be empty")
-        return normalized
-
-    @field_validator("failover_status_codes", mode="before")
-    @classmethod
-    def validate_failover_status_codes(cls, value: object) -> list[int] | None:
-        if value is None:
-            return None
-        return list(normalize_failover_status_codes(value))
-
-    @model_validator(mode="after")
-    def validate_strategy_behavior(self):
-        if self.strategy_type == "single" and self.failover_recovery_enabled:
-            raise ValueError("single strategies must not enable failover recovery")
-        return self
+class LoadbalanceStrategyUpdate(LoadbalanceStrategyBase):
+    pass
 
 
-class LoadbalanceStrategySummary(BaseModel):
+class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    name: str
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
-    failover_recovery_enabled: bool
-    failover_status_codes: list[int]
-    failover_cooldown_seconds: int
-    failover_failure_threshold: int
-    failover_backoff_multiplier: float
-    failover_max_cooldown_seconds: int
-    failover_jitter_ratio: float
-    failover_ban_mode: BanMode
-    failover_max_cooldown_strikes_before_ban: int
-    failover_ban_duration_seconds: int
 
     @model_validator(mode="before")
     @classmethod
@@ -287,27 +276,11 @@ class LoadbalanceStrategySummary(BaseModel):
             return value
 
         policy = resolve_effective_loadbalance_policy(value)
-        ban_mode, ban_strikes, ban_duration = normalize_strategy_ban_policy(
-            strategy_type=policy.strategy_type,
-            failover_recovery_enabled=policy.failover_recovery_enabled,
-            failover_ban_mode=policy.failover_ban_mode,
-            failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
-            failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
-        )
         return {
             "id": getattr(value, "id"),
             "name": getattr(value, "name"),
             "strategy_type": policy.strategy_type,
-            "failover_recovery_enabled": policy.failover_recovery_enabled,
-            "failover_status_codes": list(policy.failover_status_codes),
-            "failover_cooldown_seconds": int(policy.failover_cooldown_seconds),
-            "failover_failure_threshold": policy.failover_failure_threshold,
-            "failover_backoff_multiplier": policy.failover_backoff_multiplier,
-            "failover_max_cooldown_seconds": policy.failover_max_cooldown_seconds,
-            "failover_jitter_ratio": policy.failover_jitter_ratio,
-            "failover_ban_mode": ban_mode,
-            "failover_max_cooldown_strikes_before_ban": ban_strikes,
-            "failover_ban_duration_seconds": ban_duration,
+            "auto_recovery": serialize_auto_recovery(policy),
         }
 
 

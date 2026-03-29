@@ -59,7 +59,11 @@ from app.services.stats_service import (
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
+    make_loadbalance_strategy,
+)
 
 
 class TestConfigExportImportIsolation:
@@ -165,16 +169,19 @@ class TestConfigExportImportIsolation:
 
             target_profile_id = target_profile.id
             other_profile_id = other_profile.id
+            vendor_name = vendor.name
+            vendor_description = vendor.description
+            vendor_icon_key = getattr(vendor, "icon_key", None)
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openai",
-                        "name": "OpenAI",
-                        "description": "OpenAI API (GPT models)",
-                        "icon_key": None,
+                        "name": vendor_name,
+                        "description": vendor_description,
+                        "icon_key": vendor_icon_key,
                         "audit_enabled": False,
                         "audit_capture_bodies": True,
                     }
@@ -279,16 +286,14 @@ class TestConfigExportImportIsolation:
                 id=11,
                 name="fill-first-primary",
                 strategy_type="fill-first",
-                failover_recovery_enabled=True,
-                failover_cooldown_seconds=45,
-                failover_failure_threshold=4,
-                failover_backoff_multiplier=3.5,
-                failover_max_cooldown_seconds=720,
-                failover_jitter_ratio=0.35,
-                failover_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
-                failover_ban_mode="off",
-                failover_max_cooldown_strikes_before_ban=0,
-                failover_ban_duration_seconds=0,
+                auto_recovery=make_auto_recovery_enabled(
+                    status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
+                    base_seconds=45,
+                    failure_threshold=4,
+                    backoff_multiplier=3.5,
+                    max_cooldown_seconds=720,
+                    jitter_ratio=0.35,
+                ),
             ),
             is_enabled=True,
             connections=[
@@ -382,7 +387,7 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 8
+        assert payload["version"] == 9
         assert payload["vendors"] == [
             {
                 "key": "openai",
@@ -398,25 +403,21 @@ class TestConfigExportImportIsolation:
         assert len(payload["models"]) == 2
         strategy_payload = payload["loadbalance_strategies"][0]
         assert strategy_payload["strategy_type"] == "fill-first"
-        assert strategy_payload["failover_recovery_enabled"] is True
-        assert strategy_payload["failover_cooldown_seconds"] == 45
-        assert strategy_payload["failover_failure_threshold"] == 4
-        assert strategy_payload["failover_backoff_multiplier"] == 3.5
-        assert strategy_payload["failover_max_cooldown_seconds"] == 720
-        assert strategy_payload["failover_jitter_ratio"] == 0.35
-        assert strategy_payload["failover_status_codes"] == [
-            403,
-            422,
-            429,
-            500,
-            502,
-            503,
-            504,
-            529,
-        ]
-        assert strategy_payload["failover_ban_mode"] == "off"
-        assert strategy_payload["failover_max_cooldown_strikes_before_ban"] == 0
-        assert strategy_payload["failover_ban_duration_seconds"] == 0
+        assert strategy_payload["auto_recovery"] == {
+            "mode": "enabled",
+            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
+            "cooldown": {
+                "base_seconds": 45,
+                "failure_threshold": 4,
+                "backoff_multiplier": 3.5,
+                "max_cooldown_seconds": 720,
+                "jitter_ratio": 0.35,
+            },
+            "ban": {"mode": "off"},
+        }
+        assert all(
+            not field_name.startswith("failover_") for field_name in strategy_payload
+        )
         exported_connection = payload["models"][0]["connections"][0]
         assert exported_connection["qps_limit"] == 3
         assert exported_connection["max_in_flight_non_stream"] == 5
@@ -633,7 +634,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openrouter",
@@ -656,25 +657,31 @@ class TestConfigExportImportIsolation:
                     {
                         "name": "fill-first-primary",
                         "strategy_type": "fill-first",
-                        "failover_recovery_enabled": True,
-                        "failover_cooldown_seconds": 45,
-                        "failover_failure_threshold": 4,
-                        "failover_backoff_multiplier": 3.5,
-                        "failover_max_cooldown_seconds": 720,
-                        "failover_jitter_ratio": 0.35,
-                        "failover_status_codes": [
-                            403,
-                            422,
-                            429,
-                            500,
-                            502,
-                            503,
-                            504,
-                            529,
-                        ],
-                        "failover_ban_mode": "temporary",
-                        "failover_max_cooldown_strikes_before_ban": 2,
-                        "failover_ban_duration_seconds": 600,
+                        "auto_recovery": {
+                            "mode": "enabled",
+                            "status_codes": [
+                                403,
+                                422,
+                                429,
+                                500,
+                                502,
+                                503,
+                                504,
+                                529,
+                            ],
+                            "cooldown": {
+                                "base_seconds": 45,
+                                "failure_threshold": 4,
+                                "backoff_multiplier": 3.5,
+                                "max_cooldown_seconds": 720,
+                                "jitter_ratio": 0.35,
+                            },
+                            "ban": {
+                                "mode": "temporary",
+                                "max_cooldown_strikes_before_ban": 2,
+                                "ban_duration_seconds": 600,
+                            },
+                        },
                     }
                 ],
                 "models": [
@@ -885,25 +892,22 @@ class TestConfigExportImportIsolation:
 
         assert len(target_strategies) == 1
         assert target_strategies[0].strategy_type == "fill-first"
-        assert target_strategies[0].failover_recovery_enabled is True
-        assert target_strategies[0].failover_cooldown_seconds == 45
-        assert target_strategies[0].failover_failure_threshold == 4
-        assert target_strategies[0].failover_backoff_multiplier == 3.5
-        assert target_strategies[0].failover_max_cooldown_seconds == 720
-        assert target_strategies[0].failover_jitter_ratio == 0.35
-        assert target_strategies[0].failover_status_codes == [
-            403,
-            422,
-            429,
-            500,
-            502,
-            503,
-            504,
-            529,
-        ]
-        assert target_strategies[0].failover_ban_mode == "temporary"
-        assert target_strategies[0].failover_max_cooldown_strikes_before_ban == 2
-        assert target_strategies[0].failover_ban_duration_seconds == 600
+        assert target_strategies[0].auto_recovery == {
+            "mode": "enabled",
+            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
+            "cooldown": {
+                "base_seconds": 45,
+                "failure_threshold": 4,
+                "backoff_multiplier": 3.5,
+                "max_cooldown_seconds": 720,
+                "jitter_ratio": 0.35,
+            },
+            "ban": {
+                "mode": "temporary",
+                "max_cooldown_strikes_before_ban": 2,
+                "ban_duration_seconds": 600,
+            },
+        }
 
         assert len(target_connections) == 1
         assert target_connections[0].name == new_connection_name
@@ -1069,7 +1073,7 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": conflict_vendor_key,
@@ -1092,8 +1096,7 @@ class TestConfigExportImportIsolation:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": {"mode": "disabled"},
                     }
                 ],
                 "models": [

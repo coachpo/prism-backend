@@ -3,12 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.domains.core import ApiFamily, AuthType, _HEADER_TOKEN_RE
-from app.services.loadbalancer.policy import (
-    normalize_failover_status_codes,
-    validate_strategy_ban_policy,
-)
-from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
+from .common import ApiFamily, AuthType, _HEADER_TOKEN_RE
+from .connection_model import LoadbalanceStrategyCreate
 
 # --- Config Export/Import Schemas ---
 
@@ -48,70 +44,12 @@ class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
     pass
 
 
-class ConfigLoadbalanceStrategyExport(BaseModel):
-    name: str
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
-    failover_recovery_enabled: bool = False
-    failover_status_codes: list[int] = Field(
-        default_factory=lambda: list(DEFAULT_FAILOVER_STATUS_CODES)
-    )
-    failover_cooldown_seconds: int = Field(default=60, ge=0)
-    failover_failure_threshold: int = Field(default=2, ge=1, le=10)
-    failover_backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
-    failover_max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
-    failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
-    failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
-    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
-    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
-
-    @field_validator("failover_status_codes", mode="before")
-    @classmethod
-    def validate_failover_status_codes(cls, value: object) -> list[int]:
-        return list(normalize_failover_status_codes(value))
+class ConfigLoadbalanceStrategyExport(LoadbalanceStrategyCreate):
+    pass
 
 
-class ConfigLoadbalanceStrategyImport(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str
-    strategy_type: Literal["single", "fill-first", "round-robin", "failover"] = "single"
-    failover_recovery_enabled: bool = False
-    failover_status_codes: list[int]
-    failover_cooldown_seconds: int | None = Field(default=None, ge=0)
-    failover_failure_threshold: int | None = Field(default=None, ge=1, le=10)
-    failover_backoff_multiplier: float | None = Field(default=None, ge=1.0, le=10.0)
-    failover_max_cooldown_seconds: int | None = Field(default=None, ge=1, le=86_400)
-    failover_jitter_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
-    failover_ban_mode: Literal["off", "temporary", "manual"] = "off"
-    failover_max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
-    failover_ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
-
-    @field_validator("name")
-    @classmethod
-    def validate_name(cls, value: str) -> str:
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("name must not be empty")
-        return normalized
-
-    @field_validator("failover_status_codes", mode="before")
-    @classmethod
-    def validate_failover_status_codes(cls, value: object) -> list[int]:
-        return list(normalize_failover_status_codes(value))
-
-    @field_validator("failover_ban_duration_seconds")
-    @classmethod
-    def validate_ban_policy(cls, value: int, info):
-        validate_strategy_ban_policy(
-            strategy_type=info.data.get("strategy_type", "single"),
-            failover_recovery_enabled=info.data.get("failover_recovery_enabled", False),
-            failover_ban_mode=info.data.get("failover_ban_mode", "off"),
-            failover_max_cooldown_strikes_before_ban=info.data.get(
-                "failover_max_cooldown_strikes_before_ban", 0
-            ),
-            failover_ban_duration_seconds=value,
-        )
-        return value
+class ConfigLoadbalanceStrategyImport(LoadbalanceStrategyCreate):
+    pass
 
 
 class ConfigVendorExport(BaseModel):
@@ -263,7 +201,7 @@ class ConfigUserSettingsImport(BaseModel):
 
 
 class ConfigExportResponse(BaseModel):
-    version: Literal[8] = 8
+    version: Literal[9] = 9
     exported_at: datetime
     vendors: list[ConfigVendorExport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
@@ -279,7 +217,7 @@ class ConfigExportResponse(BaseModel):
 class ConfigImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[8] = 8
+    version: Literal[9] = 9
     exported_at: datetime | None = None
     vendors: list[ConfigVendorImport] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]

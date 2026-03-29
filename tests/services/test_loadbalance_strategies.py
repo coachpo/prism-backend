@@ -10,6 +10,7 @@ from app.models.models import (
     Connection,
     Endpoint,
     LoadbalanceCurrentState,
+    LoadbalanceStrategy,
     ModelConfig,
     Profile,
     Vendor,
@@ -22,7 +23,8 @@ from app.routers.loadbalance import (
 )
 from app.schemas.schemas import LoadbalanceStrategyCreate, LoadbalanceStrategyUpdate
 from tests.loadbalance_strategy_helpers import (
-    DEFAULT_FAILOVER_STATUS_CODES,
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
     make_loadbalance_strategy,
 )
 
@@ -54,93 +56,131 @@ async def _get_or_create_vendor(db, *, api_family: str = "openai"):
     return vendor
 
 
+def _strategy_public_json(strategy) -> dict[str, object]:
+    return strategy.model_dump(mode="json")
+
+
+def _strategy_auto_recovery_public_json(strategy) -> dict[str, object]:
+    return cast(dict[str, object], _strategy_public_json(strategy)["auto_recovery"])
+
+
+def _make_strategy_create(
+    *,
+    name: str,
+    strategy_type: str,
+    auto_recovery: object,
+) -> LoadbalanceStrategyCreate:
+    return LoadbalanceStrategyCreate.model_validate(
+        {
+            "name": name,
+            "strategy_type": strategy_type,
+            "auto_recovery": auto_recovery,
+        }
+    )
+
+
+def _make_strategy_update(
+    *,
+    name: str,
+    strategy_type: str,
+    auto_recovery: object,
+) -> LoadbalanceStrategyUpdate:
+    return LoadbalanceStrategyUpdate.model_validate(
+        {
+            "name": name,
+            "strategy_type": strategy_type,
+            "auto_recovery": auto_recovery,
+        }
+    )
+
+
+def _assert_no_flat_failover_fields(strategy_payload: dict[str, object]) -> None:
+    assert all(
+        not field_name.startswith("failover_") for field_name in strategy_payload
+    )
+
+
 class TestLoadbalanceStrategies:
     @pytest.mark.asyncio
-    async def test_strategy_crud_roundtrip(self):
+    async def test_strategy_crud_roundtrip_uses_nested_auto_recovery_contract(self):
         async with AsyncSessionLocal() as db:
             profile = Profile(name="Strategy CRUD Profile", is_active=False, version=0)
             db.add(profile)
             await db.flush()
 
+            created_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[503, 429],
+                base_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_cooldown_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=3,
+                ban_duration_seconds=600,
+            )
+            updated_auto_recovery = make_auto_recovery_disabled()
+
             created = await create_strategy(
-                body=LoadbalanceStrategyCreate(
+                body=_make_strategy_create(
                     name="failover-primary",
                     strategy_type="failover",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[503, 429],
-                    failover_cooldown_seconds=45,
-                    failover_failure_threshold=4,
-                    failover_backoff_multiplier=3.5,
-                    failover_max_cooldown_seconds=720,
-                    failover_jitter_ratio=0.35,
-                    failover_ban_mode="temporary",
-                    failover_max_cooldown_strikes_before_ban=3,
-                    failover_ban_duration_seconds=600,
+                    auto_recovery=created_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
             )
             await db.commit()
 
+            created_payload = _strategy_public_json(created)
             assert created.name == "failover-primary"
             assert created.strategy_type == "failover"
-            assert created.failover_recovery_enabled is True
-            assert created.failover_cooldown_seconds == 45
-            assert created.failover_failure_threshold == 4
-            assert created.failover_backoff_multiplier == pytest.approx(3.5)
-            assert created.failover_max_cooldown_seconds == 720
-            assert created.failover_jitter_ratio == pytest.approx(0.35)
-            assert created.failover_status_codes == [429, 503]
-            assert created.failover_ban_mode == "temporary"
-            assert created.failover_max_cooldown_strikes_before_ban == 3
-            assert created.failover_ban_duration_seconds == 600
+            assert created_payload["auto_recovery"] == make_auto_recovery_enabled(
+                status_codes=[429, 503],
+                base_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_cooldown_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=3,
+                ban_duration_seconds=600,
+            )
             assert created.attached_model_count == 0
+            _assert_no_flat_failover_fields(created_payload)
 
             listed = await list_strategies(db=db, profile_id=profile.id)
             assert [strategy.name for strategy in listed] == ["failover-primary"]
-            assert listed[0].failover_cooldown_seconds == 45
-            assert listed[0].failover_failure_threshold == 4
-            assert listed[0].failover_backoff_multiplier == pytest.approx(3.5)
-            assert listed[0].failover_max_cooldown_seconds == 720
-            assert listed[0].failover_jitter_ratio == pytest.approx(0.35)
-            assert listed[0].failover_status_codes == [429, 503]
-            assert listed[0].failover_ban_mode == "temporary"
-            assert listed[0].failover_max_cooldown_strikes_before_ban == 3
-            assert listed[0].failover_ban_duration_seconds == 600
+            listed_payload = _strategy_public_json(listed[0])
+            assert listed_payload["auto_recovery"] == created_payload["auto_recovery"]
+            _assert_no_flat_failover_fields(listed_payload)
 
             updated = await update_strategy(
                 strategy_id=created.id,
-                body=LoadbalanceStrategyUpdate(
+                body=_make_strategy_update(
                     name="failover-secondary",
                     strategy_type="failover",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[403, 429, 503],
-                    failover_cooldown_seconds=90,
-                    failover_failure_threshold=5,
-                    failover_backoff_multiplier=4.0,
-                    failover_max_cooldown_seconds=1440,
-                    failover_jitter_ratio=0.5,
-                    failover_ban_mode="manual",
-                    failover_max_cooldown_strikes_before_ban=2,
-                    failover_ban_duration_seconds=0,
+                    auto_recovery=updated_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
             )
             await db.commit()
 
+            persisted_strategy = (
+                await db.execute(
+                    select(LoadbalanceStrategy).where(
+                        LoadbalanceStrategy.id == created.id
+                    )
+                )
+            ).scalar_one()
+
+            updated_payload = _strategy_public_json(updated)
             assert updated.name == "failover-secondary"
             assert updated.strategy_type == "failover"
-            assert updated.failover_recovery_enabled is True
-            assert updated.failover_cooldown_seconds == 90
-            assert updated.failover_failure_threshold == 5
-            assert updated.failover_backoff_multiplier == pytest.approx(4.0)
-            assert updated.failover_max_cooldown_seconds == 1440
-            assert updated.failover_jitter_ratio == pytest.approx(0.5)
-            assert updated.failover_status_codes == [403, 429, 503]
-            assert updated.failover_ban_mode == "manual"
-            assert updated.failover_max_cooldown_strikes_before_ban == 2
-            assert updated.failover_ban_duration_seconds == 0
+            assert updated_payload["auto_recovery"] == updated_auto_recovery
+            assert persisted_strategy.auto_recovery == updated_auto_recovery
+            _assert_no_flat_failover_fields(updated_payload)
 
             deleted = await delete_strategy(
                 strategy_id=created.id,
@@ -162,20 +202,23 @@ class TestLoadbalanceStrategies:
             db.add(profile)
             await db.flush()
 
+            created_auto_recovery = make_auto_recovery_disabled()
+            updated_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[529, 503],
+                base_seconds=90,
+                failure_threshold=5,
+                backoff_multiplier=4.0,
+                max_cooldown_seconds=1440,
+                jitter_ratio=0.5,
+                ban_mode="manual",
+                max_cooldown_strikes_before_ban=2,
+            )
+
             created = await create_strategy(
-                body=LoadbalanceStrategyCreate(
+                body=_make_strategy_create(
                     name="fill-first-primary",
                     strategy_type="fill-first",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[503, 429],
-                    failover_cooldown_seconds=45,
-                    failover_failure_threshold=4,
-                    failover_backoff_multiplier=3.5,
-                    failover_max_cooldown_seconds=720,
-                    failover_jitter_ratio=0.35,
-                    failover_ban_mode="temporary",
-                    failover_max_cooldown_strikes_before_ban=3,
-                    failover_ban_duration_seconds=600,
+                    auto_recovery=created_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -184,38 +227,25 @@ class TestLoadbalanceStrategies:
 
             assert created.name == "fill-first-primary"
             assert created.strategy_type == "fill-first"
-            assert created.failover_recovery_enabled is True
-            assert created.failover_cooldown_seconds == 45
-            assert created.failover_failure_threshold == 4
-            assert created.failover_backoff_multiplier == pytest.approx(3.5)
-            assert created.failover_max_cooldown_seconds == 720
-            assert created.failover_jitter_ratio == pytest.approx(0.35)
-            assert created.failover_status_codes == [429, 503]
-            assert created.failover_ban_mode == "temporary"
-            assert created.failover_max_cooldown_strikes_before_ban == 3
-            assert created.failover_ban_duration_seconds == 600
+            assert (
+                _strategy_public_json(created)["auto_recovery"] == created_auto_recovery
+            )
 
             listed = await list_strategies(db=db, profile_id=profile.id)
 
             assert [strategy.name for strategy in listed] == ["fill-first-primary"]
             assert listed[0].strategy_type == "fill-first"
-            assert listed[0].failover_recovery_enabled is True
+            assert (
+                _strategy_public_json(listed[0])["auto_recovery"]
+                == created_auto_recovery
+            )
 
             updated = await update_strategy(
                 strategy_id=created.id,
-                body=LoadbalanceStrategyUpdate(
+                body=_make_strategy_update(
                     name="fill-first-secondary",
                     strategy_type="fill-first",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[529, 503],
-                    failover_cooldown_seconds=90,
-                    failover_failure_threshold=5,
-                    failover_backoff_multiplier=4.0,
-                    failover_max_cooldown_seconds=1440,
-                    failover_jitter_ratio=0.5,
-                    failover_ban_mode="manual",
-                    failover_max_cooldown_strikes_before_ban=2,
-                    failover_ban_duration_seconds=0,
+                    auto_recovery=updated_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -224,16 +254,18 @@ class TestLoadbalanceStrategies:
 
             assert updated.name == "fill-first-secondary"
             assert updated.strategy_type == "fill-first"
-            assert updated.failover_recovery_enabled is True
-            assert updated.failover_cooldown_seconds == 90
-            assert updated.failover_failure_threshold == 5
-            assert updated.failover_backoff_multiplier == pytest.approx(4.0)
-            assert updated.failover_max_cooldown_seconds == 1440
-            assert updated.failover_jitter_ratio == pytest.approx(0.5)
-            assert updated.failover_status_codes == [503, 529]
-            assert updated.failover_ban_mode == "manual"
-            assert updated.failover_max_cooldown_strikes_before_ban == 2
-            assert updated.failover_ban_duration_seconds == 0
+            assert _strategy_public_json(updated)["auto_recovery"] == (
+                make_auto_recovery_enabled(
+                    status_codes=[503, 529],
+                    base_seconds=90,
+                    failure_threshold=5,
+                    backoff_multiplier=4.0,
+                    max_cooldown_seconds=1440,
+                    jitter_ratio=0.5,
+                    ban_mode="manual",
+                    max_cooldown_strikes_before_ban=2,
+                )
+            )
 
     @pytest.mark.asyncio
     async def test_round_robin_strategy_crud_roundtrip(self):
@@ -246,20 +278,23 @@ class TestLoadbalanceStrategies:
             db.add(profile)
             await db.flush()
 
+            created_auto_recovery = make_auto_recovery_disabled()
+            updated_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[529, 503],
+                base_seconds=90,
+                failure_threshold=5,
+                backoff_multiplier=4.0,
+                max_cooldown_seconds=1440,
+                jitter_ratio=0.5,
+                ban_mode="manual",
+                max_cooldown_strikes_before_ban=2,
+            )
+
             created = await create_strategy(
-                body=LoadbalanceStrategyCreate(
+                body=_make_strategy_create(
                     name="round-robin-primary",
                     strategy_type="round-robin",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[503, 429],
-                    failover_cooldown_seconds=45,
-                    failover_failure_threshold=4,
-                    failover_backoff_multiplier=3.5,
-                    failover_max_cooldown_seconds=720,
-                    failover_jitter_ratio=0.35,
-                    failover_ban_mode="temporary",
-                    failover_max_cooldown_strikes_before_ban=3,
-                    failover_ban_duration_seconds=600,
+                    auto_recovery=created_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -268,29 +303,25 @@ class TestLoadbalanceStrategies:
 
             assert created.name == "round-robin-primary"
             assert created.strategy_type == "round-robin"
-            assert created.failover_recovery_enabled is True
+            assert (
+                _strategy_public_json(created)["auto_recovery"] == created_auto_recovery
+            )
 
             listed = await list_strategies(db=db, profile_id=profile.id)
 
             assert [strategy.name for strategy in listed] == ["round-robin-primary"]
             assert listed[0].strategy_type == "round-robin"
-            assert listed[0].failover_recovery_enabled is True
+            assert (
+                _strategy_public_json(listed[0])["auto_recovery"]
+                == created_auto_recovery
+            )
 
             updated = await update_strategy(
                 strategy_id=created.id,
-                body=LoadbalanceStrategyUpdate(
+                body=_make_strategy_update(
                     name="round-robin-secondary",
                     strategy_type="round-robin",
-                    failover_recovery_enabled=True,
-                    failover_status_codes=[529, 503],
-                    failover_cooldown_seconds=90,
-                    failover_failure_threshold=5,
-                    failover_backoff_multiplier=4.0,
-                    failover_max_cooldown_seconds=1440,
-                    failover_jitter_ratio=0.5,
-                    failover_ban_mode="manual",
-                    failover_max_cooldown_strikes_before_ban=2,
-                    failover_ban_duration_seconds=0,
+                    auto_recovery=updated_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -299,75 +330,103 @@ class TestLoadbalanceStrategies:
 
             assert updated.name == "round-robin-secondary"
             assert updated.strategy_type == "round-robin"
-            assert updated.failover_recovery_enabled is True
+            assert _strategy_public_json(updated)["auto_recovery"] == (
+                make_auto_recovery_enabled(
+                    status_codes=[503, 529],
+                    base_seconds=90,
+                    failure_threshold=5,
+                    backoff_multiplier=4.0,
+                    max_cooldown_seconds=1440,
+                    jitter_ratio=0.5,
+                    ban_mode="manual",
+                    max_cooldown_strikes_before_ban=2,
+                )
+            )
 
     def test_fill_first_strategy_allows_recovery_fields_while_single_still_rejects_them(
         self,
     ):
         with pytest.raises(ValidationError):
-            LoadbalanceStrategyCreate(
+            _ = _make_strategy_create(
                 name="single-with-recovery",
                 strategy_type="single",
-                failover_recovery_enabled=True,
+                auto_recovery=make_auto_recovery_enabled(),
             )
 
-        created = LoadbalanceStrategyCreate(
+        created = _make_strategy_create(
             name="fill-first-with-recovery",
             strategy_type="fill-first",
-            failover_recovery_enabled=True,
-            failover_status_codes=[503, 429],
-            failover_cooldown_seconds=45,
-            failover_failure_threshold=4,
-            failover_backoff_multiplier=3.5,
-            failover_max_cooldown_seconds=720,
-            failover_jitter_ratio=0.35,
-            failover_ban_mode="temporary",
-            failover_max_cooldown_strikes_before_ban=3,
-            failover_ban_duration_seconds=600,
+            auto_recovery=make_auto_recovery_enabled(
+                status_codes=[503, 429],
+                base_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_cooldown_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=3,
+                ban_duration_seconds=600,
+            ),
         )
 
         assert created.strategy_type == "fill-first"
-        assert created.failover_recovery_enabled is True
-        assert created.failover_status_codes == [429, 503]
-        assert created.failover_ban_mode == "temporary"
-        assert created.failover_max_cooldown_strikes_before_ban == 3
-        assert created.failover_ban_duration_seconds == 600
-
-    def test_strategy_contract_sorts_status_codes_and_rejects_invalid_lists(self):
-        created = LoadbalanceStrategyCreate(
-            name="failover-status-codes",
-            strategy_type="failover",
-            failover_recovery_enabled=True,
-            failover_status_codes=[503, 429, 504],
+        assert _strategy_public_json(created)["auto_recovery"] == (
+            make_auto_recovery_enabled(
+                status_codes=[429, 503],
+                base_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_cooldown_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=3,
+                ban_duration_seconds=600,
+            )
         )
 
-        assert created.failover_status_codes == [429, 503, 504]
+    def test_strategy_contract_sorts_status_codes_and_rejects_invalid_lists(self):
+        created = _make_strategy_create(
+            name="failover-status-codes",
+            strategy_type="failover",
+            auto_recovery=make_auto_recovery_enabled(status_codes=[503, 429, 504]),
+        )
+
+        assert _strategy_auto_recovery_public_json(created)["status_codes"] == [
+            429,
+            503,
+            504,
+        ]
 
         with pytest.raises(ValidationError):
-            LoadbalanceStrategyCreate(
+            _ = _make_strategy_create(
                 name="duplicate-status-codes",
                 strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_status_codes=[429, 429],
+                auto_recovery=make_auto_recovery_enabled(status_codes=[429, 429]),
             )
 
         with pytest.raises(ValidationError):
-            LoadbalanceStrategyCreate(
+            _ = _make_strategy_create(
                 name="out-of-range-status-codes",
                 strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_status_codes=[99, 429],
+                auto_recovery=make_auto_recovery_enabled(status_codes=[99, 429]),
             )
 
     def test_strategy_contract_rejects_removed_auth_cooldown_field(self):
+        invalid_auto_recovery = cast(
+            dict[str, object], cast(object, make_auto_recovery_enabled())
+        )
+        cooldown = cast(dict[str, object], invalid_auto_recovery["cooldown"])
+        invalid_auto_recovery["cooldown"] = {
+            **cooldown,
+            "failover_auth_error_cooldown_seconds": 2400,
+        }
+
         with pytest.raises(ValidationError):
-            LoadbalanceStrategyCreate.model_validate(
+            _ = LoadbalanceStrategyCreate.model_validate(
                 {
                     "name": "removed-auth-cooldown",
                     "strategy_type": "failover",
-                    "failover_recovery_enabled": True,
-                    "failover_status_codes": DEFAULT_FAILOVER_STATUS_CODES,
-                    "failover_auth_error_cooldown_seconds": 2400,
+                    "auto_recovery": invalid_auto_recovery,
                 }
             )
 
@@ -420,7 +479,7 @@ class TestLoadbalanceStrategies:
             strategy = make_loadbalance_strategy(
                 profile_id=profile.id,
                 strategy_type="failover",
-                failover_recovery_enabled=True,
+                auto_recovery=make_auto_recovery_enabled(),
                 name="failover-stateful",
             )
             model = ModelConfig(
@@ -466,9 +525,10 @@ class TestLoadbalanceStrategies:
 
             updated = await update_strategy(
                 strategy_id=strategy.id,
-                body=LoadbalanceStrategyUpdate(
+                body=_make_strategy_update(
+                    name=strategy.name,
                     strategy_type="single",
-                    failover_recovery_enabled=False,
+                    auto_recovery=make_auto_recovery_disabled(),
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -503,7 +563,7 @@ class TestLoadbalanceStrategies:
             strategy = make_loadbalance_strategy(
                 profile_id=profile.id,
                 strategy_type="failover",
-                failover_recovery_enabled=True,
+                auto_recovery=make_auto_recovery_enabled(),
                 name="failover-policy-stateful",
             )
             model = ModelConfig(
@@ -547,10 +607,23 @@ class TestLoadbalanceStrategies:
             )
             await db.commit()
 
+            replacement_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[529, 503],
+                base_seconds=120,
+                failure_threshold=5,
+                backoff_multiplier=4.0,
+                max_cooldown_seconds=1440,
+                jitter_ratio=0.5,
+                ban_mode="manual",
+                max_cooldown_strikes_before_ban=2,
+            )
+
             updated = await update_strategy(
                 strategy_id=strategy.id,
-                body=LoadbalanceStrategyUpdate(
-                    failover_cooldown_seconds=120,
+                body=_make_strategy_update(
+                    name=strategy.name,
+                    strategy_type="failover",
+                    auto_recovery=replacement_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -569,7 +642,18 @@ class TestLoadbalanceStrategies:
                 .all()
             )
 
-            assert updated.failover_cooldown_seconds == 120
+            assert _strategy_public_json(updated)["auto_recovery"] == (
+                make_auto_recovery_enabled(
+                    status_codes=[503, 529],
+                    base_seconds=120,
+                    failure_threshold=5,
+                    backoff_multiplier=4.0,
+                    max_cooldown_seconds=1440,
+                    jitter_ratio=0.5,
+                    ban_mode="manual",
+                    max_cooldown_strikes_before_ban=2,
+                )
+            )
             assert state_rows == []
 
     @pytest.mark.asyncio
@@ -589,7 +673,7 @@ class TestLoadbalanceStrategies:
             strategy = make_loadbalance_strategy(
                 profile_id=profile.id,
                 strategy_type="failover",
-                failover_recovery_enabled=True,
+                auto_recovery=make_auto_recovery_enabled(),
                 name="fill-first-stateful",
             )
             model = ModelConfig(
@@ -633,11 +717,23 @@ class TestLoadbalanceStrategies:
             )
             await db.commit()
 
+            replacement_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[529, 503],
+                base_seconds=90,
+                failure_threshold=5,
+                backoff_multiplier=4.0,
+                max_cooldown_seconds=1440,
+                jitter_ratio=0.5,
+                ban_mode="manual",
+                max_cooldown_strikes_before_ban=2,
+            )
+
             updated = await update_strategy(
                 strategy_id=strategy.id,
-                body=LoadbalanceStrategyUpdate(
+                body=_make_strategy_update(
+                    name=strategy.name,
                     strategy_type="fill-first",
-                    failover_recovery_enabled=True,
+                    auto_recovery=replacement_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -657,38 +753,73 @@ class TestLoadbalanceStrategies:
             )
 
             assert updated.strategy_type == "fill-first"
-            assert updated.failover_recovery_enabled is True
+            assert _strategy_public_json(updated)["auto_recovery"] == (
+                make_auto_recovery_enabled(
+                    status_codes=[503, 529],
+                    base_seconds=90,
+                    failure_threshold=5,
+                    backoff_multiplier=4.0,
+                    max_cooldown_seconds=1440,
+                    jitter_ratio=0.5,
+                    ban_mode="manual",
+                    max_cooldown_strikes_before_ban=2,
+                )
+            )
             assert state_rows == []
 
     def test_strategy_ban_policy_validation_rejects_invalid_combinations(self):
-        with pytest.raises(ValueError):
-            LoadbalanceStrategyCreate(
-                name="invalid-ban-off",
-                strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_ban_mode="off",
-                failover_max_cooldown_strikes_before_ban=1,
-                failover_ban_duration_seconds=60,
+        invalid_ban_off = cast(
+            dict[str, object], cast(object, make_auto_recovery_enabled())
+        )
+        invalid_ban_off["ban"] = {
+            "mode": "off",
+            "max_cooldown_strikes_before_ban": 1,
+            "ban_duration_seconds": 60,
+        }
+
+        with pytest.raises(ValidationError):
+            _ = LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "invalid-ban-off",
+                    "strategy_type": "failover",
+                    "auto_recovery": invalid_ban_off,
+                }
             )
 
-        with pytest.raises(ValueError):
-            LoadbalanceStrategyCreate(
-                name="invalid-ban-temporary",
-                strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_ban_mode="temporary",
-                failover_max_cooldown_strikes_before_ban=1,
-                failover_ban_duration_seconds=0,
+        invalid_ban_temporary = cast(
+            dict[str, object], cast(object, make_auto_recovery_enabled())
+        )
+        invalid_ban_temporary["ban"] = {
+            "mode": "temporary",
+            "max_cooldown_strikes_before_ban": 1,
+            "ban_duration_seconds": 0,
+        }
+
+        with pytest.raises(ValidationError):
+            _ = LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "invalid-ban-temporary",
+                    "strategy_type": "failover",
+                    "auto_recovery": invalid_ban_temporary,
+                }
             )
 
-        with pytest.raises(ValueError):
-            LoadbalanceStrategyCreate(
-                name="invalid-ban-manual",
-                strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_ban_mode="manual",
-                failover_max_cooldown_strikes_before_ban=1,
-                failover_ban_duration_seconds=60,
+        invalid_ban_manual = cast(
+            dict[str, object], cast(object, make_auto_recovery_enabled())
+        )
+        invalid_ban_manual["ban"] = {
+            "mode": "manual",
+            "max_cooldown_strikes_before_ban": 1,
+            "ban_duration_seconds": 60,
+        }
+
+        with pytest.raises(ValidationError):
+            _ = LoadbalanceStrategyCreate.model_validate(
+                {
+                    "name": "invalid-ban-manual",
+                    "strategy_type": "failover",
+                    "auto_recovery": invalid_ban_manual,
+                }
             )
 
     @pytest.mark.asyncio
@@ -704,7 +835,7 @@ class TestLoadbalanceStrategies:
             strategy = make_loadbalance_strategy(
                 profile_id=profile.id,
                 strategy_type="failover",
-                failover_recovery_enabled=True,
+                auto_recovery=make_auto_recovery_enabled(),
                 name="failover-ban-policy-stateful",
             )
             model = ModelConfig(
@@ -748,12 +879,24 @@ class TestLoadbalanceStrategies:
             )
             await db.commit()
 
+            replacement_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[529, 503],
+                base_seconds=90,
+                failure_threshold=5,
+                backoff_multiplier=4.0,
+                max_cooldown_seconds=1440,
+                jitter_ratio=0.5,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=2,
+                ban_duration_seconds=600,
+            )
+
             updated = await update_strategy(
                 strategy_id=strategy.id,
-                body=LoadbalanceStrategyUpdate(
-                    failover_ban_mode="temporary",
-                    failover_max_cooldown_strikes_before_ban=2,
-                    failover_ban_duration_seconds=600,
+                body=_make_strategy_update(
+                    name=strategy.name,
+                    strategy_type="failover",
+                    auto_recovery=replacement_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
@@ -772,7 +915,17 @@ class TestLoadbalanceStrategies:
                 .all()
             )
 
-            assert updated.failover_ban_mode == "temporary"
-            assert updated.failover_max_cooldown_strikes_before_ban == 2
-            assert updated.failover_ban_duration_seconds == 600
+            assert _strategy_public_json(updated)["auto_recovery"] == (
+                make_auto_recovery_enabled(
+                    status_codes=[503, 529],
+                    base_seconds=90,
+                    failure_threshold=5,
+                    backoff_multiplier=4.0,
+                    max_cooldown_seconds=1440,
+                    jitter_ratio=0.5,
+                    ban_mode="temporary",
+                    max_cooldown_strikes_before_ban=2,
+                    ban_duration_seconds=600,
+                )
+            )
             assert state_rows == []

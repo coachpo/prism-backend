@@ -1,40 +1,9 @@
 from fastapi import HTTPException
 
 from app.schemas.schemas import ConfigImportRequest
-from app.services.loadbalancer.policy import validate_strategy_ban_policy
 from app.services.proxy_service import normalize_base_url, validate_base_url
 
 VALID_API_FAMILIES = {"openai", "anthropic", "gemini"}
-
-
-def _validate_optional_strategy_policy_fields(*, strategy_name: str, strategy) -> None:
-    if (
-        strategy.failover_cooldown_seconds is not None
-        and strategy.failover_cooldown_seconds < 0
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Loadbalance strategy '{strategy_name}' has invalid "
-                "failover_cooldown_seconds"
-            ),
-        )
-
-    try:
-        validate_strategy_ban_policy(
-            strategy_type=strategy.strategy_type,
-            failover_recovery_enabled=strategy.failover_recovery_enabled,
-            failover_ban_mode=strategy.failover_ban_mode,
-            failover_max_cooldown_strikes_before_ban=(
-                strategy.failover_max_cooldown_strikes_before_ban
-            ),
-            failover_ban_duration_seconds=strategy.failover_ban_duration_seconds,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Loadbalance strategy '{strategy_name}' has invalid ban policy: {exc}",
-        ) from exc
 
 
 def _validate_optional_connection_limiter_fields(*, model_id: str, connection) -> None:
@@ -180,18 +149,6 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 status_code=400,
                 detail=f"Duplicate loadbalance strategy name: '{strategy_name}'",
             )
-        if strategy.strategy_type == "single" and strategy.failover_recovery_enabled:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Loadbalance strategy '{strategy_name}' must not enable recovery "
-                    "when strategy_type='single'"
-                ),
-            )
-        _validate_optional_strategy_policy_fields(
-            strategy_name=strategy_name,
-            strategy=strategy,
-        )
         strategy_names_in_file.add(strategy_name)
 
     seen_model_ids: set[str] = set()

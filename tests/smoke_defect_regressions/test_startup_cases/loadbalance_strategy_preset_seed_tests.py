@@ -50,17 +50,18 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
         assert len(preset_strategies) == 1
         assert preset_strategies[0].profile_id == default_profile.id
         assert preset_strategies[0].strategy_type == "failover"
-        assert preset_strategies[0].failover_recovery_enabled is True
-        assert preset_strategies[0].failover_status_codes == [
-            403,
-            422,
-            429,
-            500,
-            502,
-            503,
-            504,
-            529,
-        ]
+        assert preset_strategies[0].auto_recovery == {
+            "mode": "enabled",
+            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
+            "cooldown": {
+                "base_seconds": 60,
+                "failure_threshold": 2,
+                "backoff_multiplier": 2.0,
+                "max_cooldown_seconds": 900,
+                "jitter_ratio": 0.2,
+            },
+            "ban": {"mode": "off"},
+        }
 
     @pytest.mark.asyncio
     async def test_run_startup_sequence_seeds_preset_after_profile_invariants(self):

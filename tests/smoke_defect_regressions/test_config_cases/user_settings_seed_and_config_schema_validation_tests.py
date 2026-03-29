@@ -8,11 +8,16 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
+from app.schemas.domains.connection_model import AutoRecovery
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
+)
 
 
 class TestDEF031_StartupUserSettingsSeed:
@@ -208,10 +213,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
-    def test_config_export_schema_defaults_to_version_8(self):
+    def test_config_export_schema_defaults_to_version_9(self):
         from app.schemas.schemas import ConfigExportResponse
 
-        assert ConfigExportResponse.model_fields["version"].default == 8
+        assert ConfigExportResponse.model_fields["version"].default == 9
 
     def test_export_schema_includes_top_level_vendors_field(self):
         from app.schemas.schemas import ConfigExportResponse
@@ -252,13 +257,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         expected = {
             "name",
             "strategy_type",
-            "failover_recovery_enabled",
-            "failover_cooldown_seconds",
-            "failover_failure_threshold",
-            "failover_backoff_multiplier",
-            "failover_max_cooldown_seconds",
-            "failover_jitter_ratio",
-            "failover_status_codes",
+            "auto_recovery",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -343,13 +342,20 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 ConfigLoadbalanceStrategyExport(
                     name="failover-primary",
                     strategy_type="failover",
-                    failover_recovery_enabled=True,
-                    failover_cooldown_seconds=45,
-                    failover_failure_threshold=4,
-                    failover_backoff_multiplier=3.5,
-                    failover_max_cooldown_seconds=720,
-                    failover_jitter_ratio=0.35,
-                    failover_status_codes=[503, 429],
+                    auto_recovery=cast(
+                        AutoRecovery,
+                        cast(
+                            object,
+                            make_auto_recovery_enabled(
+                                status_codes=[503, 429],
+                                base_seconds=45,
+                                failure_threshold=4,
+                                backoff_multiplier=3.5,
+                                max_cooldown_seconds=720,
+                                jitter_ratio=0.35,
+                            ),
+                        ),
+                    ),
                 )
             ],
             models=[
@@ -384,12 +390,13 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert m.api_family == "openai"
         assert m.loadbalance_strategy_name == "failover-primary"
         strategy = reimported.loadbalance_strategies[0]
-        assert strategy.failover_cooldown_seconds == 45
-        assert strategy.failover_failure_threshold == 4
-        assert strategy.failover_backoff_multiplier == 3.5
-        assert strategy.failover_max_cooldown_seconds == 720
-        assert strategy.failover_jitter_ratio == 0.35
-        assert strategy.failover_status_codes == [429, 503]
+        assert strategy.auto_recovery.mode == "enabled"
+        assert strategy.auto_recovery.cooldown.base_seconds == 45
+        assert strategy.auto_recovery.cooldown.failure_threshold == 4
+        assert strategy.auto_recovery.cooldown.backoff_multiplier == 3.5
+        assert strategy.auto_recovery.cooldown.max_cooldown_seconds == 720
+        assert strategy.auto_recovery.cooldown.jitter_ratio == 0.35
+        assert strategy.auto_recovery.status_codes == [429, 503]
         assert len(m.connections) == 1
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}
@@ -400,12 +407,12 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert reimported.vendors[0].icon_key == "openai"
         assert "icon_key" not in exported["models"][0]
 
-    def test_version_8_import_schema_accepts_fill_first_strategy(self):
+    def test_version_9_import_schema_accepts_fill_first_strategy(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openai",
@@ -428,16 +435,22 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     {
                         "name": "fill-first-primary",
                         "strategy_type": "fill-first",
-                        "failover_recovery_enabled": True,
-                        "failover_cooldown_seconds": 45,
-                        "failover_failure_threshold": 4,
-                        "failover_backoff_multiplier": 3.5,
-                        "failover_max_cooldown_seconds": 720,
-                        "failover_jitter_ratio": 0.35,
-                        "failover_status_codes": [503, 429],
-                        "failover_ban_mode": "temporary",
-                        "failover_max_cooldown_strikes_before_ban": 3,
-                        "failover_ban_duration_seconds": 600,
+                        "auto_recovery": {
+                            "mode": "enabled",
+                            "status_codes": [503, 429],
+                            "cooldown": {
+                                "base_seconds": 45,
+                                "failure_threshold": 4,
+                                "backoff_multiplier": 3.5,
+                                "max_cooldown_seconds": 720,
+                                "jitter_ratio": 0.35,
+                            },
+                            "ban": {
+                                "mode": "temporary",
+                                "max_cooldown_strikes_before_ban": 3,
+                                "ban_duration_seconds": 600,
+                            },
+                        },
                     }
                 ],
                 "models": [
@@ -455,17 +468,17 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         strategy = validation.loadbalance_strategies[0]
         assert strategy.strategy_type == "fill-first"
-        assert strategy.failover_recovery_enabled is True
-        assert strategy.failover_ban_mode == "temporary"
-        assert strategy.failover_max_cooldown_strikes_before_ban == 3
-        assert strategy.failover_ban_duration_seconds == 600
+        assert strategy.auto_recovery.mode == "enabled"
+        assert strategy.auto_recovery.ban.mode == "temporary"
+        assert strategy.auto_recovery.ban.max_cooldown_strikes_before_ban == 3
+        assert strategy.auto_recovery.ban.ban_duration_seconds == 600
 
     def test_config_import_schema_accepts_nullable_vendor_icon_key(self):
         from app.schemas.schemas import ConfigImportRequest
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openai",
@@ -488,8 +501,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": {"mode": "disabled"},
                     }
                 ],
                 "models": [
@@ -513,7 +525,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         with pytest.raises(ValidationError, match="icon_key"):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 8,
+                    "version": 9,
                     "vendors": [
                         {
                             "key": "openrouter",
@@ -535,8 +547,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         {
                             "name": "single-primary",
                             "strategy_type": "single",
-                            "failover_recovery_enabled": False,
-                            "failover_status_codes": [429, 503],
+                            "auto_recovery": {"mode": "disabled"},
                         }
                     ],
                     "models": [
@@ -555,7 +566,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
     def test_config_import_schema_rejects_legacy_version_7_payloads(self):
         from app.schemas.schemas import ConfigImportRequest
 
-        with pytest.raises(ValidationError, match="8"):
+        with pytest.raises(ValidationError, match="9"):
             ConfigImportRequest.model_validate(
                 {
                     "version": 7,
@@ -581,8 +592,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         {
                             "name": "single-primary",
                             "strategy_type": "single",
-                            "failover_recovery_enabled": False,
-                            "failover_status_codes": [429, 503],
+                            "auto_recovery": {"mode": "disabled"},
                         }
                     ],
                     "models": [
@@ -607,7 +617,7 @@ class TestDEF023_ConfigImportReferenceValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 8,
+                    "version": 9,
                     "vendors": [
                         {
                             "key": "openai",
@@ -632,8 +642,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                         {
                             "name": "single-primary",
                             "strategy_type": "single",
-                            "failover_recovery_enabled": False,
-                            "failover_status_codes": [429, 503],
+                            "auto_recovery": {"mode": "disabled"},
                         }
                     ],
                     "models": [
@@ -672,7 +681,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openai",
@@ -695,8 +704,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": {"mode": "disabled"},
                     }
                 ],
                 "models": [
@@ -736,7 +744,7 @@ class TestDEF023_ConfigImportReferenceValidation:
 
         data = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": "openai",
@@ -759,8 +767,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": {"mode": "disabled"},
                     }
                 ],
                 "models": [

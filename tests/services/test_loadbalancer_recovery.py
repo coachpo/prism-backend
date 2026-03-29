@@ -17,6 +17,8 @@ from app.models.models import (
 )
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
     make_loadbalance_strategy,
 )
 
@@ -135,7 +137,9 @@ async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
 
 
 class TestLoadbalancerRecovery:
-    def test_resolve_effective_loadbalance_policy_preserves_explicit_status_codes(self):
+    def test_resolve_effective_loadbalance_policy_reads_nested_auto_recovery_document(
+        self,
+    ):
         from app.core.config import get_settings
         from app.services.loadbalancer.policy import (
             resolve_effective_loadbalance_policy,
@@ -144,13 +148,7 @@ class TestLoadbalancerRecovery:
         settings = get_settings()
         strategy = SimpleNamespace(
             strategy_type="failover",
-            failover_recovery_enabled=True,
-            failover_cooldown_seconds=None,
-            failover_failure_threshold=None,
-            failover_backoff_multiplier=None,
-            failover_max_cooldown_seconds=None,
-            failover_jitter_ratio=None,
-            failover_status_codes=[503, 429],
+            auto_recovery=make_auto_recovery_enabled(status_codes=[503, 429]),
         )
 
         policy = resolve_effective_loadbalance_policy(strategy)
@@ -169,6 +167,91 @@ class TestLoadbalancerRecovery:
             settings.failover_jitter_ratio
         )
         assert policy.failover_status_codes == (429, 503)
+
+    def test_resolve_effective_loadbalance_policy_disables_recovery_for_disabled_branch(
+        self,
+    ):
+        from app.services.loadbalancer.policy import (
+            resolve_effective_loadbalance_policy,
+        )
+
+        strategy = SimpleNamespace(
+            strategy_type="round-robin",
+            auto_recovery=make_auto_recovery_disabled(),
+        )
+
+        policy = resolve_effective_loadbalance_policy(strategy)
+
+        assert policy.strategy_type == "round-robin"
+        assert policy.failover_recovery_enabled is False
+        assert policy.failover_ban_mode == "off"
+        assert policy.failover_max_cooldown_strikes_before_ban == 0
+        assert policy.failover_ban_duration_seconds == 0
+
+    @pytest.mark.asyncio
+    async def test_record_loadbalance_event_persists_max_cooldown_strike_and_banned(
+        self,
+    ):
+        from app.models.models import LoadbalanceEvent
+        from app.services.audit_service import record_loadbalance_event
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+
+        await record_loadbalance_event(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            event_type="max_cooldown_strike",
+            failure_kind="transient_http",
+            consecutive_failures=3,
+            cooldown_seconds=900.0,
+            blocked_until_mono=1_741_234_567.0,
+            model_id=f"recovery-model-{suffix}",
+            endpoint_id=None,
+            vendor_id=None,
+            failure_threshold=2,
+            backoff_multiplier=2.0,
+            max_cooldown_seconds=900,
+            max_cooldown_strikes=1,
+            ban_mode="off",
+            banned_until_at=None,
+        )
+        await record_loadbalance_event(
+            profile_id=profile_id,
+            connection_id=connection_id,
+            event_type="banned",
+            failure_kind="transient_http",
+            consecutive_failures=3,
+            cooldown_seconds=900.0,
+            blocked_until_mono=1_741_234_568.0,
+            model_id=f"recovery-model-{suffix}",
+            endpoint_id=None,
+            vendor_id=None,
+            failure_threshold=2,
+            backoff_multiplier=2.0,
+            max_cooldown_seconds=900,
+            max_cooldown_strikes=1,
+            ban_mode="temporary",
+            banned_until_at=None,
+        )
+
+        async with AsyncSessionLocal() as session:
+            events = (
+                (
+                    await session.execute(
+                        select(LoadbalanceEvent)
+                        .where(LoadbalanceEvent.profile_id == profile_id)
+                        .order_by(LoadbalanceEvent.id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert [event.event_type for event in events[-2:]] == [
+            "max_cooldown_strike",
+            "banned",
+        ]
 
     def test_compute_base_cooldown_uses_effective_policy_values(self):
         from app.services.loadbalancer.recovery import _compute_base_cooldown

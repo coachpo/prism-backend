@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, ModelConfig, ModelProxyTarget
 
+from .policy import resolve_effective_loadbalance_policy
 from .state import claim_round_robin_cursor_position, get_current_states_for_connections
 from .types import AttemptPlan
 
@@ -221,6 +222,7 @@ async def build_attempt_plan(
         raise ValueError(
             f"Native model {model_config.model_id!r} is missing loadbalance_strategy"
         )
+    policy = resolve_effective_loadbalance_policy(strategy)
 
     active = get_active_connections(model_config)
     if not active:
@@ -235,7 +237,7 @@ async def build_attempt_plan(
             probe_eligible_connection_ids=[],
         )
 
-    if strategy.strategy_type == "single":
+    if policy.strategy_type == "single":
         logger.debug(
             "build_attempt_plan: single strategy profile_id=%d using connection %d",
             profile_id,
@@ -247,10 +249,10 @@ async def build_attempt_plan(
             probe_eligible_connection_ids=[],
         )
 
-    if strategy.strategy_type == "fill-first":
+    if policy.strategy_type == "fill-first":
         ordered_active = list(active)
 
-        if not strategy.failover_recovery_enabled:
+        if not policy.failover_recovery_enabled:
             logger.debug(
                 "build_attempt_plan: fill-first without recovery profile_id=%d trying %d connections",
                 profile_id,
@@ -276,7 +278,7 @@ async def build_attempt_plan(
         )
         return plan
 
-    if strategy.strategy_type == "round-robin":
+    if policy.strategy_type == "round-robin":
         ordered_active = list(active)
         if advance_round_robin and len(ordered_active) > 1:
             cursor_position = await claim_round_robin_cursor_position(
@@ -290,7 +292,7 @@ async def build_attempt_plan(
                 start_index=cursor_position,
             )
 
-        if not strategy.failover_recovery_enabled:
+        if not policy.failover_recovery_enabled:
             logger.debug(
                 "build_attempt_plan: round-robin without recovery profile_id=%d trying %d connections",
                 profile_id,
@@ -318,7 +320,7 @@ async def build_attempt_plan(
 
     ordered_active = sorted(active, key=_failover_sort_key)
 
-    if not strategy.failover_recovery_enabled:
+    if not policy.failover_recovery_enabled:
         logger.debug(
             "build_attempt_plan: failover without recovery profile_id=%d trying %d connections",
             profile_id,

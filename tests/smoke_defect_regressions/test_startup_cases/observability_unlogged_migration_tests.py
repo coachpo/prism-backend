@@ -37,10 +37,6 @@ def _upgrade_database(database_url: str, revision: str) -> None:
     command.upgrade(_build_alembic_config(database_url), revision)
 
 
-def _downgrade_database(database_url: str, revision: str) -> None:
-    command.downgrade(_build_alembic_config(database_url), revision)
-
-
 async def _create_database(database_url: str) -> None:
     admin_url = _database_url_with_name(database_url, "postgres")
     database_name = urlsplit(database_url).path.lstrip("/")
@@ -98,7 +94,7 @@ async def _fetch_current_revision(database_url: str) -> list[str]:
 
 class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
     @pytest.mark.asyncio
-    async def test_upgrade_and_downgrade_flip_observability_tables_between_logged_and_unlogged(
+    async def test_fresh_baseline_upgrade_creates_unlogged_observability_tables(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
@@ -117,46 +113,19 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             *pre_current_state_tables,
             "loadbalance_current_state",
             *limiter_tables,
+            "usage_request_events",
+            "loadbalance_round_robin_state",
         )
         current_head_revision = _get_current_head_revision(migration_database_url)
 
         await _create_database(migration_database_url)
         try:
-            await asyncio.to_thread(
-                _upgrade_database, migration_database_url, "0010_webauthn_challenges"
-            )
-            await asyncio.to_thread(
-                _upgrade_database,
-                migration_database_url,
-                "0011_observability_unlogged",
-            )
-
-            assert len("0011_observability_unlogged") <= 32
-            assert await _fetch_current_revision(migration_database_url) == [
-                "0011_observability_unlogged"
-            ]
-            for table_name in pre_current_state_tables:
-                assert (
-                    await _fetch_table_persistence(migration_database_url, table_name)
-                ) == "u"
-
-            await asyncio.to_thread(
-                _downgrade_database, migration_database_url, "0010_webauthn_challenges"
-            )
-
-            assert await _fetch_current_revision(migration_database_url) == [
-                "0010_webauthn_challenges"
-            ]
-            for table_name in pre_current_state_tables:
-                assert (
-                    await _fetch_table_persistence(migration_database_url, table_name)
-                ) == "p"
-
             await asyncio.to_thread(_upgrade_database, migration_database_url, "head")
 
             assert await _fetch_current_revision(migration_database_url) == [
                 current_head_revision
             ]
+            assert current_head_revision == "0001_prism_v9_schema_baseline"
             for table_name in all_observability_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)

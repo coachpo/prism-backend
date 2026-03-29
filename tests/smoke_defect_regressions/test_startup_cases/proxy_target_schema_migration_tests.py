@@ -96,13 +96,13 @@ class TestDEF081_ProxyTargetSchemaMigration:
         assert "resolved_target_model_id" in RequestLogResponse.model_fields
 
     @pytest.mark.asyncio
-    async def test_head_migration_creates_proxy_target_table_backfills_redirects_and_enforces_db_invariants(
+    async def test_head_migration_creates_proxy_target_table_and_v9_strategy_storage(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def081_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0024_usage_request_events"
+        expected_head_revision = "0001_prism_v9_schema_baseline"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision
@@ -110,48 +110,6 @@ class TestDEF081_ProxyTargetSchemaMigration:
 
         await _create_database(migration_database_url)
         try:
-            await asyncio.to_thread(
-                _upgrade_database,
-                migration_database_url,
-                "0017_loadbalance_ban_escalation",
-            )
-
-            engine = create_async_engine(migration_database_url)
-            legacy_provider_type = "provider" + "_type"
-            async with engine.begin() as conn:
-                await conn.execute(
-                    text(
-                        f"INSERT INTO providers (id, name, {legacy_provider_type}, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES "
-                        "(1, 'OpenAI', 'openai', NULL, false, true, NOW(), NOW()), "
-                        "(2, 'Anthropic', 'anthropic', NULL, false, true, NOW(), NOW())"
-                    )
-                )
-                await conn.execute(
-                    text(
-                        "INSERT INTO profiles (id, name, description, is_active, version, is_default, is_editable, deleted_at, created_at, updated_at) VALUES "
-                        "(1, 'Default', NULL, true, 0, true, true, NULL, NOW(), NOW()), "
-                        "(2, 'Other', NULL, false, 0, false, true, NULL, NOW(), NOW())"
-                    )
-                )
-                await conn.execute(
-                    text(
-                        "INSERT INTO loadbalance_strategies (id, profile_id, name, strategy_type, failover_recovery_enabled, failover_ban_mode, failover_max_cooldown_strikes_before_ban, failover_ban_duration_seconds, created_at, updated_at) VALUES "
-                        "(1, 1, 'single-primary', 'single', false, 'off', 0, 0, NOW(), NOW()), "
-                        "(2, 2, 'single-other', 'single', false, 'off', 0, 0, NOW(), NOW())"
-                    )
-                )
-                await conn.execute(
-                    text(
-                        "INSERT INTO model_configs (id, profile_id, provider_id, model_id, display_name, model_type, redirect_to, loadbalance_strategy_id, is_enabled, created_at, updated_at) VALUES "
-                        "(10, 1, 1, 'native-a', NULL, 'native', NULL, 1, true, NOW(), NOW()), "
-                        "(11, 1, 1, 'proxy-a', NULL, 'proxy', 'native-a', NULL, true, NOW(), NOW()), "
-                        "(12, 1, 1, 'proxy-target', NULL, 'proxy', NULL, NULL, true, NOW(), NOW()), "
-                        "(13, 1, 2, 'native-b', NULL, 'native', NULL, 1, true, NOW(), NOW()), "
-                        "(14, 2, 1, 'native-c', NULL, 'native', NULL, 2, true, NOW(), NOW())"
-                    )
-                )
-            await engine.dispose()
-
             await asyncio.to_thread(_upgrade_database, migration_database_url, "head")
 
             engine = create_async_engine(migration_database_url)
@@ -179,42 +137,26 @@ class TestDEF081_ProxyTargetSchemaMigration:
                         )
                     )
                 ).scalar_one_or_none()
-                backfilled_rows = (
+                auto_recovery_column = (
                     await conn.execute(
                         text(
-                            "SELECT source_model_config_id, target_model_config_id, position FROM model_proxy_targets ORDER BY source_model_config_id, position"
+                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'auto_recovery'"
                         )
                     )
-                ).all()
+                ).scalar_one_or_none()
+                legacy_recovery_column = (
+                    await conn.execute(
+                        text(
+                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'failover_recovery_enabled'"
+                        )
+                    )
+                ).scalar_one_or_none()
 
                 assert proxy_targets_table == "model_proxy_targets"
                 assert resolved_target_column == "resolved_target_model_id"
                 assert redirect_to_column is None
-                assert backfilled_rows == [(11, 10, 0)]
-
-                with pytest.raises(Exception):
-                    await conn.execute(
-                        text(
-                            "INSERT INTO model_proxy_targets (source_model_config_id, target_model_config_id, position) VALUES (11, 12, 1)"
-                        )
-                    )
-                await conn.rollback()
-
-                with pytest.raises(Exception):
-                    await conn.execute(
-                        text(
-                            "INSERT INTO model_proxy_targets (source_model_config_id, target_model_config_id, position) VALUES (11, 13, 1)"
-                        )
-                    )
-                await conn.rollback()
-
-                with pytest.raises(Exception):
-                    await conn.execute(
-                        text(
-                            "INSERT INTO model_proxy_targets (source_model_config_id, target_model_config_id, position) VALUES (11, 14, 1)"
-                        )
-                    )
-                await conn.rollback()
+                assert auto_recovery_column == "auto_recovery"
+                assert legacy_recovery_column is None
             await engine.dispose()
         finally:
             await _drop_database(migration_database_url)

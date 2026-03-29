@@ -511,7 +511,7 @@ class LoadbalanceEvent(Base):
         Index("idx_loadbalance_events_connection", "connection_id", "created_at"),
         Index("idx_loadbalance_events_event_type", "event_type"),
         CheckConstraint(
-            "event_type IN ('opened', 'extended', 'probe_eligible', 'recovered', 'not_opened')",
+            "event_type IN ('opened', 'extended', 'max_cooldown_strike', 'banned', 'probe_eligible', 'recovered', 'not_opened')",
             name="chk_event_type",
         ),
         CheckConstraint(

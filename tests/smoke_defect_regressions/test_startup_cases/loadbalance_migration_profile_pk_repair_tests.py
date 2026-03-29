@@ -55,44 +55,9 @@ async def _drop_database(database_url: str) -> None:
     await engine.dispose()
 
 
-async def _seed_drifted_pre_0008_schema(database_url: str) -> None:
-    engine = create_async_engine(database_url)
-    legacy_provider_type = "provider" + "_type"
-    async with engine.begin() as conn:
-        await conn.execute(
-            text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)")
-        )
-        await conn.execute(
-            text(
-                "INSERT INTO alembic_version (version_num) VALUES ('0007_refresh_session_duration')"
-            )
-        )
-        await conn.execute(
-            text(
-                f"CREATE TABLE providers (id INTEGER, name VARCHAR(100), {legacy_provider_type} VARCHAR(50), description TEXT, audit_enabled BOOLEAN, audit_capture_bodies BOOLEAN, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE)"
-            )
-        )
-        await conn.execute(
-            text(
-                f"INSERT INTO providers (id, name, {legacy_provider_type}, description, audit_enabled, audit_capture_bodies, created_at, updated_at) VALUES (1, 'openai', 'openai', NULL, false, true, NOW(), NOW())"
-            )
-        )
-        await conn.execute(
-            text(
-                "CREATE TABLE profiles (id INTEGER, name VARCHAR(200), description TEXT, is_active BOOLEAN, version INTEGER, is_default BOOLEAN, is_editable BOOLEAN, deleted_at TIMESTAMP WITH TIME ZONE, created_at TIMESTAMP WITH TIME ZONE, updated_at TIMESTAMP WITH TIME ZONE)"
-            )
-        )
-        await conn.execute(
-            text(
-                "INSERT INTO profiles (id, name, description, is_active, version, is_default, is_editable, deleted_at, created_at, updated_at) VALUES (1, 'Default', 'System default profile', true, 1, true, true, NULL, NOW(), NOW())"
-            )
-        )
-    await engine.dispose()
-
-
 class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
     @pytest.mark.asyncio
-    async def test_upgrade_repairs_profiles_and_providers_before_creating_loadbalance_events(
+    async def test_fresh_baseline_upgrade_creates_profile_vendor_primary_keys_and_v9_strategy_storage(
         self, test_database_url: str
     ):
         drift_database_url = _database_url_with_name(
@@ -101,10 +66,7 @@ class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
 
         await _create_database(drift_database_url)
         try:
-            await _seed_drifted_pre_0008_schema(drift_database_url)
-            await asyncio.to_thread(
-                _upgrade_database, drift_database_url, "0008_loadbalance_events"
-            )
+            await asyncio.to_thread(_upgrade_database, drift_database_url, "head")
 
             engine = create_async_engine(drift_database_url)
             async with engine.connect() as conn:
@@ -128,11 +90,11 @@ class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
                     .scalars()
                     .all()
                 )
-                providers_pk = (
+                vendors_pk = (
                     (
                         await conn.execute(
                             text(
-                                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'providers'::regclass AND contype = 'p'"
+                                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'vendors'::regclass AND contype = 'p'"
                             )
                         )
                     )
@@ -144,11 +106,24 @@ class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
                         text("SELECT to_regclass('public.loadbalance_events')")
                     )
                 ).scalar_one()
+                strategy_columns = set(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies'"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
             await engine.dispose()
 
-            assert version == ["0008_loadbalance_events"]
+            assert version == ["0001_prism_v9_schema_baseline"]
             assert profiles_pk == ["PRIMARY KEY (id)"]
-            assert providers_pk == ["PRIMARY KEY (id)"]
+            assert vendors_pk == ["PRIMARY KEY (id)"]
             assert loadbalance_table == "loadbalance_events"
+            assert "auto_recovery" in strategy_columns
+            assert "failover_recovery_enabled" not in strategy_columns
         finally:
             await _drop_database(drift_database_url)

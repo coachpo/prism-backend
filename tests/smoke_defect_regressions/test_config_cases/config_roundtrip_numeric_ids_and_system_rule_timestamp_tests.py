@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from tests.loadbalance_strategy_helpers import make_auto_recovery_disabled
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
@@ -135,7 +136,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -158,8 +159,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": make_auto_recovery_disabled(),
                     }
                 ],
                 "models": [
@@ -333,7 +333,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -361,8 +361,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": make_auto_recovery_disabled(),
                     }
                 ],
                 "models": [
@@ -519,7 +518,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 8,
+                    "version": 9,
                     "endpoints": [],
                     "vendors": [],
                     "models": [],
@@ -572,7 +571,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": vendor_key,
@@ -589,8 +588,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                     {
                         "name": "single-primary",
                         "strategy_type": "single",
-                        "failover_recovery_enabled": False,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": make_auto_recovery_disabled(),
                     }
                 ],
                 "models": [
@@ -703,7 +701,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": vendor_key,

@@ -18,6 +18,7 @@ from app.models.models import (
     UserSetting,
     Vendor,
 )
+from app.services.loadbalancer.policy import canonicalize_auto_recovery_document
 from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 from app.services.profile_invariants import ensure_profile_invariants
 
@@ -151,16 +152,21 @@ async def seed_loadbalance_strategy_preset() -> None:
                 profile_id=default_profile.id,
                 name=DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
                 strategy_type="failover",
-                failover_recovery_enabled=True,
-                failover_status_codes=list(DEFAULT_FAILOVER_STATUS_CODES),
-                failover_cooldown_seconds=settings.failover_cooldown_seconds,
-                failover_failure_threshold=settings.failover_failure_threshold,
-                failover_backoff_multiplier=settings.failover_backoff_multiplier,
-                failover_max_cooldown_seconds=settings.failover_max_cooldown_seconds,
-                failover_jitter_ratio=settings.failover_jitter_ratio,
-                failover_ban_mode="off",
-                failover_max_cooldown_strikes_before_ban=0,
-                failover_ban_duration_seconds=0,
+                auto_recovery=canonicalize_auto_recovery_document(
+                    strategy_type="failover",
+                    auto_recovery={
+                        "mode": "enabled",
+                        "status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),
+                        "cooldown": {
+                            "base_seconds": settings.failover_cooldown_seconds,
+                            "failure_threshold": settings.failover_failure_threshold,
+                            "backoff_multiplier": settings.failover_backoff_multiplier,
+                            "max_cooldown_seconds": settings.failover_max_cooldown_seconds,
+                            "jitter_ratio": settings.failover_jitter_ratio,
+                        },
+                        "ban": {"mode": "off"},
+                    },
+                ),
             )
         )
         await session.commit()

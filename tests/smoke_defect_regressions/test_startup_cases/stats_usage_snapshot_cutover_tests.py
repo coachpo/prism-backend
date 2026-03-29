@@ -299,7 +299,7 @@ class TestDEF086_UsageStatisticsStorageCutover:
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def086_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0025_vendor_icon_key"
+        expected_head_revision = "0001_prism_v9_schema_baseline"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision
@@ -307,12 +307,6 @@ class TestDEF086_UsageStatisticsStorageCutover:
 
         await _create_database(migration_database_url)
         try:
-            await asyncio.to_thread(
-                _upgrade_database,
-                migration_database_url,
-                "0023_lb_failover_status_codes",
-            )
-
             await asyncio.to_thread(_upgrade_database, migration_database_url, "head")
 
             assert await _fetch_current_revision(migration_database_url) == [
@@ -325,10 +319,15 @@ class TestDEF086_UsageStatisticsStorageCutover:
             usage_request_event_columns = await _fetch_table_columns(
                 migration_database_url, "usage_request_events"
             )
+            strategy_columns = await _fetch_table_columns(
+                migration_database_url, "loadbalance_strategies"
+            )
 
             assert "proxy_api_key_id" in request_log_columns
             assert "proxy_api_key_name_snapshot" in request_log_columns
             assert usage_request_event_columns
+            assert "auto_recovery" in strategy_columns
+            assert "failover_recovery_enabled" not in strategy_columns
             assert (
                 await _fetch_table_persistence(
                     migration_database_url, "usage_request_events"

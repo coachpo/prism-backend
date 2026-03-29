@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Literal, cast
-
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,17 +12,12 @@ from app.schemas.schemas import (
     LoadbalanceStrategyUpdate,
 )
 
-from .policy import resolve_effective_loadbalance_policy
-from .policy import normalize_strategy_ban_policy, validate_strategy_ban_policy
+from .policy import (
+    canonicalize_auto_recovery_document,
+    resolve_effective_loadbalance_policy,
+)
+from .policy import serialize_auto_recovery
 from .state import clear_strategy_state
-
-
-def _validate_strategy_behavior(*, strategy_type: str, recovery_enabled: bool) -> None:
-    if strategy_type == "single" and recovery_enabled:
-        raise HTTPException(
-            status_code=400,
-            detail="single strategies must not enable failover recovery",
-        )
 
 
 async def _ensure_unique_strategy_name(
@@ -67,25 +60,19 @@ def _build_strategy_response(
     *,
     attached_model_count: int,
 ) -> LoadbalanceStrategyResponse:
-    policy = resolve_effective_loadbalance_policy(strategy)
-    return LoadbalanceStrategyResponse(
-        id=strategy.id,
-        profile_id=strategy.profile_id,
-        name=strategy.name,
-        strategy_type=policy.strategy_type,
-        failover_recovery_enabled=policy.failover_recovery_enabled,
-        failover_status_codes=list(policy.failover_status_codes),
-        failover_cooldown_seconds=int(policy.failover_cooldown_seconds),
-        failover_failure_threshold=policy.failover_failure_threshold,
-        failover_backoff_multiplier=policy.failover_backoff_multiplier,
-        failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
-        failover_jitter_ratio=policy.failover_jitter_ratio,
-        failover_ban_mode=policy.failover_ban_mode,
-        failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
-        failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
-        attached_model_count=attached_model_count,
-        created_at=strategy.created_at,
-        updated_at=strategy.updated_at,
+    return LoadbalanceStrategyResponse.model_validate(
+        {
+            "id": strategy.id,
+            "profile_id": strategy.profile_id,
+            "name": strategy.name,
+            "strategy_type": strategy.strategy_type,
+            "auto_recovery": serialize_auto_recovery(
+                resolve_effective_loadbalance_policy(strategy)
+            ),
+            "attached_model_count": attached_model_count,
+            "created_at": strategy.created_at,
+            "updated_at": strategy.updated_at,
+        }
     )
 
 
@@ -120,43 +107,15 @@ async def create_loadbalance_strategy(
     body: LoadbalanceStrategyCreate,
 ) -> LoadbalanceStrategyResponse:
     await _ensure_unique_strategy_name(db, profile_id=profile_id, name=body.name)
-    _validate_strategy_behavior(
-        strategy_type=body.strategy_type,
-        recovery_enabled=body.failover_recovery_enabled,
-    )
-    validate_strategy_ban_policy(
-        strategy_type=body.strategy_type,
-        failover_recovery_enabled=body.failover_recovery_enabled,
-        failover_ban_mode=body.failover_ban_mode,
-        failover_max_cooldown_strikes_before_ban=body.failover_max_cooldown_strikes_before_ban,
-        failover_ban_duration_seconds=body.failover_ban_duration_seconds,
-    )
-    (
-        failover_ban_mode,
-        failover_max_cooldown_strikes_before_ban,
-        failover_ban_duration_seconds,
-    ) = normalize_strategy_ban_policy(
-        strategy_type=body.strategy_type,
-        failover_recovery_enabled=body.failover_recovery_enabled,
-        failover_ban_mode=body.failover_ban_mode,
-        failover_max_cooldown_strikes_before_ban=body.failover_max_cooldown_strikes_before_ban,
-        failover_ban_duration_seconds=body.failover_ban_duration_seconds,
-    )
 
     strategy = LoadbalanceStrategy(
         profile_id=profile_id,
         name=body.name,
         strategy_type=body.strategy_type,
-        failover_recovery_enabled=body.failover_recovery_enabled,
-        failover_cooldown_seconds=body.failover_cooldown_seconds,
-        failover_failure_threshold=body.failover_failure_threshold,
-        failover_backoff_multiplier=body.failover_backoff_multiplier,
-        failover_max_cooldown_seconds=body.failover_max_cooldown_seconds,
-        failover_jitter_ratio=body.failover_jitter_ratio,
-        failover_status_codes=body.failover_status_codes,
-        failover_ban_mode=failover_ban_mode,
-        failover_max_cooldown_strikes_before_ban=failover_max_cooldown_strikes_before_ban,
-        failover_ban_duration_seconds=failover_ban_duration_seconds,
+        auto_recovery=canonicalize_auto_recovery_document(
+            strategy_type=body.strategy_type,
+            auto_recovery=body.auto_recovery,
+        ),
     )
     db.add(strategy)
     await db.flush()
@@ -217,99 +176,28 @@ async def update_loadbalance_strategy(
     )
     current_policy = resolve_effective_loadbalance_policy(strategy)
 
-    update_data: dict[str, object] = body.model_dump(exclude_unset=True)
-    next_name = cast(str, update_data.get("name", strategy.name))
-    next_strategy_type = cast(
-        str, update_data.get("strategy_type", strategy.strategy_type)
-    )
-    next_recovery_enabled = (
-        False
-        if next_strategy_type == "single"
-        else cast(
-            bool,
-            update_data.get(
-                "failover_recovery_enabled", strategy.failover_recovery_enabled
-            ),
-        )
-    )
-    next_ban_mode = cast(
-        str,
-        update_data.get("failover_ban_mode", current_policy.failover_ban_mode),
-    )
-    next_ban_strikes = cast(
-        int,
-        update_data.get(
-            "failover_max_cooldown_strikes_before_ban",
-            current_policy.failover_max_cooldown_strikes_before_ban,
-        ),
-    )
-    next_ban_duration = cast(
-        int,
-        update_data.get(
-            "failover_ban_duration_seconds",
-            current_policy.failover_ban_duration_seconds,
-        ),
-    )
-
-    if next_name != strategy.name:
+    if body.name != strategy.name:
         await _ensure_unique_strategy_name(
             db,
             profile_id=profile_id,
-            name=next_name,
+            name=body.name,
             exclude_id=strategy.id,
         )
 
-    _validate_strategy_behavior(
-        strategy_type=next_strategy_type,
-        recovery_enabled=next_recovery_enabled,
+    strategy.name = body.name
+    strategy.strategy_type = body.strategy_type
+    strategy.auto_recovery = canonicalize_auto_recovery_document(
+        strategy_type=body.strategy_type,
+        auto_recovery=body.auto_recovery,
     )
-    validate_strategy_ban_policy(
-        strategy_type=cast(
-            Literal["single", "fill-first", "round-robin", "failover"],
-            next_strategy_type,
-        ),
-        failover_recovery_enabled=next_recovery_enabled,
-        failover_ban_mode=cast(Literal["off", "temporary", "manual"], next_ban_mode),
-        failover_max_cooldown_strikes_before_ban=next_ban_strikes,
-        failover_ban_duration_seconds=next_ban_duration,
-    )
-    if next_strategy_type == "single" and (
-        "strategy_type" in update_data
-        or "failover_recovery_enabled" in update_data
-        or strategy.failover_recovery_enabled
-    ):
-        update_data["failover_recovery_enabled"] = False
-
-    if update_data:
-        (
-            update_data["failover_ban_mode"],
-            update_data["failover_max_cooldown_strikes_before_ban"],
-            update_data["failover_ban_duration_seconds"],
-        ) = normalize_strategy_ban_policy(
-            strategy_type=cast(
-                Literal["single", "fill-first", "round-robin", "failover"],
-                next_strategy_type,
-            ),
-            failover_recovery_enabled=next_recovery_enabled,
-            failover_ban_mode=cast(
-                Literal["off", "temporary", "manual"], next_ban_mode
-            ),
-            failover_max_cooldown_strikes_before_ban=next_ban_strikes,
-            failover_ban_duration_seconds=next_ban_duration,
-        )
-
-    for key, value in update_data.items():
-        setattr(strategy, key, value)
-
-    if update_data:
-        strategy.updated_at = utc_now()
+    strategy.updated_at = utc_now()
 
     await db.flush()
     await db.refresh(strategy)
     updated_policy = resolve_effective_loadbalance_policy(strategy)
 
     if current_policy != updated_policy:
-        await clear_strategy_state(profile_id, strategy.id)
+        _ = await clear_strategy_state(profile_id, strategy.id)
 
     attached_model_count = await _count_attached_models(
         db,

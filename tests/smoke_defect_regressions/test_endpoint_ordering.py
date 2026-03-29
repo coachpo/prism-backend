@@ -223,7 +223,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         ordered_import = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [],
                 "endpoints": [
                     {
@@ -259,7 +259,7 @@ async def test_endpoint_position_export_import_and_profile_isolation():
 
         legacy_import = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [],
                 "endpoints": [
                     {

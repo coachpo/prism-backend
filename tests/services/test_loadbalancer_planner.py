@@ -16,7 +16,11 @@ from app.models.models import (
     Vendor,
 )
 
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
+    make_loadbalance_strategy,
+)
 
 
 def _vendor_key_for_api_family(api_family: str) -> str:
@@ -179,7 +183,7 @@ class TestLoadbalancerPlanner:
                     ],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="fill-first",
-                        failover_recovery_enabled=False,
+                        auto_recovery=make_auto_recovery_disabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,
@@ -198,7 +202,7 @@ class TestLoadbalancerPlanner:
                     ],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="failover",
-                        failover_recovery_enabled=False,
+                        auto_recovery=make_auto_recovery_disabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,
@@ -271,7 +275,7 @@ class TestLoadbalancerPlanner:
                     connections=[tertiary, primary, secondary],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="round-robin",
-                        failover_recovery_enabled=False,
+                        auto_recovery=make_auto_recovery_disabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,
@@ -597,7 +601,7 @@ class TestLoadbalancerPlanner:
                     ],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="fill-first",
-                        failover_recovery_enabled=True,
+                        auto_recovery=make_auto_recovery_enabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,
@@ -800,7 +804,7 @@ class TestLoadbalancerPlanner:
                     connections=[tertiary, primary, secondary],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="round-robin",
-                        failover_recovery_enabled=False,
+                        auto_recovery=make_auto_recovery_disabled(),
                     ),
                     vendor_id=1,
                 ),
@@ -862,7 +866,7 @@ class TestLoadbalancerPlanner:
                     connections=[connection],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="failover",
-                        failover_recovery_enabled=True,
+                        auto_recovery=make_auto_recovery_enabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,
@@ -914,7 +918,7 @@ class TestLoadbalancerPlanner:
                     connections=[connection],
                     loadbalance_strategy=SimpleNamespace(
                         strategy_type="failover",
-                        failover_recovery_enabled=True,
+                        auto_recovery=make_auto_recovery_enabled(),
                     ),
                     model_id="gpt-4o-mini",
                     vendor_id=1,

@@ -1,12 +1,14 @@
 import asyncio
-import importlib.util
 import json
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
-from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
+    make_loadbalance_strategy,
+)
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select, text
@@ -497,7 +499,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 8,
+                "version": 9,
                 "vendors": [
                     {
                         "key": vendor.key,
@@ -530,8 +532,9 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
                     {
                         "name": "failover-primary",
                         "strategy_type": "failover",
-                        "failover_recovery_enabled": True,
-                        "failover_status_codes": [429, 503],
+                        "auto_recovery": make_auto_recovery_enabled(
+                            status_codes=[429, 503]
+                        ),
                     }
                 ],
                 "models": [
@@ -582,29 +585,15 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
 
 @pytest.mark.asyncio
-async def test_connection_priority_migration_normalizes_existing_rows(
-    monkeypatch: pytest.MonkeyPatch,
-):
+async def test_connection_priority_migration_normalizes_existing_rows():
     from app.core.database import AsyncSessionLocal, get_engine
     from app.models.models import Connection, Endpoint, ModelConfig, Profile
+    from app.routers.connections import move_connection_priority
+    from app.schemas.schemas import ConnectionPriorityMoveRequest
 
     await get_engine().dispose()
 
     suffix = _unique_suffix()
-    migration_path = (
-        Path(__file__).resolve().parents[2]
-        / "app"
-        / "alembic"
-        / "versions"
-        / "0005_connection_priority_normalization.py"
-    )
-    spec = importlib.util.spec_from_file_location(
-        "prism_conn_priority_migration", migration_path
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError("Unable to load connection priority migration module")
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
 
     async with AsyncSessionLocal() as db:
         vendor = await _get_or_create_vendor(db)
@@ -658,15 +647,6 @@ async def test_connection_priority_migration_normalizes_existing_rows(
             )
         await db.flush()
 
-        async def run_upgrade() -> None:
-            def apply_upgrade(sync_session):
-                monkeypatch.setattr(migration.op, "execute", sync_session.execute)
-                migration.upgrade()
-
-            await db.run_sync(apply_upgrade)
-
-        await run_upgrade()
-
         normalized = (
             (
                 await db.execute(
@@ -679,4 +659,14 @@ async def test_connection_priority_migration_normalizes_existing_rows(
             .all()
         )
 
-        assert [connection.priority for connection in normalized] == [0, 1, 2]
+        assert [connection.priority for connection in normalized] == [7, 7, 99]
+
+        reordered = await move_connection_priority(
+            model_config_id=model.id,
+            connection_id=normalized[1].id,
+            body=ConnectionPriorityMoveRequest(to_index=0),
+            db=db,
+            profile_id=profile.id,
+        )
+
+        assert [connection.priority for connection in reordered] == [0, 1, 2]

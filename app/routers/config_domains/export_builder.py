@@ -32,7 +32,10 @@ from app.schemas.schemas import (
     ConfigVendorExport,
     HeaderBlocklistRuleExport,
 )
-from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+from app.services.loadbalancer.policy import (
+    resolve_effective_loadbalance_policy,
+    serialize_auto_recovery,
+)
 
 
 def _normalize_custom_headers_for_export(
@@ -160,21 +163,15 @@ async def build_export_payload(
 
     exported_loadbalance_strategies = []
     for strategy in loadbalance_strategies:
-        policy = resolve_effective_loadbalance_policy(strategy)
         exported_loadbalance_strategies.append(
-            ConfigLoadbalanceStrategyExport(
-                name=strategy.name,
-                strategy_type=policy.strategy_type,
-                failover_recovery_enabled=policy.failover_recovery_enabled,
-                failover_cooldown_seconds=int(policy.failover_cooldown_seconds),
-                failover_failure_threshold=policy.failover_failure_threshold,
-                failover_backoff_multiplier=policy.failover_backoff_multiplier,
-                failover_max_cooldown_seconds=policy.failover_max_cooldown_seconds,
-                failover_jitter_ratio=policy.failover_jitter_ratio,
-                failover_status_codes=list(policy.failover_status_codes),
-                failover_ban_mode=policy.failover_ban_mode,
-                failover_max_cooldown_strikes_before_ban=policy.failover_max_cooldown_strikes_before_ban,
-                failover_ban_duration_seconds=policy.failover_ban_duration_seconds,
+            ConfigLoadbalanceStrategyExport.model_validate(
+                {
+                    "name": strategy.name,
+                    "strategy_type": strategy.strategy_type,
+                    "auto_recovery": serialize_auto_recovery(
+                        resolve_effective_loadbalance_policy(strategy)
+                    ),
+                }
             )
         )
 
@@ -316,7 +313,7 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=8,
+        version=9,
         exported_at=utc_now(),
         vendors=exported_vendors,
         endpoints=exported_endpoints,

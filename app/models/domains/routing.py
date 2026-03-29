@@ -17,7 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.crypto import decrypt_secret, mask_secret
@@ -25,7 +25,6 @@ from app.core.database import Base
 from app.core.time import utc_now
 
 _UNREADABLE_SECRET_MASK = "********"
-_DEFAULT_FAILOVER_STATUS_CODES = [403, 422, 429, 500, 502, 503, 504, 529]
 
 
 class LoadbalanceStrategy(Base):
@@ -45,14 +44,6 @@ class LoadbalanceStrategy(Base):
             "strategy_type IN ('single', 'fill-first', 'round-robin', 'failover')",
             name="chk_loadbalance_strategies_type",
         ),
-        CheckConstraint(
-            "strategy_type <> 'single' OR failover_recovery_enabled = false",
-            name="chk_loadbalance_strategies_recovery",
-        ),
-        CheckConstraint(
-            "failover_ban_mode IN ('off', 'temporary', 'manual')",
-            name="chk_loadbalance_strategies_ban_mode",
-        ),
         Index("idx_loadbalance_strategies_profile_id", "profile_id"),
     )
 
@@ -64,35 +55,10 @@ class LoadbalanceStrategy(Base):
     strategy_type: Mapped[str] = mapped_column(
         String(20), default="single", nullable=False
     )
-    failover_recovery_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=False, nullable=False
-    )
-    failover_cooldown_seconds: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
-    failover_failure_threshold: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
-    failover_backoff_multiplier: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
-    failover_max_cooldown_seconds: Mapped[int | None] = mapped_column(
-        Integer, nullable=True
-    )
-    failover_jitter_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
-    failover_status_codes: Mapped[list[int]] = mapped_column(
-        ARRAY(Integer),
+    auto_recovery: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
         nullable=False,
-        default=lambda: list(_DEFAULT_FAILOVER_STATUS_CODES),
-    )
-    failover_ban_mode: Mapped[str] = mapped_column(
-        String(20), default="off", nullable=False
-    )
-    failover_max_cooldown_strikes_before_ban: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
-    )
-    failover_ban_duration_seconds: Mapped[int] = mapped_column(
-        Integer, default=0, nullable=False
+        default=lambda: {"mode": "disabled"},
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now

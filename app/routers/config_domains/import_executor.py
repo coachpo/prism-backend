@@ -21,7 +21,7 @@ from app.models.models import (
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
-from app.services.loadbalancer.policy import normalize_strategy_ban_policy
+from app.services.loadbalancer.policy import canonicalize_auto_recovery_document
 from app.services.loadbalancer.state import clear_profile_state
 from app.services.proxy_service import normalize_base_url
 
@@ -335,25 +335,6 @@ async def execute_import_payload(
     strategies_count = 0
     for strategy_data in data.loadbalance_strategies:
         strategy_name = strategy_data.name.strip()
-        (
-            failover_ban_mode,
-            failover_max_cooldown_strikes_before_ban,
-            failover_ban_duration_seconds,
-        ) = normalize_strategy_ban_policy(
-            strategy_type=cast(
-                Literal["single", "fill-first", "round-robin", "failover"],
-                strategy_data.strategy_type,
-            ),
-            failover_recovery_enabled=strategy_data.failover_recovery_enabled,
-            failover_ban_mode=cast(
-                Literal["off", "temporary", "manual"],
-                strategy_data.failover_ban_mode,
-            ),
-            failover_max_cooldown_strikes_before_ban=(
-                strategy_data.failover_max_cooldown_strikes_before_ban
-            ),
-            failover_ban_duration_seconds=strategy_data.failover_ban_duration_seconds,
-        )
         strategy = LoadbalanceStrategy(
             id=strategy_id_allocator.take(),
             profile_id=profile_id,
@@ -362,18 +343,13 @@ async def execute_import_payload(
                 Literal["single", "fill-first", "round-robin", "failover"],
                 strategy_data.strategy_type,
             ),
-            failover_recovery_enabled=strategy_data.failover_recovery_enabled,
-            failover_status_codes=strategy_data.failover_status_codes,
-            failover_cooldown_seconds=strategy_data.failover_cooldown_seconds,
-            failover_failure_threshold=strategy_data.failover_failure_threshold,
-            failover_backoff_multiplier=strategy_data.failover_backoff_multiplier,
-            failover_max_cooldown_seconds=strategy_data.failover_max_cooldown_seconds,
-            failover_jitter_ratio=strategy_data.failover_jitter_ratio,
-            failover_ban_mode=failover_ban_mode,
-            failover_max_cooldown_strikes_before_ban=(
-                failover_max_cooldown_strikes_before_ban
+            auto_recovery=canonicalize_auto_recovery_document(
+                strategy_type=cast(
+                    Literal["single", "fill-first", "round-robin", "failover"],
+                    strategy_data.strategy_type,
+                ),
+                auto_recovery=strategy_data.auto_recovery,
             ),
-            failover_ban_duration_seconds=failover_ban_duration_seconds,
         )
         db.add(strategy)
         await db.flush()
