@@ -19,7 +19,7 @@ class TestDEF067_ProxyApiKeyPrefixGeneration:
         assert normalized_key == raw_key
         assert parsed_prefix == key_prefix
 
-    def test_parse_proxy_api_key_keeps_legacy_prefix_format(self):
+    def test_parse_proxy_api_key_keeps_supported_prefix_format(self):
         raw_key = "prism_live_example_lookup_secret"
 
         normalized_key, parsed_prefix = parse_proxy_api_key(raw_key)

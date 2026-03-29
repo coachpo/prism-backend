@@ -73,7 +73,7 @@ async def _fetch_current_revision(database_url: str) -> list[str]:
     return [str(revision) for revision in revisions]
 
 
-class TestDEF081_ProxyTargetSchemaMigration:
+class TestDEF081_ProxyTargetSchemaContract:
     def test_model_contract_uses_proxy_targets_and_resolved_target_logging(self):
         from app.schemas.schemas import (
             ModelConfigCreate,
@@ -91,18 +91,17 @@ class TestDEF081_ProxyTargetSchemaMigration:
         ):
             fields = set(schema.model_fields.keys())
             assert "proxy_targets" in fields
-            assert "redirect_to" not in fields
 
         assert "resolved_target_model_id" in RequestLogResponse.model_fields
 
     @pytest.mark.asyncio
-    async def test_head_migration_creates_proxy_target_table_and_v1_strategy_storage(
+    async def test_initial_schema_creates_proxy_target_table_and_auto_recovery_storage(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def081_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_prism_v1_schema_baseline"
+        expected_head_revision = "0001_initial"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision
@@ -130,13 +129,6 @@ class TestDEF081_ProxyTargetSchemaMigration:
                         )
                     )
                 ).scalar_one_or_none()
-                redirect_to_column = (
-                    await conn.execute(
-                        text(
-                            "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'model_configs' AND column_name = 'redirect_to'"
-                        )
-                    )
-                ).scalar_one_or_none()
                 auto_recovery_column = (
                     await conn.execute(
                         text(
@@ -144,7 +136,7 @@ class TestDEF081_ProxyTargetSchemaMigration:
                         )
                     )
                 ).scalar_one_or_none()
-                legacy_recovery_column = (
+                removed_recovery_column = (
                     await conn.execute(
                         text(
                             "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies' AND column_name = 'failover_recovery_enabled'"
@@ -154,9 +146,8 @@ class TestDEF081_ProxyTargetSchemaMigration:
 
                 assert proxy_targets_table == "model_proxy_targets"
                 assert resolved_target_column == "resolved_target_model_id"
-                assert redirect_to_column is None
                 assert auto_recovery_column == "auto_recovery"
-                assert legacy_recovery_column is None
+                assert removed_recovery_column is None
             await engine.dispose()
         finally:
             await _drop_database(migration_database_url)

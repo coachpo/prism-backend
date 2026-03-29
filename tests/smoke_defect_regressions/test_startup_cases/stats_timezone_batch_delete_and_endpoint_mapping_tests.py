@@ -106,7 +106,7 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         )
         assert call_kwargs["status_family"] == "4xx"
 
-    def test_operations_requests_route_is_retired(self):
+    def test_operations_requests_route_is_absent(self):
         import app.routers.stats as stats_router
 
         registered_paths = {
@@ -114,11 +114,11 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             for route in stats_router.router.routes
             if isinstance(route, APIRoute)
         }
-        legacy_route_path = "/api/stats/requests/" + "operations"
-        legacy_handler_name = "list_" + "operations_request_logs"
+        removed_route_path = "/api/stats/requests/" + "operations"
+        removed_handler_name = "list_" + "operations_request_logs"
 
-        assert legacy_route_path not in registered_paths
-        assert not hasattr(stats_router, legacy_handler_name)
+        assert removed_route_path not in registered_paths
+        assert not hasattr(stats_router, removed_handler_name)
 
     @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):

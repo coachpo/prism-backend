@@ -92,9 +92,9 @@ async def _fetch_current_revision(database_url: str) -> list[str]:
     return [str(revision) for revision in revisions]
 
 
-class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
+class TestDEF078_ObservabilityUsesUnloggedPersistence:
     @pytest.mark.asyncio
-    async def test_fresh_baseline_upgrade_creates_unlogged_observability_tables(
+    async def test_initial_schema_creates_unlogged_observability_tables(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
@@ -125,7 +125,7 @@ class TestDEF078_ObservabilityMigrationTogglesUnloggedPersistence:
             assert await _fetch_current_revision(migration_database_url) == [
                 current_head_revision
             ]
-            assert current_head_revision == "0001_prism_v1_schema_baseline"
+            assert current_head_revision == "0001_initial"
             for table_name in all_observability_tables:
                 assert (
                     await _fetch_table_persistence(migration_database_url, table_name)

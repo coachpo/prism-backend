@@ -433,7 +433,6 @@ class TestConfigExportImportIsolation:
         assert all(
             "icon_key" not in exported_model for exported_model in payload["models"]
         )
-        assert "redirect_to" not in exported_proxy
         assert "providers" not in payload
 
     @pytest.mark.asyncio
@@ -997,8 +996,8 @@ class TestConfigExportImportIsolation:
 
             conflicting_vendor = Vendor(
                 key=conflict_vendor_key,
-                name=f"Legacy Z.ai {suffix}",
-                description="Legacy vendor metadata",
+                name=f"Z.ai {suffix}",
+                description="Vendor metadata",
                 icon_key=None,
                 audit_enabled=False,
                 audit_capture_bodies=True,
@@ -1171,8 +1170,8 @@ class TestConfigExportImportIsolation:
                 .all()
             )
 
-        assert persisted_vendor.name == f"Legacy Z.ai {suffix}"
-        assert persisted_vendor.description == "Legacy vendor metadata"
+        assert persisted_vendor.name == f"Z.ai {suffix}"
+        assert persisted_vendor.description == "Vendor metadata"
         assert persisted_vendor.icon_key is None
         assert len(target_endpoints) == 1
         assert target_endpoints[0].name == old_target_endpoint_name

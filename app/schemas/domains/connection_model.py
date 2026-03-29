@@ -25,7 +25,7 @@ from .endpoint_pricing import (
     EndpointCreate,
     EndpointResponse,
 )
-from .profile_provider import VendorResponse
+from .profile_vendor import VendorResponse
 
 
 class ConnectionBase(BaseModel):

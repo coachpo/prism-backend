@@ -226,13 +226,13 @@ Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, An
 ### Native vs Proxy Models
 
 - **Native**: Real models with their own connection configurations and load balancing
-- **Proxy**: Alias models that forward to a native model (for ID resolution) — no connections of their own
+- **Proxy**: Models that forward requests to native targets while keeping their own routing metadata — no direct connections of their own
 
 ### Load Balancing Strategies
 
 - **single**: Always use the first active connection (priority 0)
 - **round-robin**: Rotate the primary attempt across active connections in order
-- **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and auth-like cooldown handling)
+- **failover**: Try connections in priority order with adaptive auto-recovery (failure threshold, exponential backoff, jitter, and status-aware cooldown handling)
 - **fill-first**: Strict priority spillover after the active target is exhausted
 
 ### Success Rate Tracking

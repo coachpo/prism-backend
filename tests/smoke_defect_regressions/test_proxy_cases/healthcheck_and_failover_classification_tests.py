@@ -37,10 +37,12 @@ class TestDEF059_HealthCheckRequestBuilder:
             "max_output_tokens": 1,
         }
 
-    def test_openai_legacy_health_check_uses_chat_completions_endpoint(self):
-        from app.routers.connections import _build_openai_legacy_health_check_request
+    def test_openai_chat_completions_health_check_uses_chat_completions_endpoint(self):
+        from app.routers.connections import (
+            _build_openai_chat_completions_health_check_request,
+        )
 
-        path, body = _build_openai_legacy_health_check_request("gpt-4o-mini")
+        path, body = _build_openai_chat_completions_health_check_request("gpt-4o-mini")
 
         assert path == "/v1/chat/completions"
         assert body == {
@@ -114,9 +116,7 @@ class TestDEF059_HealthCheckRequestBuilder:
 
         vendor = MagicMock()
         vendor.id = 19
-        legacy_provider = MagicMock()
-        legacy_provider.id = 19
-        legacy_provider.key = "openai"
+        vendor.key = "openai"
 
         endpoint = MagicMock()
         endpoint.id = 501
@@ -129,7 +129,6 @@ class TestDEF059_HealthCheckRequestBuilder:
             api_family="anthropic",
             model_id="claude-sonnet-4-5",
             vendor=vendor,
-            provider=legacy_provider,
         )
 
         build_upstream_headers_fn = MagicMock(return_value={"x-api-key": "sk-test"})
@@ -167,10 +166,10 @@ class TestDEF059_HealthCheckRequestBuilder:
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
-    """DEF-066 (P1): OpenAI health checks should try responses-basic fallback before legacy."""
+    """DEF-066 (P1): OpenAI health checks should try responses-basic fallback before chat-completions fallback."""
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_skips_legacy_fallback_when_primary_is_healthy(
+    async def test_openai_health_check_skips_chat_completions_fallback_when_primary_is_healthy(
         self,
     ):
         from types import SimpleNamespace
@@ -261,7 +260,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_args_list[1].kwargs["body"]["input"] == "hi"
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_uses_legacy_fallback_when_responses_fallback_fails(
+    async def test_openai_health_check_uses_chat_completions_fallback_when_responses_fallback_fails(
         self,
     ):
         from types import SimpleNamespace
@@ -294,7 +293,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
             )
 
         assert health_status == "healthy"
-        assert detail == "Connection successful (legacy fallback /v1/chat/completions)"
+        assert detail == "Connection successful (fallback /v1/chat/completions)"
         assert response_time_ms == 4
         assert log_url == "https://api.openai.com/v1/chat/completions"
         assert execute_mock.await_count == 3
@@ -315,7 +314,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
         )
 
     @pytest.mark.asyncio
-    async def test_non_openai_health_check_does_not_use_legacy_fallback(self):
+    async def test_non_openai_health_check_does_not_use_chat_completions_fallback(self):
         from types import SimpleNamespace
         from app.routers.connections import _probe_connection_health
 
@@ -469,20 +468,14 @@ class TestDEF060_ProxyApiFamilyPathValidation:
             }
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
-
         vendor = MagicMock()
         vendor.id = 99
+        vendor.key = "openai"
         vendor.audit_enabled = False
         vendor.audit_capture_bodies = False
 
         connection = SimpleNamespace(endpoint_id=501)
         model_config = MagicMock()
-        model_config.provider = provider
         model_config.vendor = vendor
         model_config.api_family = "anthropic"
         model_config.model_id = "claude-sonnet-4-5"
@@ -540,19 +533,13 @@ class TestDEF060_ProxyApiFamilyPathValidation:
             {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
-
         vendor = MagicMock()
         vendor.id = 99
+        vendor.key = "openai"
         vendor.audit_enabled = False
         vendor.audit_capture_bodies = False
 
         model_config = MagicMock()
-        model_config.provider = provider
         model_config.vendor = vendor
         model_config.api_family = "anthropic"
         model_config.model_id = "gemini-3.1-pro-preview"
@@ -628,12 +615,16 @@ class TestDEF061_FailoverFailureClassification:
         assert should_failover(403, [422, 503]) is False
         assert should_failover(403, [403, 422, 503]) is True
 
-    def test_failure_kind_literal_excludes_auth_like(self):
+    def test_failure_kind_literal_matches_current_failure_kinds(self):
         from typing import get_args
 
         from app.services.loadbalancer.types import FailureKind
 
-        assert "auth_like" not in get_args(FailureKind)
+        assert set(get_args(FailureKind)) == {
+            "transient_http",
+            "connect_error",
+            "timeout",
+        }
 
     def test_classify_failover_failure_for_timeout_exception(self):
         import httpx

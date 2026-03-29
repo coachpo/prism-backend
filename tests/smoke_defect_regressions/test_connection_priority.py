@@ -585,7 +585,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
 
 
 @pytest.mark.asyncio
-async def test_connection_priority_migration_normalizes_existing_rows():
+async def test_connection_priority_normalizes_existing_rows():
     from app.core.database import AsyncSessionLocal, get_engine
     from app.models.models import Connection, Endpoint, ModelConfig, Profile
     from app.routers.connections import move_connection_priority

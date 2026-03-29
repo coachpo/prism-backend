@@ -7,7 +7,7 @@
 ```
 app/
 ├── main.py                                                   # App assembly, router mounts, lifespan wiring
-├── alembic/AGENTS.md                                         # Packaged Alembic runtime and revision history
+├── alembic/AGENTS.md                                         # Packaged Alembic runtime and schema source of truth
 ├── bootstrap/AGENTS.md                                       # Startup sequence, seeds, middleware auth split
 ├── dependencies.py                                           # Effective-profile and active-profile boundary
 ├── core/AGENTS.md                                            # Settings, database, auth helpers, crypto, migrations

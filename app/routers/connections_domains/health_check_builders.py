@@ -43,7 +43,7 @@ def _build_health_check_request(
     raise ValueError(f"Unsupported api_family '{api_family}' for health check")
 
 
-def _build_openai_legacy_health_check_request(
+def _build_openai_chat_completions_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
     return "/v1/chat/completions", {
@@ -107,8 +107,8 @@ async def _probe_connection_health(
                 responses_basic_url,
             )
 
-        fallback_path, fallback_body = _build_openai_legacy_health_check_request(
-            model_id
+        fallback_path, fallback_body = (
+            _build_openai_chat_completions_health_check_request(model_id)
         )
         fallback_url = build_upstream_url(connection, fallback_path, endpoint=endpoint)
         (
@@ -124,7 +124,7 @@ async def _probe_connection_health(
         if fallback_status == "healthy":
             return (
                 "healthy",
-                f"{fallback_detail} (legacy fallback /v1/chat/completions)",
+                f"{fallback_detail} (fallback /v1/chat/completions)",
                 fallback_response_time_ms,
                 fallback_url,
             )
@@ -146,7 +146,7 @@ async def _probe_connection_health(
 
 __all__ = [
     "_build_health_check_request",
-    "_build_openai_legacy_health_check_request",
+    "_build_openai_chat_completions_health_check_request",
     "_build_openai_responses_basic_health_check_request",
     "_probe_connection_health",
 ]

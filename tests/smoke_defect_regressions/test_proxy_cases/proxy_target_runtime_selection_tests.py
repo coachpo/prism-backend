@@ -30,7 +30,7 @@ class TestDEF083_ProxyTargetRuntimeSelection:
 
         proxy_model = SimpleNamespace(
             profile_id=5,
-            model_id="alias-model",
+            model_id="proxy-model",
             model_type="proxy",
             proxy_targets=[],
         )
@@ -45,10 +45,10 @@ class TestDEF083_ProxyTargetRuntimeSelection:
             await get_model_config_with_connections(
                 db=db,
                 profile_id=5,
-                model_id="alias-model",
+                model_id="proxy-model",
             )
 
-        assert exc_info.value.proxy_model_id == "alias-model"
+        assert exc_info.value.proxy_model_id == "proxy-model"
 
     @pytest.mark.asyncio
     async def test_prepare_proxy_request_rejects_proxy_when_no_target_yields_attempt_plan(
@@ -214,7 +214,6 @@ class TestDEF083_ProxyTargetRuntimeSelection:
         selected_connection.auth_type = None
 
         resolved_target_model = SimpleNamespace(
-            provider=vendor,
             vendor=vendor,
             api_family="openai",
             model_id="target-model-a",

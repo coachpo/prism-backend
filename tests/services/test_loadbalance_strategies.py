@@ -411,20 +411,20 @@ class TestLoadbalanceStrategies:
                 auto_recovery=make_auto_recovery_enabled(status_codes=[99, 429]),
             )
 
-    def test_strategy_contract_rejects_removed_auth_cooldown_field(self):
+    def test_strategy_contract_rejects_unrecognized_cooldown_fields(self):
         invalid_auto_recovery = cast(
             dict[str, object], cast(object, make_auto_recovery_enabled())
         )
         cooldown = cast(dict[str, object], invalid_auto_recovery["cooldown"])
         invalid_auto_recovery["cooldown"] = {
             **cooldown,
-            "failover_auth_error_cooldown_seconds": 2400,
+            "unexpected_cooldown_seconds": 2400,
         }
 
         with pytest.raises(ValidationError):
             _ = LoadbalanceStrategyCreate.model_validate(
                 {
-                    "name": "removed-auth-cooldown",
+                    "name": "unexpected-cooldown-field",
                     "strategy_type": "failover",
                     "auto_recovery": invalid_auto_recovery,
                 }

@@ -155,7 +155,7 @@ class TestDEF080_VendorCatalogManagementSurface:
             "google",
         ]
 
-    def test_main_app_mounts_vendors_router_and_not_provider_router(self):
+    def test_main_app_mounts_vendors_router(self):
         from app.main import app
 
         route_paths = {
@@ -164,9 +164,9 @@ class TestDEF080_VendorCatalogManagementSurface:
             if (path := getattr(route, "path", None)) is not None
         }
 
-        legacy_route_prefix = "/api/" + "providers"
+        removed_route_prefix = "/api/" + "providers"
         assert "/api/vendors" in route_paths
-        assert not any(path.startswith(legacy_route_prefix) for path in route_paths)
+        assert not any(path.startswith(removed_route_prefix) for path in route_paths)
 
 
 class TestDEF006_ConfigExportImportFieldCoverage:
@@ -239,10 +239,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "is_enabled",
             "connections",
         }
-        legacy_field = "provider" + "_type"
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
-        assert "redirect_to" not in fields
-        assert legacy_field not in fields
 
     def test_request_log_response_schema_includes_resolved_target_model_id(self):
         from app.schemas.schemas import RequestLogResponse
@@ -563,13 +560,13 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 }
             )
 
-    def test_config_import_schema_rejects_legacy_version_7_payloads(self):
+    def test_config_import_schema_rejects_unsupported_version_numbers(self):
         from app.schemas.schemas import ConfigImportRequest
 
         with pytest.raises(ValidationError, match="1"):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 7,
+                    "version": 2,
                     "vendors": [
                         {
                             "key": "openai",
@@ -610,7 +607,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
 
 class TestDEF023_ConfigImportReferenceValidation:
-    def test_validate_import_rejects_legacy_numeric_ids(self):
+    def test_validate_import_rejects_numeric_ids(self):
         from app.schemas.schemas import ConfigImportRequest
         from pydantic import ValidationError
 

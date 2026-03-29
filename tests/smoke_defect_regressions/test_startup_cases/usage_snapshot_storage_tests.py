@@ -234,7 +234,7 @@ async def _seed_usage_snapshot_route_fixture() -> tuple[int, str, str]:
         return profile.id, ingress_request_id, proxy_key.key_prefix
 
 
-class TestDEF086_UsageStatisticsStorageCutover:
+class TestDEF086_UsageStatisticsStorageContract:
     def test_schema_and_model_exports_include_usage_snapshot_contract_and_proxy_key_request_log_fields(
         self,
     ):
@@ -293,13 +293,13 @@ class TestDEF086_UsageStatisticsStorageCutover:
             assert field_name in UsageSnapshotResponse.model_fields
 
     @pytest.mark.asyncio
-    async def test_head_migration_creates_usage_request_events_table_and_request_log_proxy_key_columns(
+    async def test_initial_schema_creates_usage_request_events_table_and_request_log_proxy_key_columns(
         self, test_database_url: str
     ):
         migration_database_url = _database_url_with_name(
             test_database_url, f"prism_def086_{uuid4().hex[:12]}"
         )
-        expected_head_revision = "0001_prism_v1_schema_baseline"
+        expected_head_revision = "0001_initial"
 
         assert (
             _get_current_head_revision(migration_database_url) == expected_head_revision

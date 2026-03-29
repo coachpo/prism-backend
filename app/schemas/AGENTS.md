@@ -14,7 +14,7 @@ schemas/
     ├── connection_model.py
     ├── core.py            # Profiles, vendors, endpoints, connections, models, pricing templates
     ├── endpoint_pricing.py
-    ├── profile_provider.py
+    ├── profile_vendor.py
     ├── stats.py           # Request logs, spending, throughput, metrics batch, loadbalance current-state and event payloads
     └── usage_statistics.py # Unified usage-snapshot and request-event payloads
 ```
@@ -25,16 +25,16 @@ schemas/
 - Admin contracts for audit logs, config export or import, and blocklist rules: `domains/admin.py`
 - Auth and passkey contracts: `domains/auth.py`
 - Core management contracts for profiles, vendors, endpoints, connections, models, and pricing templates: `domains/core.py`
-- Shared helpers and split support modules behind the public surface: `domains/common.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_provider.py`
+- Shared helpers and split support modules behind the public surface: `domains/common.py`, `domains/connection_model.py`, `domains/endpoint_pricing.py`, `domains/profile_vendor.py`
 - Stats and observability contracts for request logs, spending, throughput, metrics batches, and loadbalance current-state or event payloads: `domains/stats.py`
 - Unified usage-snapshot and request-event contracts: `domains/usage_statistics.py`
 
 ## SCHEMA FACTS
 
 - `schemas.py` currently re-exports a broad explicit surface from `domains/admin.py`, `domains/auth.py`, `domains/core.py`, `domains/stats.py`, and `domains/usage_statistics.py`.
-- Config export/import payloads are version 1, and the admin schemas carry the vendor `icon_key` field on vendor payloads only.
+- Config export/import payloads use the current top-level `version: 1` format, and the admin schemas carry the vendor `icon_key` field on vendor payloads only.
 - Loadbalance strategy contracts now use nested `auto_recovery` plus nested `ban` data instead of flat `failover_*` public fields.
-- Supporting domain files such as `common.py`, `connection_model.py`, `endpoint_pricing.py`, and `profile_provider.py` still live under `domains/`, but the stable router-facing boundary is `schemas.py`.
+- Supporting domain files such as `common.py`, `connection_model.py`, `endpoint_pricing.py`, and `profile_vendor.py` still live under `domains/`, but the stable router-facing boundary is `schemas.py`.
 - The parent doc covers schema-domain ownership. Don't create new AGENTS docs inside `schemas/domains/` for the current layout.
 - Routers should depend on the re-export boundary, not on scattered leaf-module imports.
 

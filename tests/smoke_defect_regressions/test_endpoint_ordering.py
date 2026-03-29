@@ -257,20 +257,20 @@ async def test_endpoint_position_export_import_and_profile_isolation():
         ]
         assert [endpoint.position for endpoint in imported] == [0, 1]
 
-        legacy_import = ConfigImportRequest.model_validate(
+        import_payload = ConfigImportRequest.model_validate(
             {
                 "version": 1,
                 "vendors": [],
                 "endpoints": [
                     {
-                        "name": f"DEF063 Legacy One {suffix}",
-                        "base_url": f"https://def063-legacy-one.{suffix}.example.com",
-                        "api_key": "sk-legacy-one",
+                        "name": f"DEF063 Imported One {suffix}",
+                        "base_url": f"https://def063-imported-one.{suffix}.example.com",
+                        "api_key": "sk-imported-one",
                     },
                     {
-                        "name": f"DEF063 Legacy Two {suffix}",
-                        "base_url": f"https://def063-legacy-two.{suffix}.example.com",
-                        "api_key": "sk-legacy-two",
+                        "name": f"DEF063 Imported Two {suffix}",
+                        "base_url": f"https://def063-imported-two.{suffix}.example.com",
+                        "api_key": "sk-imported-two",
                     },
                 ],
                 "pricing_templates": [],
@@ -280,16 +280,16 @@ async def test_endpoint_position_export_import_and_profile_isolation():
         )
 
         response = await import_config(
-            data=legacy_import, db=db, profile_id=profile_a.id
+            data=import_payload, db=db, profile_id=profile_a.id
         )
         assert response.endpoints_imported == 2
 
-        legacy = await list_endpoints(db=db, profile_id=profile_a.id)
-        assert [endpoint.name for endpoint in legacy] == [
-            f"DEF063 Legacy One {suffix}",
-            f"DEF063 Legacy Two {suffix}",
+        imported_endpoints = await list_endpoints(db=db, profile_id=profile_a.id)
+        assert [endpoint.name for endpoint in imported_endpoints] == [
+            f"DEF063 Imported One {suffix}",
+            f"DEF063 Imported Two {suffix}",
         ]
-        assert [endpoint.position for endpoint in legacy] == [0, 1]
+        assert [endpoint.position for endpoint in imported_endpoints] == [0, 1]
 
         untouched_b = await list_endpoints(db=db, profile_id=profile_b.id)
         assert [endpoint.id for endpoint in untouched_b] == [b_only.id]

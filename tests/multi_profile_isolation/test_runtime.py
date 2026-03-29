@@ -77,7 +77,6 @@ class TestProxyRuntimeIsolation:
         model.profile_id = 1
         model.model_id = "gpt-4"
         model.model_type = "native"
-        model.redirect_to = None
 
         connection = MagicMock()
         connection.profile_id = 1
@@ -98,14 +97,13 @@ class TestProxyRuntimeIsolation:
 
     @pytest.mark.asyncio
     async def test_proxy_returns_requested_model_within_profile(self):
-        """Model resolution remains profile-scoped without alias indirection."""
+        """Model resolution remains profile-scoped without extra indirection."""
         mock_db = AsyncMock()
 
         model = MagicMock()
         model.profile_id = 1
-        model.model_id = "gpt-4-alias"
+        model.model_id = "gpt-4-proxy"
         model.model_type = "native"
-        model.redirect_to = None
         model.connections_rel = [MagicMock()]
 
         result = MagicMock()
@@ -113,12 +111,12 @@ class TestProxyRuntimeIsolation:
         mock_db.execute.return_value = result
 
         resolved = await get_model_config_with_connections(
-            db=mock_db, model_id="gpt-4-alias", profile_id=1
+            db=mock_db, model_id="gpt-4-proxy", profile_id=1
         )
 
         assert resolved is not None
         assert resolved.profile_id == 1
-        assert resolved.model_id == "gpt-4-alias"
+        assert resolved.model_id == "gpt-4-proxy"
 
     @pytest.mark.asyncio
     async def test_model_not_found_in_other_profile(self):

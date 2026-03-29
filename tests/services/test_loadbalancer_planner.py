@@ -645,7 +645,7 @@ class TestLoadbalancerPlanner:
 
         proxy_model = SimpleNamespace(
             profile_id=5,
-            model_id="alias-model",
+            model_id="proxy-model",
             model_type="proxy",
             proxy_targets=[
                 SimpleNamespace(target_model_id="target-model-a", position=0),
@@ -680,7 +680,7 @@ class TestLoadbalancerPlanner:
             resolved = await get_model_config_with_connections(
                 db=db,
                 profile_id=5,
-                model_id="alias-model",
+                model_id="proxy-model",
             )
 
         assert resolved is target_model_a
@@ -696,7 +696,7 @@ class TestLoadbalancerPlanner:
 
         proxy_model = SimpleNamespace(
             profile_id=5,
-            model_id="alias-model",
+            model_id="proxy-model",
             model_type="proxy",
             proxy_targets=[
                 SimpleNamespace(target_model_id="target-model-a", position=0),
@@ -744,7 +744,7 @@ class TestLoadbalancerPlanner:
             resolved = await get_model_config_with_connections(
                 db=db,
                 profile_id=5,
-                model_id="alias-model",
+                model_id="proxy-model",
             )
 
         assert resolved is target_model_b
@@ -786,7 +786,7 @@ class TestLoadbalancerPlanner:
         )
         proxy_model = SimpleNamespace(
             profile_id=5,
-            model_id="alias-model",
+            model_id="proxy-model",
             model_type="proxy",
             proxy_targets=[
                 SimpleNamespace(target_model_id="target-model-a", position=0)
@@ -822,7 +822,7 @@ class TestLoadbalancerPlanner:
         resolved = await get_model_config_with_connections(
             db=db,
             profile_id=5,
-            model_id="alias-model",
+            model_id="proxy-model",
         )
         assert resolved is not None
         with patch(

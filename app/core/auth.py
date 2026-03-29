@@ -96,8 +96,8 @@ def parse_proxy_api_key(raw_key: str) -> tuple[str, str]:
     if normalized.startswith(PROXY_API_KEY_PREFIX) and len(normalized) > prefix_length:
         return normalized, normalized[:prefix_length]
     if "_" in normalized:
-        legacy_prefix, _ = normalized.rsplit("_", 1)
-        return normalized, legacy_prefix
+        compatible_prefix, _ = normalized.rsplit("_", 1)
+        return normalized, compatible_prefix
     raise ValueError("Invalid proxy API key format")
 
 

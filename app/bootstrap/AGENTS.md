@@ -27,6 +27,6 @@ bootstrap/
 
 ## ANTI-PATTERNS
 
-- Do not reintroduce deprecated startup-event handlers when lifespan already owns bootstrap timing.
+- Do not bypass lifespan-owned bootstrap timing with extra startup-event handlers.
 - Do not push session-cookie or proxy-key enforcement into routers; middleware already owns that contract.
 - Do not bypass startup seeds for vendors, profile invariants, auth settings, or system header blocklist rules.

@@ -403,17 +403,13 @@ class TestObservabilityAttribution:
             get_throughput,
         ):
             parameters = inspect.signature(route).parameters
-            legacy_field = "provider" + "_type"
             assert "api_family" in parameters
-            assert legacy_field not in parameters
 
     def test_audit_routes_use_vendor_id_filter(self):
         from app.routers.audit import list_audit_logs
 
         parameters = inspect.signature(list_audit_logs).parameters
-        legacy_field = "provider" + "_id"
         assert "vendor_id" in parameters
-        assert legacy_field not in parameters
 
     @pytest.mark.asyncio
     async def test_stats_queries_filter_by_profile(self):

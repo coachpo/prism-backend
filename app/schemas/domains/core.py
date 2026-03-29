@@ -46,7 +46,7 @@ from .endpoint_pricing import (
     PricingTemplateResponse,
     PricingTemplateUpdate,
 )
-from .profile_provider import (
+from .profile_vendor import (
     ProfileActivateRequest,
     ProfileBase,
     ProfileCreate,

@@ -88,7 +88,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 vendor = Vendor(
                     key="openai",
                     name=f"DEF065 OpenAI {suffix}",
-                    description="DEF065 provider",
+                    description="DEF065 vendor",
                 )
                 db.add(vendor)
                 await db.flush()
@@ -150,7 +150,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             assert response.connections[0].endpoint.id == endpoint.id
 
     @pytest.mark.asyncio
-    async def test_model_routes_resolve_effective_policy_for_legacy_strategy_rows(self):
+    async def test_model_routes_resolve_effective_policy_for_strategy_rows(self):
         from sqlalchemy import select
 
         from app.core.config import get_settings
@@ -163,7 +163,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
         await get_engine().dispose()
 
         suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
-        model_id = f"def065-legacy-policy-{suffix}"
+        model_id = f"def065-policy-{suffix}"
         settings = get_settings()
 
         async with AsyncSessionLocal() as db:
@@ -178,14 +178,14 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             if vendor is None:
                 vendor = Vendor(
                     key="openai",
-                    name=f"DEF065 Legacy OpenAI {suffix}",
-                    description="DEF065 legacy provider",
+                    name=f"DEF065 OpenAI {suffix}",
+                    description="DEF065 vendor",
                 )
                 db.add(vendor)
                 await db.flush()
 
             profile = Profile(
-                name=f"DEF065 Legacy Profile {suffix}",
+                name=f"DEF065 Profile {suffix}",
                 is_active=False,
                 version=0,
             )

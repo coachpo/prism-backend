@@ -39,7 +39,7 @@ from app.routers.connections_domains.connection_crud_helpers import (
 )
 from app.routers.connections_domains.health_check_builders import (
     _build_health_check_request,
-    _build_openai_legacy_health_check_request,
+    _build_openai_chat_completions_health_check_request,
     _build_openai_responses_basic_health_check_request,
     _probe_connection_health as _probe_connection_health_impl,
 )

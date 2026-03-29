@@ -17,7 +17,7 @@ tests/
 ├── smoke_defect_regressions/
 │   ├── AGENTS.md                         # DEF-domain map and aggregator expectations
 │   ├── test_proxy_cases/AGENTS.md        # Focused proxy smoke regression cluster
-│   └── test_startup_cases/AGENTS.md      # Focused startup/auth/migration smoke regression cluster
+│   └── test_startup_cases/AGENTS.md      # Focused startup/auth/schema smoke regression cluster
 └── multi_profile_isolation/
     └── AGENTS.md                         # Isolation-domain map, including config export and import containment
 ```
@@ -26,18 +26,18 @@ tests/
 
 - `smoke_defect_regressions/AGENTS.md`: DEF hierarchy map, leaf ownership, and aggregator expectations.
 - `smoke_defect_regressions/test_proxy_cases/AGENTS.md`: focused proxy smoke regression cluster inside the DEF tree.
-- `smoke_defect_regressions/test_startup_cases/AGENTS.md`: focused startup/auth/migration smoke regression cluster inside the DEF tree.
+- `smoke_defect_regressions/test_startup_cases/AGENTS.md`: focused startup/auth/schema smoke regression cluster inside the DEF tree.
 - `multi_profile_isolation/AGENTS.md`: profile-isolation hierarchy map, cross-profile containment expectations, and the non-re-exported `test_connection_priority_isolation.py` leaf.
 - `services/AGENTS.md`: focused service-test handoff for auth cache, background tasks, crypto, loadbalancer, stats, streaming, throughput, and WebAuthn coverage.
 
 ## WHERE TO LOOK
 
-- Testcontainer setup and migrated database bootstrap: `conftest.py`
+- Testcontainer setup and test database bootstrap: `conftest.py`
 - Shared loadbalance strategy helper payloads used by focused tests: `loadbalance_strategy_helpers.py`
 - Backend version metadata contract checks: `test_backend_version_metadata.py`
 - Smoke regression export surface and current DEF range: `test_smoke_defect_regressions.py`
 - Focused proxy smoke cluster inside the DEF tree: `smoke_defect_regressions/test_proxy_cases/AGENTS.md`
-- Focused startup/auth/migration smoke cluster inside the DEF tree: `smoke_defect_regressions/test_startup_cases/AGENTS.md`
+- Focused startup/auth/schema smoke cluster inside the DEF tree: `smoke_defect_regressions/test_startup_cases/AGENTS.md`
 - Multi-profile export surface: `test_multi_profile_isolation.py`
 - Multi-profile leaf that is currently not re-exported by the top-level aggregator: `multi_profile_isolation/test_connection_priority_isolation.py`
 - Realtime websocket and `dashboard.update` behavior: `test_realtime_broadcast.py`
@@ -49,7 +49,7 @@ tests/
 - `test_multi_profile_isolation.py` is the top-level aggregator for lifecycle, scoping, runtime, observability, and config export or import isolation.
 - `multi_profile_isolation/test_connection_priority_isolation.py` currently remains a direct subtree leaf instead of a top-level re-export in `test_multi_profile_isolation.py`.
 - `services/` holds focused backend tests that do not fit the smoke or isolation hierarchies.
-- `smoke_defect_regressions/test_startup_cases/` is now dense enough to justify its own child AGENTS file alongside the older proxy smoke leaf.
+- `smoke_defect_regressions/test_startup_cases/` is dense enough to justify its own child AGENTS file alongside the proxy smoke leaf.
 - `test_backend_version_metadata.py` covers the root/backend version contract outside the smoke and isolation hierarchies.
 - These tests are grounded in PostgreSQL semantics. Parent docs should keep that fact visible and leave leaf-level scenario detail to the two child AGENTS files.
 

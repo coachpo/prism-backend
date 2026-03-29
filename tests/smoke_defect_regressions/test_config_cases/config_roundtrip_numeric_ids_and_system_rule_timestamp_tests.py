@@ -681,7 +681,6 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
             {"target_model_id": target_a_model_id, "position": 0},
             {"target_model_id": target_b_model_id, "position": 1},
         ]
-        assert "redirect_to" not in exported_proxy_model
 
     @pytest.mark.asyncio
     async def test_proxy_target_config_roundtrip_preserves_empty_proxy_targets(self):

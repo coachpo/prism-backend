@@ -62,11 +62,11 @@ async def test_get_stats_summary_reads_p95_from_sql_aggregate_query() -> None:
         total_output_tokens=0,
         total_tokens=0,
     )
-    legacy_p95_result = MagicMock()
-    legacy_p95_result.all.return_value = []
+    empty_p95_result = MagicMock()
+    empty_p95_result.all.return_value = []
 
     db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[aggregate_result, legacy_p95_result])
+    db.execute = AsyncMock(side_effect=[aggregate_result, empty_p95_result])
 
     summary = await get_stats_summary(db, profile_id=7)
 
@@ -145,14 +145,14 @@ async def test_get_request_logs_uses_stable_id_tiebreaker_for_timestamp_sort() -
     ]
 
 
-def test_operations_request_logs_contract_is_retired_from_stats_services() -> None:
+def test_operations_request_logs_contract_is_absent_from_stats_services() -> None:
     import app.services.stats.request_logs as request_logs
     import app.services.stats_service as stats_service
 
-    legacy_name = "get_" + "operations_request_logs"
+    removed_name = "get_" + "operations_request_logs"
 
-    assert not hasattr(request_logs, legacy_name)
-    assert not hasattr(stats_service, legacy_name)
+    assert not hasattr(request_logs, removed_name)
+    assert not hasattr(stats_service, removed_name)
 
 
 @pytest.mark.asyncio

@@ -27,4 +27,4 @@ realtime/
 
 - Do not keep subscription state in routers or page-specific code when the manager already tracks rooms.
 - Do not broadcast directly to raw sockets outside `connection_manager.py`.
-- Do not let one connection stay subscribed to multiple profile scopes at once; new profile subscriptions should replace the old room state.
+- Do not let one connection stay subscribed to multiple profile scopes at once; new profile subscriptions should replace the prior room state.

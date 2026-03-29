@@ -176,7 +176,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         assert "status_codes" in str(exc_info.value)
 
-    def test_strategy_contract_rejects_legacy_auth_cooldown_field(self):
+    def test_strategy_contract_rejects_auth_cooldown_field(self):
         from app.schemas.schemas import LoadbalanceStrategyCreate
         from pydantic import ValidationError
 
@@ -194,14 +194,14 @@ class TestLoadbalanceStrategyFieldValidation:
                             "backoff_multiplier": 2.0,
                             "max_cooldown_seconds": 900,
                             "jitter_ratio": 0.2,
-                            "failover_auth_error_cooldown_seconds": 2400,
+                            "unexpected_cooldown_seconds": 2400,
                         },
                         "ban": {"mode": "off"},
                     },
                 }
             )
 
-        assert "failover_auth_error_cooldown_seconds" in str(exc_info.value)
+        assert "unexpected_cooldown_seconds" in str(exc_info.value)
 
     def test_config_export_version_1_allows_fill_first_strategy(self):
         from datetime import datetime, timezone

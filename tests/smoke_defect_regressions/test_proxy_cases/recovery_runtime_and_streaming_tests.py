@@ -54,7 +54,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="openai",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -72,8 +72,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         )
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
-            provider=provider,
-            vendor=provider,
+            vendor=vendor,
             api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=strategy,
@@ -151,7 +150,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
         ).encode("utf-8")
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="google",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -169,8 +168,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         )
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
-            provider=provider,
-            vendor=provider,
+            vendor=vendor,
             api_family="gemini",
             model_id="gemini-3.1-pro-preview",
             loadbalance_strategy=strategy,
@@ -273,14 +271,12 @@ class TestDEF062_NonFailover4xxRecoveryState:
         connection = SimpleNamespace(endpoint_id=501)
         resolved_model_config = SimpleNamespace(
             vendor=native_vendor,
-            provider=native_vendor,
             api_family="openai",
             model_id="native-model",
             loadbalance_strategy=strategy,
         )
         requested_proxy_model = SimpleNamespace(
             vendor=proxy_vendor,
-            provider=proxy_vendor,
             api_family="openai",
             model_id="proxy-model",
             is_enabled=True,
@@ -383,11 +379,11 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
 
         endpoint_rel = MagicMock()
         endpoint_rel.base_url = "https://api.openai.com"
@@ -402,8 +398,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         connection.auth_type = None
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -590,11 +585,11 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
 
         first_endpoint = MagicMock()
         first_endpoint.base_url = "https://first.example.com/v1"
@@ -620,8 +615,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         second_connection.auth_type = None
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -736,11 +730,11 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
 
         first_endpoint = MagicMock()
         first_endpoint.base_url = "https://first.example.com/v1"
@@ -768,8 +762,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         second_connection.max_in_flight_non_stream = 1
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -899,11 +892,11 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
 
         first_endpoint = MagicMock()
         first_endpoint.base_url = "https://first.example.com/v1"
@@ -931,8 +924,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         second_connection.max_in_flight_non_stream = 1
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -1058,11 +1050,11 @@ class TestDEF062_NonFailover4xxRecoveryState:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = MagicMock()
-        provider.key = "openai"
-        provider.audit_enabled = False
-        provider.audit_capture_bodies = False
-        provider.id = 1
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
 
         first_endpoint = MagicMock()
         first_endpoint.base_url = "https://first.example.com/v1"
@@ -1090,8 +1082,7 @@ class TestDEF062_NonFailover4xxRecoveryState:
         second_connection.max_in_flight_non_stream = 1
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -1482,7 +1473,7 @@ class TestFillFirstRuntimeBehavior:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="openai",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -1531,8 +1522,7 @@ class TestFillFirstRuntimeBehavior:
             is_active=True,
         )
         model_config = SimpleNamespace(
-            provider=provider,
-            vendor=provider,
+            vendor=vendor,
             api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=SimpleNamespace(
@@ -1658,7 +1648,7 @@ class TestFillFirstRuntimeBehavior:
             {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]}
         ).encode("utf-8")
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="openai",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -1707,8 +1697,7 @@ class TestFillFirstRuntimeBehavior:
             is_active=True,
         )
         model_config = SimpleNamespace(
-            provider=provider,
-            vendor=provider,
+            vendor=vendor,
             api_family="openai",
             model_id="gpt-4o-mini",
             loadbalance_strategy=SimpleNamespace(
@@ -1810,11 +1799,11 @@ class TestDEF021_StreamingCancellationResilience:
         api_family: str = "openai",
         model_id: str = "gpt-4o-mini",
     ):
-        provider = MagicMock()
-        provider.key = "google" if api_family == "gemini" else api_family
-        provider.audit_enabled = True
-        provider.audit_capture_bodies = False
-        provider.id = 11
+        vendor = MagicMock()
+        vendor.key = "google" if api_family == "gemini" else api_family
+        vendor.audit_enabled = True
+        vendor.audit_capture_bodies = False
+        vendor.id = 11
 
         endpoint = MagicMock()
         endpoint.id = 201
@@ -1832,8 +1821,7 @@ class TestDEF021_StreamingCancellationResilience:
         connection.endpoint_rel = endpoint
 
         model_config = MagicMock()
-        model_config.provider = provider
-        model_config.vendor = provider
+        model_config.vendor = vendor
         model_config.api_family = api_family
         model_config.model_id = model_id
         model_config.loadbalance_strategy = SimpleNamespace(
@@ -1912,7 +1900,7 @@ class TestDEF021_StreamingCancellationResilience:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
         log_started = asyncio.Event()
         release_log = asyncio.Event()
         manager = BackgroundTaskManager()
@@ -2065,7 +2053,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             path="/v1/chat/completions",
         )
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="anthropic",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -2082,7 +2070,6 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         )
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
-            provider=provider,
             vendor=vendor,
             api_family="openai",
             model_id="gpt-4o-mini",
@@ -2148,7 +2135,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             path="/v1/responses",
         )
 
-        provider = SimpleNamespace(
+        vendor = SimpleNamespace(
             key="anthropic",
             audit_enabled=False,
             audit_capture_bodies=False,
@@ -2165,7 +2152,6 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         )
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
-            provider=provider,
             vendor=vendor,
             api_family="openai",
             model_id="gpt-4o-mini",
@@ -2281,7 +2267,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         model_config, endpoint = (
             TestDEF021_StreamingCancellationResilience._build_model_config_and_endpoint()
         )
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -2415,7 +2401,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         log_started = asyncio.Event()
         release_log = asyncio.Event()
         manager = BackgroundTaskManager()
@@ -2565,7 +2551,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -2695,7 +2681,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -2842,7 +2828,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -2995,7 +2981,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         model_config, endpoint = self._build_model_config_and_endpoint(
             model_id="gpt-5.4"
         )
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -3156,7 +3142,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -3320,7 +3306,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             api_family="gemini",
             model_id="gemini-2.5-flash",
         )
-        model_config.provider.audit_capture_bodies = False
+        model_config.vendor.audit_capture_bodies = False
         manager = BackgroundTaskManager()
         await manager.start()
 
@@ -3444,7 +3430,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
 
         with (
             patch(
@@ -3547,7 +3533,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
 
         with (
             patch(
@@ -3652,7 +3638,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
         request = self._build_request(app, raw_body)
         mock_db = self._build_db_mock()
         model_config, endpoint = self._build_model_config_and_endpoint()
-        model_config.provider.audit_capture_bodies = True
+        model_config.vendor.audit_capture_bodies = True
 
         with (
             patch(

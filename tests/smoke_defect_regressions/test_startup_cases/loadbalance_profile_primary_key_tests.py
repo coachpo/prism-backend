@@ -55,9 +55,9 @@ async def _drop_database(database_url: str) -> None:
     await engine.dispose()
 
 
-class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
+class TestDEF075_LoadbalancePrimaryKeyContract:
     @pytest.mark.asyncio
-    async def test_fresh_baseline_upgrade_creates_profile_vendor_primary_keys_and_v1_strategy_storage(
+    async def test_initial_schema_creates_profile_vendor_primary_keys_and_auto_recovery_storage(
         self, test_database_url: str
     ):
         drift_database_url = _database_url_with_name(
@@ -119,7 +119,7 @@ class TestDEF075_LoadbalanceMigrationRepairsLegacyOwnerPrimaryKeys:
                 )
             await engine.dispose()
 
-            assert version == ["0001_prism_v1_schema_baseline"]
+            assert version == ["0001_initial"]
             assert profiles_pk == ["PRIMARY KEY (id)"]
             assert vendors_pk == ["PRIMARY KEY (id)"]
             assert loadbalance_table == "loadbalance_events"

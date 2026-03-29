@@ -24,7 +24,7 @@ backend/
 ├── tests/multi_profile_isolation/AGENTS.md                      # Cross-profile containment hierarchy
 ├── tests/smoke_defect_regressions/AGENTS.md                     # DEF hierarchy map and leaf ownership
 ├── tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md    # Focused proxy smoke regression cluster
-├── tests/smoke_defect_regressions/test_startup_cases/AGENTS.md  # Focused startup/auth/migration regression cluster
+├── tests/smoke_defect_regressions/test_startup_cases/AGENTS.md  # Focused startup/auth/schema regression cluster
 ├── alembic.ini                                                  # Root Alembic CLI config pointing at `app/alembic`
 ├── docker-compose.yml                                           # PostgreSQL-only helper on 15432
 ├── pyproject.toml                                               # Runtime deps and `prism-backend` console script
