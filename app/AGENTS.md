@@ -20,7 +20,8 @@ app/
 ├── routers/proxy_domains/AGENTS.md                           # Dense runtime proxy leaf
 ├── schemas/AGENTS.md                                         # Contract ownership and `schemas.py` export surface
 ├── services/AGENTS.md                                        # Public service boundaries, worker infra, reporting areas
-├── services/monitoring/                                      # Probe runner, scheduler, queries, routing feedback
+├── services/monitoring/AGENTS.md                             # Probe runner, scheduler, queries, routing feedback
+├── services/monitoring/                                      # Monitoring package documented by the leaf above
 ├── services/monitoring_service.py                            # Public monitoring facade
 └── services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md
 ```
@@ -36,7 +37,7 @@ app/
 - `routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
 - `routers/connections_domains/AGENTS.md`, `routers/proxy_domains/AGENTS.md`: the densest router packages.
 - `schemas/AGENTS.md`: contract ownership and the `schemas.py` boundary.
-- `services/AGENTS.md` plus `services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service facades, worker infrastructure, and deeper package detail.
+- `services/AGENTS.md`, `services/monitoring/AGENTS.md`, and `services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service facades, monitoring ownership, worker infrastructure, and deeper package detail.
 
 ## APP FACTS
 
@@ -55,7 +56,7 @@ app/
 - Management profile overrides versus runtime active-profile routing: `dependencies.py`
 - Router surface, shared router helpers, monitoring routes, and router-domain leaf docs: `routers/AGENTS.md`, `routers/shared/AGENTS.md`, `routers/monitoring.py`, `routers/`
 - Contract exports and schema ownership: `schemas/AGENTS.md`, `schemas/schemas.py`
-- Shared worker lifecycle, monitoring facade, and service public boundaries: `services/AGENTS.md`, `services/background_tasks.py`, `services/monitoring_service.py`
+- Shared worker lifecycle, monitoring facade, and service public boundaries: `services/AGENTS.md`, `services/monitoring/AGENTS.md`, `services/background_tasks.py`, `services/monitoring_service.py`
 - Reporting helpers for load-balance events and model metrics: `services/loadbalance_event_summary.py`, `services/stats/model_metrics.py`
 - Websocket auth and room-state handoff: `routers/realtime.py`, `services/realtime/connection_manager.py`
 

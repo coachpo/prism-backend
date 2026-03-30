@@ -12,7 +12,8 @@ services/
 ├── monitoring_service.py               # Public monitoring facade over probe, query, and scheduler helpers
 ├── proxy_service.py                    # Upstream forwarding boundary
 ├── loadbalancer/                       # Split planner, policy, limiter, state, recovery, events, and admin seams
-├── monitoring/                         # Probe runner, scheduler, queries, and routing feedback
+├── monitoring/AGENTS.md                # Probe runner, scheduler, queries, and routing feedback
+├── monitoring/                         # Package owned by the monitoring leaf doc above
 ├── audit_service.py                    # Audit persistence and redaction
 ├── costing_service.py                  # Pricing and FX helpers
 ├── background_tasks.py                 # Shared BackgroundTaskManager implementation
@@ -35,7 +36,7 @@ services/
 - Public auth boundary: `auth_service.py`, `auth/AGENTS.md`
 - Public passkey boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
 - Runtime routing, attempt planning, and upstream forwarding: `loadbalancer/AGENTS.md`, `proxy_service.py`, `proxy_support/AGENTS.md`
-- Monitoring queries, manual probes, scheduled probes, and routing feedback: `monitoring_service.py`, `monitoring/`
+- Monitoring queries, manual probes, scheduled probes, and routing feedback: `monitoring_service.py`, `monitoring/AGENTS.md`
 - Observability, request logging, dashboard payload shaping, and batch model or connection metrics: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
 - Load-balance event detail wording and cooldown summaries: `loadbalance_event_summary.py`, `loadbalancer/AGENTS.md`
 - Realtime room-state ownership: `realtime/AGENTS.md`, `realtime/connection_manager.py`
@@ -49,7 +50,7 @@ services/
 - `loadbalance_event_summary.py` is the root helper for human-readable load-balance event labels, reasons, and cooldown text used by load-balance detail responses.
 - Realtime route handlers depend on `services/realtime/connection_manager.py` for connection tracking and room membership instead of owning that state themselves.
 - `services/stats/logging.py` owns request-log side effects and emits `dashboard.update` payloads.
-- `monitoring/` owns scheduled synthetic probes, drill-down query shaping, and probe/passive-outcome feedback into runtime routing state.
+- `monitoring/AGENTS.md` owns scheduled synthetic probes, drill-down query shaping, and probe/passive-outcome feedback into runtime routing state.
 
 ## CONVENTIONS
 

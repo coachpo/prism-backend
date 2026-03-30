@@ -19,7 +19,8 @@ backend/
 ├── app/routers/proxy_domains/AGENTS.md                          # Dense runtime proxy leaf
 ├── app/schemas/AGENTS.md                                        # Contract ownership and `schemas.py` boundary
 ├── app/services/AGENTS.md                                       # Service-root boundaries, worker infra, reporting helpers
-├── app/services/monitoring/                                     # Probe runner, scheduler, queries, routing feedback
+├── app/services/monitoring/AGENTS.md                            # Probe runner, scheduler, queries, routing feedback
+├── app/services/monitoring/                                     # Monitoring package documented by the leaf above
 ├── app/services/monitoring_service.py                           # Public monitoring facade
 ├── app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md
 ├── tests/AGENTS.md                                              # Test map and aggregators
@@ -42,7 +43,7 @@ backend/
 - `app/routers/shared/AGENTS.md`: reusable router-layer helpers shared across management routes.
 - `app/routers/{auth,config,endpoints,models,pricing_templates,profiles,settings,stats}_domains/AGENTS.md`: management router-domain leaves.
 - `app/routers/connections_domains/AGENTS.md`, `app/routers/proxy_domains/AGENTS.md`: the two densest router packages.
-- `app/services/AGENTS.md` plus `app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service-root and service-package boundaries.
+- `app/services/AGENTS.md`, `app/services/monitoring/AGENTS.md`, and `app/services/{auth,loadbalancer,proxy_support,realtime,stats,webauthn}/AGENTS.md`: service-root, monitoring, and deeper service-package boundaries.
 - `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md`, `tests/smoke_defect_regressions/test_startup_cases/AGENTS.md`, and `tests/multi_profile_isolation/AGENTS.md`: test hierarchy and suite leaves.
 
 ## RUNTIME FACTS
@@ -62,7 +63,7 @@ backend/
 - Management versus runtime scope rules: `app/dependencies.py`
 - Router map, shared router helpers, monitoring routes, and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/shared/AGENTS.md`, `app/routers/monitoring.py`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
-- Shared worker lifecycle, backend monitoring scheduler, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/background_tasks.py`, `app/services/monitoring_service.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
+- Shared worker lifecycle, backend monitoring scheduler, realtime room state, dashboard updates, and reporting helpers: `app/services/AGENTS.md`, `app/services/monitoring/AGENTS.md`, `app/services/background_tasks.py`, `app/services/monitoring_service.py`, `app/services/realtime/connection_manager.py`, `app/services/stats/logging.py`
 - Migration source of truth: `alembic.ini`, `app/alembic/`, `app/alembic/AGENTS.md`, `app/core/migrations.py`
 - Backend test hierarchy and suite leaves: `tests/AGENTS.md`, `tests/services/AGENTS.md`, `tests/smoke_defect_regressions/AGENTS.md`, `tests/smoke_defect_regressions/test_proxy_cases/AGENTS.md`, `tests/smoke_defect_regressions/test_startup_cases/AGENTS.md`, `tests/multi_profile_isolation/AGENTS.md`
 
