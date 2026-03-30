@@ -16,7 +16,6 @@ from app.services.user_settings import get_report_currency_preferences
 UsageSnapshotPreset = Literal["all", "7h", "24h", "7d"]
 
 ROLLING_WINDOW_MINUTES = 30
-REQUEST_EVENT_RENDER_LIMIT = 500
 SERVICE_HEALTH_DAYS = 7
 SERVICE_HEALTH_INTERVAL_MINUTES = 15
 
@@ -110,10 +109,6 @@ def _success_rate(*, success_count: int, total_count: int) -> float:
     if total_count <= 0:
         return 0.0
     return round((success_count / total_count) * 100.0, 2)
-
-
-def _label_sort_key(value: str) -> tuple[str, str]:
-    return (value.casefold(), value)
 
 
 def _bucket_floor(value: datetime, granularity: Literal["hour", "day"]) -> datetime:
@@ -286,97 +281,6 @@ def _build_service_health(
         "interval_minutes": SERVICE_HEALTH_INTERVAL_MINUTES,
         "daily": daily,
         "cells": cells,
-    }
-
-
-def _build_request_event_available_filters(
-    events: list[_SnapshotEvent],
-) -> dict[str, object]:
-    models: dict[str, dict[str, str]] = {}
-    endpoints: dict[tuple[int | None, str], dict[str, object]] = {}
-    api_families: dict[str, dict[str, str]] = {}
-    proxy_api_keys: dict[tuple[int, str, str | None], dict[str, object]] = {}
-
-    for event in events:
-        models[event.model_id] = {
-            "model_id": event.model_id,
-            "label": event.model_label,
-        }
-        endpoints[(event.endpoint_id, event.endpoint_label)] = {
-            "endpoint_id": event.endpoint_id,
-            "label": event.endpoint_label,
-        }
-        api_families[event.api_family] = {
-            "api_family": event.api_family,
-            "label": event.api_family,
-        }
-        if event.proxy_api_key_id is not None:
-            proxy_api_keys[
-                (
-                    event.proxy_api_key_id,
-                    event.proxy_api_key_stats_label,
-                    event.proxy_api_key_prefix,
-                )
-            ] = {
-                "proxy_api_key_id": event.proxy_api_key_id,
-                "label": event.proxy_api_key_stats_label,
-                "key_prefix": event.proxy_api_key_prefix,
-            }
-
-    return {
-        "models": sorted(
-            models.values(),
-            key=lambda row: (
-                _label_sort_key(cast(str, row["label"])),
-                cast(str, row["model_id"]),
-            ),
-        ),
-        "endpoints": sorted(
-            endpoints.values(),
-            key=lambda row: (
-                _label_sort_key(cast(str, row["label"])),
-                cast(int | None, row["endpoint_id"]) or -1,
-            ),
-        ),
-        "api_families": sorted(
-            api_families.values(),
-            key=lambda row: _label_sort_key(cast(str, row["label"])),
-        ),
-        "proxy_api_keys": sorted(
-            proxy_api_keys.values(),
-            key=lambda row: (
-                _label_sort_key(cast(str, row["label"])),
-                cast(int | None, row["proxy_api_key_id"]) or -1,
-            ),
-        ),
-    }
-
-
-def _event_request_row(event: _SnapshotEvent) -> dict[str, object]:
-    return {
-        "ingress_request_id": event.ingress_request_id,
-        "created_at": event.created_at,
-        "model_id": event.model_id,
-        "model_label": event.model_label,
-        "resolved_target_model_id": event.resolved_target_model_id,
-        "api_family": event.api_family,
-        "endpoint_id": event.endpoint_id,
-        "endpoint_label": event.endpoint_label,
-        "connection_id": event.connection_id,
-        "status_code": event.status_code,
-        "success_flag": event.success_flag,
-        "attempt_count": event.attempt_count,
-        "request_path": event.request_path,
-        "input_tokens": event.input_tokens,
-        "output_tokens": event.output_tokens,
-        "cached_tokens": event.cached_tokens,
-        "reasoning_tokens": event.reasoning_tokens,
-        "total_tokens": event.total_tokens,
-        "total_cost_micros": event.total_cost_micros,
-        "proxy_api_key": {
-            "label": event.proxy_api_key_label,
-            "key_prefix": event.proxy_api_key_prefix,
-        },
     }
 
 
@@ -682,8 +586,6 @@ def _build_endpoint_statistics(events: list[_SnapshotEvent]) -> list[dict[str, o
                     "model_id": model_row.model_id,
                     "model_label": model_row.model_label,
                     "request_count": model_row.request_count,
-                    "success_count": model_row.success_count,
-                    "failed_count": model_row.failed_count,
                     "success_rate": _success_rate(
                         success_count=model_row.success_count,
                         total_count=model_row.request_count,
@@ -704,8 +606,6 @@ def _build_endpoint_statistics(events: list[_SnapshotEvent]) -> list[dict[str, o
                 "endpoint_id": group.endpoint_id,
                 "endpoint_label": group.endpoint_label,
                 "request_count": group.request_count,
-                "success_count": group.success_count,
-                "failed_count": group.failed_count,
                 "success_rate": _success_rate(
                     success_count=group.success_count,
                     total_count=group.request_count,
@@ -749,10 +649,7 @@ def _build_model_statistics(events: list[_SnapshotEvent]) -> list[dict[str, obje
             {
                 "model_id": row.model_id,
                 "model_label": row.model_label,
-                "api_family": row.api_family,
                 "request_count": row.request_count,
-                "success_count": row.success_count,
-                "failed_count": row.failed_count,
                 "success_rate": _success_rate(
                     success_count=row.success_count,
                     total_count=row.request_count,
@@ -801,10 +698,7 @@ def _build_proxy_api_key_statistics(
             {
                 "proxy_api_key_id": row.proxy_api_key_id,
                 "proxy_api_key_label": row.proxy_api_key_label,
-                "key_prefix": row.key_prefix,
                 "request_count": row.request_count,
-                "success_count": row.success_count,
-                "failed_count": row.failed_count,
                 "success_rate": _success_rate(
                     success_count=row.success_count,
                     total_count=row.request_count,
@@ -986,7 +880,6 @@ async def get_usage_snapshot(
         events=events,
         end_at=normalized_end_at,
     )
-    shown_events = events[:REQUEST_EVENT_RENDER_LIMIT]
 
     return {
         "generated_at": generated_at,
@@ -1096,13 +989,6 @@ async def get_usage_snapshot(
         ),
         "endpoint_statistics": _build_endpoint_statistics(events),
         "model_statistics": _build_model_statistics(events),
-        "request_events": {
-            "total": total_requests,
-            "shown_count": len(shown_events),
-            "render_limit": REQUEST_EVENT_RENDER_LIMIT,
-            "available_filters": _build_request_event_available_filters(shown_events),
-            "items": [_event_request_row(event) for event in shown_events],
-        },
         "proxy_api_key_statistics": _build_proxy_api_key_statistics(events),
     }
 

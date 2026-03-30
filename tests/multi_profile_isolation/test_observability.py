@@ -244,7 +244,7 @@ async def _seed_usage_snapshot_profiles_for_scope_test() -> tuple[int, int, str,
         )
         await session.commit()
 
-        return profile_a.id, profile_b.id, ingress_a, ingress_b
+        return profile_a.id, profile_b.id, model_a.model_id, model_b.model_id
 
 
 class TestCostingAndSettingsIsolation:
@@ -451,8 +451,8 @@ class TestObservabilityAttribution:
         (
             profile_a_id,
             profile_b_id,
-            ingress_a,
-            ingress_b,
+            model_a_id,
+            model_b_id,
         ) = await _seed_usage_snapshot_profiles_for_scope_test()
         transport = ASGITransport(app=app)
 
@@ -479,18 +479,12 @@ class TestObservabilityAttribution:
 
         assert payload_a["overview"]["total_requests"] == 1
         assert payload_b["overview"]["total_requests"] == 1
-        assert (
-            payload_a["request_events"]["items"][0]["ingress_request_id"] == ingress_a
-        )
-        assert (
-            payload_b["request_events"]["items"][0]["ingress_request_id"] == ingress_b
-        )
-        assert (
-            payload_a["request_events"]["items"][0]["ingress_request_id"] != ingress_b
-        )
-        assert (
-            payload_b["request_events"]["items"][0]["ingress_request_id"] != ingress_a
-        )
+        assert payload_a["model_statistics"][0]["model_id"] == model_a_id
+        assert payload_b["model_statistics"][0]["model_id"] == model_b_id
+        assert payload_a["model_statistics"][0]["model_id"] != model_b_id
+        assert payload_b["model_statistics"][0]["model_id"] != model_a_id
+        assert "request_events" not in payload_a
+        assert "request_events" not in payload_b
 
 
 class TestHeaderBlocklistScoping:

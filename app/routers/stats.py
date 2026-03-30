@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.routers.stats_domains as _stats_impl
+from app.routers.stats_domains import request_logs_route_handlers as _request_log_impl
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
     BatchDeleteResponse,
@@ -13,6 +14,7 @@ from app.schemas.schemas import (
     ConnectionSuccessRateResponse,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
+    RequestLogDetailResponse,
     RequestLogListResponse,
     SpendingReportResponse,
     StatsSummaryResponse,
@@ -20,6 +22,7 @@ from app.schemas.schemas import (
     UsageSnapshotResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
+from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import (
     get_connection_metrics_batch,
     get_connection_success_rates,
@@ -69,6 +72,20 @@ async def list_request_logs(
         limit=limit,
         offset=offset,
         get_request_logs_fn=get_request_logs,
+    )
+
+
+@router.get("/requests/{request_id}", response_model=RequestLogDetailResponse)
+async def request_log_detail(
+    request_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await _request_log_impl.request_log_detail(
+        db,
+        profile_id,
+        request_id=request_id,
+        get_request_log_detail_fn=get_request_log_detail,
     )
 
 
@@ -244,6 +261,7 @@ __all__ = [
     "get_throughput",
     "list_request_logs",
     "model_metrics_batch",
+    "request_log_detail",
     "router",
     "spending_report",
     "stats_summary",

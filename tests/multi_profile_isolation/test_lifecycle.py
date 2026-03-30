@@ -35,6 +35,7 @@ from app.models.models import (
 from app.routers.profiles import (
     list_profiles,
     get_active_profile,
+    get_profile_bootstrap,
     create_profile,
     update_profile,
     activate_profile,
@@ -132,6 +133,86 @@ class TestProfileCRUDAndLifecycle:
         assert added_settings.report_currency_code == "USD"
         assert added_settings.report_currency_symbol == "$"
         assert added_settings.timezone_preference is None
+
+    @pytest.mark.asyncio
+    async def test_profile_bootstrap_returns_profiles_active_profile_and_limits(self):
+        mock_db = AsyncMock()
+        now = datetime.now(timezone.utc)
+
+        default_profile = SimpleNamespace(
+            id=1,
+            name="Default",
+            description=None,
+            is_active=True,
+            is_default=True,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        secondary_profile = SimpleNamespace(
+            id=2,
+            name="Secondary",
+            description=None,
+            is_active=False,
+            is_default=False,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        list_result = MagicMock()
+        list_result.scalars.return_value.all.return_value = [
+            default_profile,
+            secondary_profile,
+        ]
+        mock_db.execute.return_value = list_result
+
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = default_profile
+            response = await get_profile_bootstrap(db=mock_db)
+
+        assert [profile.id for profile in response.profiles] == [1, 2]
+        assert response.active_profile is not None
+        assert response.active_profile.id == 1
+        assert response.profile_limits.max_profiles == 10
+
+    @pytest.mark.asyncio
+    async def test_profile_bootstrap_allows_null_active_profile(self):
+        mock_db = AsyncMock()
+        now = datetime.now(timezone.utc)
+
+        default_profile = SimpleNamespace(
+            id=1,
+            name="Default",
+            description=None,
+            is_active=False,
+            is_default=True,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        list_result = MagicMock()
+        list_result.scalars.return_value.all.return_value = [default_profile]
+        mock_db.execute.return_value = list_result
+
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = None
+            response = await get_profile_bootstrap(db=mock_db)
+
+        assert [profile.id for profile in response.profiles] == [1]
+        assert response.active_profile is None
+        assert response.profile_limits.max_profiles == 10
 
     @pytest.mark.asyncio
     async def test_create_profile_at_capacity_fails(self):

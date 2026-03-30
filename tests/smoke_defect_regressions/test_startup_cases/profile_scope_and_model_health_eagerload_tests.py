@@ -5,6 +5,7 @@ from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi.routing import APIRoute
 
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
@@ -49,6 +50,17 @@ class TestDEF022_ProfileIsolationRuntimeDependencies:
         assert get_active_profile_id in v1beta_dependencies
         assert get_effective_profile_id not in v1_dependencies
         assert get_effective_profile_id not in v1beta_dependencies
+
+    def test_profile_routes_mount_bootstrap_shell_route(self):
+        from app.routers import profiles as profiles_router
+
+        registered_paths = {
+            route.path
+            for route in profiles_router.router.routes
+            if isinstance(route, APIRoute)
+        }
+
+        assert "/api/profiles/bootstrap" in registered_paths
 
 
 class TestDEF065_ModelDetailEndpointEagerLoad:

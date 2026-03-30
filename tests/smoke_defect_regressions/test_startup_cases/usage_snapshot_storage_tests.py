@@ -287,10 +287,10 @@ class TestDEF086_UsageStatisticsStorageContract:
             "cost_overview",
             "endpoint_statistics",
             "model_statistics",
-            "request_events",
             "proxy_api_key_statistics",
         }:
             assert field_name in UsageSnapshotResponse.model_fields
+        assert "request_events" not in UsageSnapshotResponse.model_fields
 
     @pytest.mark.asyncio
     async def test_initial_schema_creates_usage_request_events_table_and_request_log_proxy_key_columns(
@@ -379,15 +379,11 @@ class TestDEF086_UsageStatisticsStorageContract:
             await _drop_database(migration_database_url)
 
     @pytest.mark.asyncio
-    async def test_usage_snapshot_route_returns_page_shaped_snapshot_with_proxy_key_rows(
+    async def test_usage_snapshot_route_returns_slim_snapshot_with_proxy_key_rows(
         self,
     ):
         await get_engine().dispose()
-        (
-            profile_id,
-            ingress_request_id,
-            key_prefix,
-        ) = await _seed_usage_snapshot_route_fixture()
+        profile_id, ingress_request_id, _ = await _seed_usage_snapshot_route_fixture()
         transport = ASGITransport(app=app)
 
         async with AsyncClient(
@@ -409,51 +405,40 @@ class TestDEF086_UsageStatisticsStorageContract:
         assert payload["overview"]["rolling_window_minutes"] == 30
         assert payload["overview"]["rolling_request_count"] == 0
         assert payload["overview"]["rolling_token_count"] == 0
-        assert payload["request_events"]["total"] == 1
-        assert payload["request_events"]["shown_count"] == 1
-        assert payload["request_events"]["render_limit"] == 500
-        assert payload["request_events"]["available_filters"] == {
-            "models": [
-                {
-                    "model_id": payload["request_events"]["items"][0]["model_id"],
-                    "label": payload["request_events"]["items"][0]["model_label"],
-                }
-            ],
-            "endpoints": [
-                {
-                    "endpoint_id": payload["request_events"]["items"][0]["endpoint_id"],
-                    "label": payload["request_events"]["items"][0]["endpoint_label"],
-                }
-            ],
-            "api_families": [
-                {
-                    "api_family": payload["request_events"]["items"][0]["api_family"],
-                    "label": payload["request_events"]["items"][0]["api_family"],
-                }
-            ],
-            "proxy_api_keys": [
-                {
-                    "proxy_api_key_id": payload["proxy_api_key_statistics"][0][
-                        "proxy_api_key_id"
-                    ],
-                    "label": payload["request_events"]["items"][0]["proxy_api_key"][
-                        "label"
-                    ],
-                    "key_prefix": key_prefix,
-                }
-            ],
-        }
-        assert (
-            payload["request_events"]["items"][0]["ingress_request_id"]
-            == ingress_request_id
-        )
+        assert "request_events" not in payload
         assert payload["service_health"]["days"] == 7
         assert payload["service_health"]["interval_minutes"] == 15
         assert len(payload["service_health"]["cells"]) == 7 * 96
-        assert payload["request_events"]["items"][0]["proxy_api_key"] == {
-            "label": payload["request_events"]["items"][0]["proxy_api_key"]["label"],
-            "key_prefix": key_prefix,
-        }
+        assert payload["endpoint_statistics"] == [
+            {
+                "endpoint_id": payload["endpoint_statistics"][0]["endpoint_id"],
+                "endpoint_label": payload["endpoint_statistics"][0]["endpoint_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 65,
+                "total_cost_micros": 1234,
+                "models": [
+                    {
+                        "model_id": payload["model_statistics"][0]["model_id"],
+                        "model_label": payload["model_statistics"][0]["model_label"],
+                        "request_count": 1,
+                        "success_rate": 100.0,
+                        "total_tokens": 65,
+                        "total_cost_micros": 1234,
+                    }
+                ],
+            }
+        ]
+        assert payload["model_statistics"] == [
+            {
+                "model_id": payload["model_statistics"][0]["model_id"],
+                "model_label": payload["model_statistics"][0]["model_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 65,
+                "total_cost_micros": 1234,
+            }
+        ]
         assert payload["proxy_api_key_statistics"] == [
             {
                 "proxy_api_key_id": payload["proxy_api_key_statistics"][0][
@@ -462,12 +447,20 @@ class TestDEF086_UsageStatisticsStorageContract:
                 "proxy_api_key_label": payload["proxy_api_key_statistics"][0][
                     "proxy_api_key_label"
                 ],
-                "key_prefix": key_prefix,
                 "request_count": 1,
-                "success_count": 1,
-                "failed_count": 0,
                 "success_rate": 100.0,
                 "total_tokens": 65,
                 "total_cost_micros": 1234,
             }
         ]
+        assert ingress_request_id.startswith("def086-ingress-")
+        assert "success_count" not in payload["endpoint_statistics"][0]
+        assert "failed_count" not in payload["endpoint_statistics"][0]
+        assert "success_count" not in payload["endpoint_statistics"][0]["models"][0]
+        assert "failed_count" not in payload["endpoint_statistics"][0]["models"][0]
+        assert "api_family" not in payload["model_statistics"][0]
+        assert "success_count" not in payload["model_statistics"][0]
+        assert "failed_count" not in payload["model_statistics"][0]
+        assert "key_prefix" not in payload["proxy_api_key_statistics"][0]
+        assert "success_count" not in payload["proxy_api_key_statistics"][0]
+        assert "failed_count" not in payload["proxy_api_key_statistics"][0]

@@ -24,12 +24,51 @@ class TestDEF080_VendorApiFamilySchemaContract:
         assert {"vendor_id", "api_family"}.issubset(create_fields)
         assert {"vendor_id", "api_family", "vendor"}.issubset(response_fields)
 
-    def test_request_log_response_contract_uses_api_family(self):
-        from app.schemas.schemas import RequestLogResponse
+    def test_request_log_contracts_split_list_and_detail_without_downgrading_dashboard(
+        self,
+    ):
+        import app.schemas.schemas as schema_surface
+        from app.schemas.schemas import (
+            RequestLogDetailResponse,
+            RequestLogListItemResponse,
+            RequestLogResponse,
+        )
 
-        fields = set(RequestLogResponse.model_fields)
+        list_fields = set(RequestLogListItemResponse.model_fields)
+        detail_fields = set(RequestLogDetailResponse.model_fields)
+        dashboard_fields = set(RequestLogResponse.model_fields)
 
-        assert "api_family" in fields
+        assert schema_surface.RequestLogListItemResponse is RequestLogListItemResponse
+        assert schema_surface.RequestLogDetailResponse is RequestLogDetailResponse
+        assert schema_surface.RequestLogResponse is RequestLogResponse
+        assert {
+            "id",
+            "created_at",
+            "model_id",
+            "resolved_target_model_id",
+            "api_family",
+            "vendor_name",
+            "status_code",
+            "response_time_ms",
+            "is_stream",
+            "total_tokens",
+            "total_cost_user_currency_micros",
+            "report_currency_symbol",
+        }.issubset(list_fields)
+        assert "endpoint_base_url" not in list_fields
+        assert "pricing_snapshot_input" not in list_fields
+        assert "proxy_api_key_name_snapshot" not in list_fields
+        assert {
+            "summary",
+            "request",
+            "routing",
+            "usage",
+            "costing",
+            "pricing",
+        }.issubset(detail_fields)
+        assert {"api_family", "endpoint_base_url", "pricing_snapshot_input"}.issubset(
+            dashboard_fields
+        )
 
     def test_orm_metadata_uses_vendors_table(self):
         import app.models.models  # noqa: F401
@@ -77,3 +116,23 @@ class TestDEF080_VendorApiFamilySchemaContract:
         assert "icon_key" in vendor_response_fields
         assert created_vendor.icon_key is None
         assert response_vendor.icon_key is None
+
+    def test_profile_bootstrap_contract_reexports_nullable_active_profile_and_limits(
+        self,
+    ):
+        import app.schemas.schemas as schema_surface
+        from app.schemas.schemas import ProfileBootstrapResponse
+
+        fields = set(ProfileBootstrapResponse.model_fields)
+        validated = ProfileBootstrapResponse.model_validate(
+            {
+                "profiles": [],
+                "active_profile": None,
+                "profile_limits": {"max_profiles": 10},
+            }
+        )
+
+        assert schema_surface.ProfileBootstrapResponse is ProfileBootstrapResponse
+        assert {"profiles", "active_profile", "profile_limits"}.issubset(fields)
+        assert validated.active_profile is None
+        assert validated.profile_limits.max_profiles == 10

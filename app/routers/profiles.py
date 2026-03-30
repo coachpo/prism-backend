@@ -12,8 +12,12 @@ from app.routers.profiles_domains import (
     list_profiles as _list_profiles_impl,
     update_profile as _update_profile_impl,
 )
+from app.routers.profiles_domains.route_handlers import (
+    get_profile_bootstrap as _get_profile_bootstrap_impl,
+)
 from app.schemas.schemas import (
     ProfileActivateRequest,
+    ProfileBootstrapResponse,
     ProfileCreate,
     ProfileResponse,
     ProfileUpdate,
@@ -34,6 +38,14 @@ async def list_profiles(db: Annotated[AsyncSession, Depends(get_db)]):
 @router.get("/active", response_model=ProfileResponse)
 async def get_active_profile(db: Annotated[AsyncSession, Depends(get_db)]):
     return await _get_active_profile_impl(
+        db,
+        ensure_profile_invariants_fn=ensure_profile_invariants,
+    )
+
+
+@router.get("/bootstrap", response_model=ProfileBootstrapResponse)
+async def get_profile_bootstrap(db: Annotated[AsyncSession, Depends(get_db)]):
+    return await _get_profile_bootstrap_impl(
         db,
         ensure_profile_invariants_fn=ensure_profile_invariants,
     )
@@ -88,6 +100,7 @@ __all__ = [
     "delete_profile",
     "ensure_profile_invariants",
     "get_active_profile",
+    "get_profile_bootstrap",
     "list_profiles",
     "router",
     "update_profile",

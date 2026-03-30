@@ -7,7 +7,10 @@ from app.core.time import utc_now
 from app.models.models import Profile, UserSetting
 from app.schemas.schemas import (
     ProfileActivateRequest,
+    ProfileBootstrapResponse,
     ProfileCreate,
+    ProfileLimitsResponse,
+    ProfileResponse,
     ProfileUpdate,
 )
 from app.services.profile_invariants import (
@@ -42,6 +45,32 @@ async def get_active_profile(
     ensure_profile_invariants_fn=ensure_profile_invariants,
 ):
     return await ensure_profile_invariants_fn(db)
+
+
+async def get_profile_bootstrap(
+    db: AsyncSession,
+    *,
+    ensure_profile_invariants_fn=ensure_profile_invariants,
+):
+    active_profile = await ensure_profile_invariants_fn(db)
+    result = await db.execute(
+        select(Profile).where(Profile.deleted_at.is_(None)).order_by(Profile.id.asc())
+    )
+    profiles = [
+        ProfileResponse.model_validate(profile, from_attributes=True)
+        for profile in result.scalars().all()
+    ]
+    active_profile_response = (
+        None
+        if active_profile is None
+        else ProfileResponse.model_validate(active_profile, from_attributes=True)
+    )
+
+    return ProfileBootstrapResponse(
+        profiles=profiles,
+        active_profile=active_profile_response,
+        profile_limits=ProfileLimitsResponse(max_profiles=MAX_NON_DELETED_PROFILES),
+    )
 
 
 async def create_profile(
@@ -219,6 +248,7 @@ __all__ = [
     "create_profile",
     "delete_profile",
     "get_active_profile",
+    "get_profile_bootstrap",
     "list_profiles",
     "update_profile",
 ]

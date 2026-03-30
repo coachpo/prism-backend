@@ -183,8 +183,6 @@ class UsageEndpointModelStatistic(BaseModel):
     model_id: str
     model_label: str
     request_count: int
-    success_count: int
-    failed_count: int
     success_rate: float
     total_tokens: int
     total_cost_micros: int
@@ -194,8 +192,6 @@ class UsageEndpointStatistic(BaseModel):
     endpoint_id: int | None = None
     endpoint_label: str
     request_count: int
-    success_count: int
-    failed_count: int
     success_rate: float
     total_tokens: int
     total_cost_micros: int
@@ -205,88 +201,16 @@ class UsageEndpointStatistic(BaseModel):
 class UsageModelStatistic(BaseModel):
     model_id: str
     model_label: str
-    api_family: ApiFamily
     request_count: int
-    success_count: int
-    failed_count: int
     success_rate: float
     total_tokens: int
     total_cost_micros: int
 
 
-class UsageProxyApiKeyReference(BaseModel):
-    label: str | None = None
-    key_prefix: str | None = None
-
-
-class UsageRequestEventModelFilter(BaseModel):
-    model_id: str
-    label: str
-
-
-class UsageRequestEventEndpointFilter(BaseModel):
-    endpoint_id: int | None = None
-    label: str
-
-
-class UsageRequestEventApiFamilyFilter(BaseModel):
-    api_family: ApiFamily
-    label: str
-
-
-class UsageRequestEventProxyApiKeyFilter(BaseModel):
-    proxy_api_key_id: int | None = None
-    label: str
-    key_prefix: str | None = None
-
-
-class UsageRequestEventAvailableFilters(BaseModel):
-    models: list[UsageRequestEventModelFilter] = Field(default_factory=list)
-    endpoints: list[UsageRequestEventEndpointFilter] = Field(default_factory=list)
-    api_families: list[UsageRequestEventApiFamilyFilter] = Field(default_factory=list)
-    proxy_api_keys: list[UsageRequestEventProxyApiKeyFilter] = Field(
-        default_factory=list
-    )
-
-
-class UsageSnapshotRequestEventItem(BaseModel):
-    ingress_request_id: str
-    created_at: datetime
-    model_id: str
-    model_label: str
-    resolved_target_model_id: str | None = None
-    api_family: ApiFamily
-    endpoint_id: int | None = None
-    endpoint_label: str
-    connection_id: int | None = None
-    status_code: int
-    success_flag: bool
-    attempt_count: int
-    request_path: str
-    input_tokens: int
-    output_tokens: int
-    cached_tokens: int
-    reasoning_tokens: int
-    total_tokens: int
-    total_cost_micros: int
-    proxy_api_key: UsageProxyApiKeyReference
-
-
-class UsageRequestEventsSection(BaseModel):
-    total: int
-    shown_count: int
-    render_limit: int
-    available_filters: UsageRequestEventAvailableFilters
-    items: list[UsageSnapshotRequestEventItem] = Field(default_factory=list)
-
-
 class UsageProxyApiKeyStatistic(BaseModel):
     proxy_api_key_id: int | None = None
     proxy_api_key_label: str
-    key_prefix: str | None = None
     request_count: int
-    success_count: int
-    failed_count: int
     success_rate: float
     total_tokens: int
     total_cost_micros: int
@@ -304,7 +228,6 @@ class UsageSnapshotResponse(BaseModel):
     cost_overview: UsageCostOverview
     endpoint_statistics: list[UsageEndpointStatistic] = Field(default_factory=list)
     model_statistics: list[UsageModelStatistic] = Field(default_factory=list)
-    request_events: UsageRequestEventsSection
     proxy_api_key_statistics: list[UsageProxyApiKeyStatistic] = Field(
         default_factory=list
     )

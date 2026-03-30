@@ -6,10 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.schemas import (
     BatchDeleteResponse,
+    RequestLogDetailResponse,
+    RequestLogListItemResponse,
     RequestLogListResponse,
-    RequestLogResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
+from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import get_request_logs
 
 from .helpers import normalize_datetime_filter
@@ -54,7 +56,9 @@ async def list_request_logs(
         limit=limit,
         offset=offset,
     )
-    serialized_items = [RequestLogResponse.model_validate(item) for item in items]
+    serialized_items = [
+        RequestLogListItemResponse.model_validate(item) for item in items
+    ]
     return RequestLogListResponse(
         items=serialized_items,
         total=total,
@@ -91,7 +95,26 @@ async def delete_request_logs(
     return BatchDeleteResponse(accepted=True)
 
 
+async def request_log_detail(
+    db: AsyncSession,
+    profile_id: int,
+    request_id: int,
+    *,
+    get_request_log_detail_fn=get_request_log_detail,
+):
+    item = await get_request_log_detail_fn(
+        db,
+        profile_id=profile_id,
+        request_id=request_id,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="Request log not found")
+
+    return RequestLogDetailResponse.from_request_log(item)
+
+
 __all__ = [
     "delete_request_logs",
     "list_request_logs",
+    "request_log_detail",
 ]

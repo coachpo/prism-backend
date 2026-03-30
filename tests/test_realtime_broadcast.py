@@ -9,7 +9,7 @@ import pytest
 from fastapi import WebSocket
 
 import app.services.stats.logging as stats_logging
-from app.models.models import ModelConfig
+from app.models.models import ModelConfig, RequestLog
 from app.routers.proxy_domains.attempt_outcome_reporting import record_attempt_audit
 from app.routers.realtime import SUPPORTED_REALTIME_CHANNELS, websocket_endpoint
 from app.services.loadbalancer.events import record_failed_transition
@@ -31,6 +31,10 @@ from app.services.stats.logging import (
     enqueue_dashboard_update_broadcast,
     log_request,
 )
+from tests.loadbalance_strategy_helpers import (
+    DEFAULT_FAILOVER_STATUS_CODES,
+    make_routing_policy_adaptive,
+)
 
 
 class MockWebSocket:
@@ -47,50 +51,37 @@ def make_session_context(session: AsyncMock) -> AsyncMock:
 
 
 def make_failover_policy(**overrides):
-    from app.services.loadbalancer.policy import EffectiveLoadbalancePolicy
+    from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
 
-    return EffectiveLoadbalancePolicy(
-        strategy_type=cast(
-            Literal["single", "fill-first", "round-robin", "failover"],
-            overrides.get("strategy_type", "failover"),
+    routing_policy = make_routing_policy_adaptive(
+        failure_status_codes=cast(
+            list[int],
+            overrides.get("failover_status_codes", DEFAULT_FAILOVER_STATUS_CODES),
         ),
-        failover_recovery_enabled=cast(
-            bool, overrides.get("failover_recovery_enabled", True)
-        ),
-        failover_cooldown_seconds=float(
+        base_open_seconds=int(
             cast(float | int, overrides.get("failover_cooldown_seconds", 30.0))
         ),
-        failover_failure_threshold=cast(
-            int, overrides.get("failover_failure_threshold", 2)
-        ),
-        failover_backoff_multiplier=float(
+        failure_threshold=cast(int, overrides.get("failover_failure_threshold", 2)),
+        backoff_multiplier=float(
             cast(float | int, overrides.get("failover_backoff_multiplier", 2.0))
         ),
-        failover_max_cooldown_seconds=cast(
-            int, overrides.get("failover_max_cooldown_seconds", 900)
-        ),
-        failover_jitter_ratio=float(
+        max_open_seconds=cast(int, overrides.get("failover_max_cooldown_seconds", 900)),
+        jitter_ratio=float(
             cast(float | int, overrides.get("failover_jitter_ratio", 0.2))
         ),
-        failover_status_codes=tuple(
-            cast(
-                list[int],
-                overrides.get(
-                    "failover_status_codes",
-                    [403, 422, 429, 500, 502, 503, 504, 529],
-                ),
-            )
-        ),
-        failover_ban_mode=cast(
+        ban_mode=cast(
             Literal["off", "temporary", "manual"],
             overrides.get("failover_ban_mode", "off"),
         ),
-        failover_max_cooldown_strikes_before_ban=cast(
+        max_open_strikes_before_ban=cast(
             int, overrides.get("failover_max_cooldown_strikes_before_ban", 0)
         ),
-        failover_ban_duration_seconds=cast(
+        ban_duration_seconds=cast(
             int, overrides.get("failover_ban_duration_seconds", 0)
         ),
+    )
+    return resolve_effective_loadbalance_policy(
+        SimpleNamespace(routing_policy=routing_policy)
     )
 
 
@@ -361,6 +352,171 @@ async def test_log_request_enqueues_dashboard_broadcast_payload() -> None:
     assert dashboard_call["message"]["type"] == "dashboard.update"
     assert dashboard_call["message"]["request_log"]["id"] == 321
     assert dashboard_call["message"]["stats_summary_24h"]["total_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_build_dashboard_update_message_preserves_full_request_log_payload() -> (
+    None
+):
+    entry = cast(
+        RequestLog,
+        cast(
+            object,
+            SimpleNamespace(
+                id=321,
+                profile_id=11,
+                model_id="gpt-4o-mini",
+                api_family="openai",
+                vendor_id=1,
+                vendor_key="openai",
+                vendor_name="OpenAI",
+                resolved_target_model_id="gpt-4.1-mini",
+                endpoint_id=4,
+                connection_id=8,
+                proxy_api_key_id=21,
+                proxy_api_key_name_snapshot="primary-key",
+                ingress_request_id="ingress-321",
+                attempt_number=2,
+                provider_correlation_id="provider-321",
+                endpoint_base_url="https://api.openai.com",
+                status_code=503,
+                response_time_ms=1450,
+                is_stream=False,
+                input_tokens=120,
+                output_tokens=80,
+                total_tokens=200,
+                success_flag=False,
+                billable_flag=False,
+                priced_flag=False,
+                unpriced_reason="missing-price",
+                cache_read_input_tokens=10,
+                cache_creation_input_tokens=20,
+                reasoning_tokens=30,
+                input_cost_micros=100,
+                output_cost_micros=200,
+                cache_read_input_cost_micros=30,
+                cache_creation_input_cost_micros=40,
+                reasoning_cost_micros=50,
+                total_cost_original_micros=600,
+                total_cost_user_currency_micros=700,
+                currency_code_original="USD",
+                report_currency_code="USD",
+                report_currency_symbol="$",
+                fx_rate_used="1",
+                fx_rate_source="manual",
+                pricing_snapshot_unit="tokens",
+                pricing_snapshot_input="0.1",
+                pricing_snapshot_output="0.2",
+                pricing_snapshot_cache_read_input="0.01",
+                pricing_snapshot_cache_creation_input="0.02",
+                pricing_snapshot_reasoning="0.03",
+                pricing_snapshot_missing_special_token_price_policy="zero",
+                pricing_config_version_used=4,
+                request_path="/v1/chat/completions",
+                error_detail="upstream timeout",
+                endpoint_description="Primary OpenAI endpoint",
+                created_at=datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc),
+            ),
+        ),
+    )
+    db = AsyncMock()
+
+    with (
+        patch(
+            "app.services.stats.logging.get_stats_summary",
+            AsyncMock(
+                side_effect=[
+                    {
+                        "total_requests": 1,
+                        "success_count": 0,
+                        "error_count": 1,
+                        "success_rate": 0.0,
+                        "avg_response_time_ms": 1450.0,
+                        "p95_response_time_ms": 1450,
+                        "total_input_tokens": 120,
+                        "total_output_tokens": 80,
+                        "total_tokens": 200,
+                        "groups": [],
+                    },
+                    {
+                        "total_requests": 1,
+                        "success_count": 0,
+                        "error_count": 1,
+                        "success_rate": 0.0,
+                        "avg_response_time_ms": 1450.0,
+                        "p95_response_time_ms": 1450,
+                        "total_input_tokens": 120,
+                        "total_output_tokens": 80,
+                        "total_tokens": 200,
+                        "groups": [
+                            {
+                                "key": "openai",
+                                "total_requests": 1,
+                                "success_count": 0,
+                                "error_count": 1,
+                                "avg_response_time_ms": 1450.0,
+                                "total_tokens": 200,
+                            }
+                        ],
+                    },
+                ]
+            ),
+        ),
+        patch(
+            "app.services.stats.logging.get_spending_report",
+            AsyncMock(
+                return_value={
+                    "summary": {
+                        "total_cost_micros": 700,
+                        "successful_request_count": 0,
+                        "priced_request_count": 0,
+                        "unpriced_request_count": 1,
+                        "total_input_tokens": 120,
+                        "total_output_tokens": 80,
+                        "total_cache_read_input_tokens": 10,
+                        "total_cache_creation_input_tokens": 20,
+                        "total_reasoning_tokens": 30,
+                        "total_tokens": 200,
+                        "avg_cost_per_successful_request_micros": 0,
+                    },
+                    "groups": [],
+                    "groups_total": 0,
+                    "top_spending_models": [],
+                    "top_spending_endpoints": [],
+                    "unpriced_breakdown": {"missing-price": 1},
+                    "report_currency_code": "USD",
+                    "report_currency_symbol": "$",
+                }
+            ),
+        ),
+        patch(
+            "app.services.stats.logging.get_throughput_stats",
+            AsyncMock(
+                return_value={
+                    "average_rpm": 1.0,
+                    "peak_rpm": 1.0,
+                    "current_rpm": 1.0,
+                    "total_requests": 1,
+                    "time_window_seconds": 60.0,
+                    "buckets": [],
+                }
+            ),
+        ),
+        patch(
+            "app.services.stats.logging.build_dashboard_route_snapshot",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        message = await stats_logging.build_dashboard_update_message(db=db, entry=entry)
+
+    request_log = message["request_log"]
+    assert isinstance(request_log, dict)
+    assert request_log["endpoint_base_url"] == "https://api.openai.com"
+    assert request_log["proxy_api_key_name_snapshot"] == "primary-key"
+    assert request_log["pricing_snapshot_input"] == "0.1"
+    assert request_log["pricing_snapshot_reasoning"] == "0.03"
+    assert request_log["report_currency_symbol"] == "$"
+    assert request_log["resolved_target_model_id"] == "gpt-4.1-mini"
 
 
 @pytest.mark.asyncio
@@ -1196,27 +1352,43 @@ async def test_loadbalance_transition_background_failure_stays_off_path() -> Non
 async def test_record_connection_failure_preserves_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
-    from app.models.models import LoadbalanceCurrentState
-
-    current_state = LoadbalanceCurrentState(
-        profile_id=4,
-        connection_id=9,
+    current_state = SimpleNamespace(
         consecutive_failures=0,
+        blocked_until_at=None,
+        last_failure_kind=None,
+        max_cooldown_strikes=0,
+        ban_mode="off",
+        banned_until_at=None,
         last_cooldown_seconds=0.0,
         probe_eligible_logged=False,
     )
+    persisted_snapshot = {
+        "consecutive_failures": 1,
+        "blocked_until_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "max_cooldown_strikes": 0,
+        "ban_mode": "off",
+        "banned_until_at": None,
+        "last_cooldown_seconds": 30.0,
+        "last_failure_kind": "timeout",
+        "probe_eligible_logged": False,
+    }
     mock_session = AsyncMock()
     mock_session.commit = AsyncMock()
     mock_session.rollback = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one.return_value = current_state
-    mock_session.execute = AsyncMock(side_effect=[MagicMock(), mock_result])
 
     with (
         patch(
             "app.services.loadbalancer.recovery.AsyncSessionLocal",
             return_value=make_session_context(mock_session),
         ),
+        patch(
+            "app.services.loadbalancer.recovery.upsert_and_lock_runtime_state",
+            AsyncMock(return_value=current_state),
+        ),
+        patch(
+            "app.services.loadbalancer.recovery.record_connection_failure_state",
+            AsyncMock(return_value=persisted_snapshot),
+        ) as record_state,
         patch(
             "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=RuntimeError("queue unavailable")),
@@ -1233,39 +1405,38 @@ async def test_record_connection_failure_preserves_state_when_loadbalance_enqueu
             vendor_id=1,
         )
 
-    assert current_state.profile_id == 4
-    assert current_state.connection_id == 9
-    assert current_state.consecutive_failures == 1
+    record_state.assert_awaited_once()
     mock_session.commit.assert_awaited_once()
+    mock_session.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_fails() -> (
     None
 ):
-    current_state = SimpleNamespace(
-        consecutive_failures=3,
-        blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
-        max_cooldown_strikes=0,
-        ban_mode="off",
-        banned_until_at=None,
-        last_cooldown_seconds=30.0,
-        last_failure_kind="timeout",
-        probe_eligible_logged=False,
-    )
+    recovery_snapshot = {
+        "consecutive_failures": 3,
+        "blocked_until_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        "max_cooldown_strikes": 0,
+        "ban_mode": "off",
+        "banned_until_at": None,
+        "last_cooldown_seconds": 30.0,
+        "last_failure_kind": "timeout",
+        "probe_eligible_logged": False,
+    }
     mock_session = AsyncMock()
     mock_session.commit = AsyncMock()
     mock_session.rollback = AsyncMock()
-    mock_session.delete = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = current_state
-    mock_session.execute = AsyncMock(return_value=mock_result)
 
     with (
         patch(
             "app.services.loadbalancer.recovery.AsyncSessionLocal",
             return_value=make_session_context(mock_session),
         ),
+        patch(
+            "app.services.loadbalancer.recovery.record_connection_recovery_state",
+            AsyncMock(return_value=recovery_snapshot),
+        ) as record_state,
         patch(
             "app.services.loadbalancer.events.background_task_manager.enqueue",
             MagicMock(side_effect=RuntimeError("queue unavailable")),
@@ -1280,8 +1451,13 @@ async def test_record_connection_recovery_clears_state_when_loadbalance_enqueue_
             vendor_id=1,
         )
 
-    mock_session.delete.assert_awaited_once_with(current_state)
+    record_state.assert_awaited_once_with(
+        session=mock_session,
+        profile_id=4,
+        connection_id=9,
+    )
     mock_session.commit.assert_awaited_once()
+    mock_session.rollback.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1297,6 +1473,10 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
         is_active=True,
         endpoint_rel=object(),
         endpoint_id=12,
+        qps_limit=None,
+        max_in_flight_non_stream=None,
+        max_in_flight_stream=None,
+        name="connection-7",
     )
     model_config = cast(
         ModelConfig,
@@ -1305,8 +1485,7 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
             SimpleNamespace(
                 connections=[connection],
                 loadbalance_strategy=SimpleNamespace(
-                    strategy_type="failover",
-                    failover_recovery_enabled=True,
+                    routing_policy=make_routing_policy_adaptive()
                 ),
                 model_id="gpt-4o-mini",
                 vendor_id=1,
@@ -1315,12 +1494,13 @@ async def test_build_attempt_plan_keeps_probe_eligible_connection_when_loadbalan
     )
 
     current_state = SimpleNamespace(
+        circuit_state="open",
         blocked_until_at=datetime(2025, 1, 1, tzinfo=timezone.utc),
         probe_eligible_logged=False,
     )
 
     with patch(
-        "app.services.loadbalancer.planner.get_current_states_for_connections",
+        "app.services.loadbalancer.planner.get_runtime_states_for_connections",
         AsyncMock(return_value={7: current_state}),
     ):
         attempt_plan = await build_attempt_plan(

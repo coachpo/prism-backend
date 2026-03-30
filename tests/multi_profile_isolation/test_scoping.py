@@ -36,6 +36,7 @@ from app.models.models import (
 from app.routers.profiles import (
     list_profiles,
     get_active_profile,
+    get_profile_bootstrap,
     create_profile,
     update_profile,
     activate_profile,
@@ -61,6 +62,54 @@ from app.services.audit_service import record_audit_log
 
 class TestProfileScopedDataIsolation:
     """FR-002: Scoped Data Model"""
+
+    @pytest.mark.asyncio
+    async def test_profile_bootstrap_keeps_active_profile_distinct_from_full_list(self):
+        mock_db = AsyncMock()
+        now = datetime.now(timezone.utc)
+
+        default_profile = SimpleNamespace(
+            id=1,
+            name="Default",
+            description=None,
+            is_active=False,
+            is_default=True,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        active_profile = SimpleNamespace(
+            id=2,
+            name="Runtime",
+            description=None,
+            is_active=True,
+            is_default=False,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        list_result = MagicMock()
+        list_result.scalars.return_value.all.return_value = [
+            default_profile,
+            active_profile,
+        ]
+        mock_db.execute.return_value = list_result
+
+        with patch(
+            "app.routers.profiles.ensure_profile_invariants",
+            new_callable=AsyncMock,
+        ) as invariants_mock:
+            invariants_mock.return_value = active_profile
+            response = await get_profile_bootstrap(db=mock_db)
+
+        assert [profile.id for profile in response.profiles] == [1, 2]
+        assert response.active_profile is not None
+        assert response.active_profile.id == 2
+        assert response.profile_limits.max_profiles == 10
 
     @pytest.mark.asyncio
     async def test_same_model_id_in_different_profiles(self):

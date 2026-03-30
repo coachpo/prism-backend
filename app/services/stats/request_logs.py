@@ -105,3 +105,14 @@ async def get_request_logs(
     )
     rows = (await db.execute(q)).scalars().all()
     return list(rows), total
+
+
+async def get_request_log_detail(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    request_id: int,
+) -> RequestLog | None:
+    where = _build_request_log_where(profile_id=profile_id, request_id=request_id)
+    q = select(RequestLog).where(where).limit(1)
+    return (await db.execute(q)).scalar_one_or_none()

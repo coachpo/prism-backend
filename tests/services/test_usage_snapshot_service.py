@@ -18,7 +18,13 @@ from app.models.models import (
     UserSetting,
     Vendor,
 )
-from app.schemas.domains.usage_statistics import UsageSnapshotResponse
+from app.schemas.domains.usage_statistics import (
+    UsageEndpointModelStatistic,
+    UsageEndpointStatistic,
+    UsageModelStatistic,
+    UsageProxyApiKeyStatistic,
+    UsageSnapshotResponse,
+)
 from app.services import stats_service
 from app.services.stats.time_presets import resolve_time_preset
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
@@ -29,7 +35,6 @@ class UsageSnapshotSeed:
     alt_model_id: str
     primary_endpoint_id: int
     primary_key_id: int
-    primary_key_prefix: str
     primary_model_id: str
     profile_id: int
     secondary_endpoint_id: int
@@ -346,7 +351,6 @@ async def _seed_usage_snapshot_dataset(now: datetime) -> UsageSnapshotSeed:
             alt_model_id=alt_model.model_id,
             primary_endpoint_id=primary_endpoint.id,
             primary_key_id=primary_key.id,
-            primary_key_prefix=primary_key.key_prefix,
             primary_model_id=primary_model.model_id,
             profile_id=primary_profile.id,
             secondary_endpoint_id=secondary_endpoint.id,
@@ -354,7 +358,7 @@ async def _seed_usage_snapshot_dataset(now: datetime) -> UsageSnapshotSeed:
 
 
 class TestUsageSnapshotService:
-    def test_usage_snapshot_response_exposes_full_page_contract(self):
+    def test_usage_snapshot_response_exposes_slim_page_contract(self):
         expected_fields = {
             "generated_at",
             "time_range",
@@ -367,11 +371,43 @@ class TestUsageSnapshotService:
             "cost_overview",
             "endpoint_statistics",
             "model_statistics",
-            "request_events",
             "proxy_api_key_statistics",
         }
 
-        assert expected_fields.issubset(UsageSnapshotResponse.model_fields.keys())
+        assert set(UsageSnapshotResponse.model_fields.keys()) == expected_fields
+        assert set(UsageEndpointStatistic.model_fields.keys()) == {
+            "endpoint_id",
+            "endpoint_label",
+            "request_count",
+            "success_rate",
+            "total_tokens",
+            "total_cost_micros",
+            "models",
+        }
+        assert set(UsageEndpointModelStatistic.model_fields.keys()) == {
+            "model_id",
+            "model_label",
+            "request_count",
+            "success_rate",
+            "total_tokens",
+            "total_cost_micros",
+        }
+        assert set(UsageModelStatistic.model_fields.keys()) == {
+            "model_id",
+            "model_label",
+            "request_count",
+            "success_rate",
+            "total_tokens",
+            "total_cost_micros",
+        }
+        assert set(UsageProxyApiKeyStatistic.model_fields.keys()) == {
+            "proxy_api_key_id",
+            "proxy_api_key_label",
+            "request_count",
+            "success_rate",
+            "total_tokens",
+            "total_cost_micros",
+        }
 
     def test_resolve_time_preset_supports_last_seven_hours(self):
         fixed_end = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
@@ -573,70 +609,36 @@ class TestUsageSnapshotService:
         }
         assert endpoint_rows[seed.primary_endpoint_id]["request_count"] == 1
         assert endpoint_rows[seed.primary_endpoint_id]["success_rate"] == 100.0
+        assert endpoint_rows[seed.primary_endpoint_id]["endpoint_label"].startswith(
+            "Primary Endpoint"
+        )
         assert endpoint_rows[seed.primary_endpoint_id]["total_cost_micros"] == 4200
         assert endpoint_rows[seed.secondary_endpoint_id]["request_count"] == 1
         assert endpoint_rows[seed.secondary_endpoint_id]["success_rate"] == 0.0
+        assert "success_count" not in endpoint_rows[seed.primary_endpoint_id]
+        assert "failed_count" not in endpoint_rows[seed.primary_endpoint_id]
+        assert (
+            "success_count" not in endpoint_rows[seed.primary_endpoint_id]["models"][0]
+        )
+        assert (
+            "failed_count" not in endpoint_rows[seed.primary_endpoint_id]["models"][0]
+        )
 
         model_rows = {row["model_id"]: row for row in snapshot["model_statistics"]}
         assert model_rows[seed.primary_model_id]["model_label"].startswith("GPT 4o")
         assert model_rows[seed.alt_model_id]["model_label"] == seed.alt_model_id
         assert model_rows[seed.primary_model_id]["request_count"] == 1
         assert model_rows[seed.alt_model_id]["request_count"] == 1
-
-        assert snapshot["request_events"]["total"] == 2
-        assert snapshot["request_events"]["shown_count"] == 2
-        assert snapshot["request_events"]["render_limit"] == 500
-        newest_event = snapshot["request_events"]["items"][0]
-        assert newest_event["ingress_request_id"].startswith("ingress-success-")
-        assert newest_event["cached_tokens"] == 25
-        assert newest_event["proxy_api_key"] == {
-            "label": "Snapshot Primary Key",
-            "key_prefix": seed.primary_key_prefix,
-        }
-        assert snapshot["request_events"]["available_filters"] == {
-            "models": [
-                {
-                    "model_id": seed.alt_model_id,
-                    "label": seed.alt_model_id,
-                },
-                {
-                    "model_id": seed.primary_model_id,
-                    "label": model_rows[seed.primary_model_id]["model_label"],
-                },
-            ],
-            "endpoints": [
-                {
-                    "endpoint_id": seed.primary_endpoint_id,
-                    "label": endpoint_rows[seed.primary_endpoint_id]["endpoint_label"],
-                },
-                {
-                    "endpoint_id": seed.secondary_endpoint_id,
-                    "label": endpoint_rows[seed.secondary_endpoint_id][
-                        "endpoint_label"
-                    ],
-                },
-            ],
-            "api_families": [
-                {"api_family": "anthropic", "label": "anthropic"},
-                {"api_family": "openai", "label": "openai"},
-            ],
-            "proxy_api_keys": [
-                {
-                    "proxy_api_key_id": seed.primary_key_id,
-                    "label": "Snapshot Primary Key",
-                    "key_prefix": seed.primary_key_prefix,
-                }
-            ],
-        }
+        assert "api_family" not in model_rows[seed.primary_model_id]
+        assert "success_count" not in model_rows[seed.primary_model_id]
+        assert "failed_count" not in model_rows[seed.primary_model_id]
+        assert "request_events" not in snapshot
 
         assert snapshot["proxy_api_key_statistics"] == [
             {
                 "proxy_api_key_id": seed.primary_key_id,
-                "proxy_api_key_label": newest_event["proxy_api_key"]["label"],
-                "key_prefix": seed.primary_key_prefix,
+                "proxy_api_key_label": "Snapshot Primary Key",
                 "request_count": 2,
-                "success_count": 1,
-                "failed_count": 1,
                 "success_rate": 50.0,
                 "total_tokens": 245,
                 "total_cost_micros": 4200,

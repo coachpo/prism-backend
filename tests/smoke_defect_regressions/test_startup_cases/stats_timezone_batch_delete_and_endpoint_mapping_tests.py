@@ -1,10 +1,71 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.routing import APIRoute
+
+
+def _request_log_row(**overrides):
+    payload = {
+        "id": 321,
+        "profile_id": 7,
+        "model_id": "gpt-5.4",
+        "api_family": "openai",
+        "vendor_id": 1,
+        "vendor_key": "openai",
+        "vendor_name": "OpenAI",
+        "resolved_target_model_id": "gpt-4.1-mini",
+        "endpoint_id": 4,
+        "connection_id": 8,
+        "proxy_api_key_id": 12,
+        "proxy_api_key_name_snapshot": "primary-key",
+        "ingress_request_id": "ingress-321",
+        "attempt_number": 2,
+        "provider_correlation_id": "provider-321",
+        "endpoint_base_url": "https://api.openai.com",
+        "status_code": 503,
+        "response_time_ms": 1450,
+        "is_stream": False,
+        "input_tokens": 120,
+        "output_tokens": 80,
+        "total_tokens": 200,
+        "success_flag": False,
+        "billable_flag": False,
+        "priced_flag": False,
+        "unpriced_reason": "missing-price",
+        "cache_read_input_tokens": 10,
+        "cache_creation_input_tokens": 20,
+        "reasoning_tokens": 30,
+        "input_cost_micros": 100,
+        "output_cost_micros": 200,
+        "cache_read_input_cost_micros": 30,
+        "cache_creation_input_cost_micros": 40,
+        "reasoning_cost_micros": 50,
+        "total_cost_original_micros": 600,
+        "total_cost_user_currency_micros": 700,
+        "currency_code_original": "USD",
+        "report_currency_code": "USD",
+        "report_currency_symbol": "$",
+        "fx_rate_used": "1",
+        "fx_rate_source": "manual",
+        "pricing_snapshot_unit": "tokens",
+        "pricing_snapshot_input": "0.1",
+        "pricing_snapshot_output": "0.2",
+        "pricing_snapshot_cache_read_input": "0.01",
+        "pricing_snapshot_cache_creation_input": "0.02",
+        "pricing_snapshot_reasoning": "0.03",
+        "pricing_snapshot_missing_special_token_price_policy": "zero",
+        "pricing_config_version_used": 4,
+        "request_path": "/v1/chat/completions",
+        "error_detail": "upstream timeout",
+        "endpoint_description": "Primary OpenAI endpoint",
+        "created_at": datetime(2026, 2, 28, 3, 29, 6, 216000, tzinfo=timezone.utc),
+    }
+    payload.update(overrides)
+    return SimpleNamespace(**payload)
 
 
 class TestDEF004_FrontendDeleteErrorHandling:
@@ -106,6 +167,84 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         )
         assert call_kwargs["status_family"] == "4xx"
 
+    @pytest.mark.asyncio
+    async def test_requests_route_serializes_slim_list_items(self):
+        from app.routers.stats import list_request_logs
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_request_logs", new_callable=AsyncMock
+        ) as mock_get_request_logs:
+            mock_get_request_logs.return_value = ([_request_log_row()], 1)
+            response = await list_request_logs(
+                db=mock_db,
+                profile_id=7,
+                limit=50,
+                offset=0,
+            )
+
+        assert response.total == 1
+        assert response.items[0].vendor_name == "OpenAI"
+        item_payload = response.items[0].model_dump()
+        assert "endpoint_base_url" not in item_payload
+        assert "pricing_snapshot_input" not in item_payload
+        assert "proxy_api_key_name_snapshot" not in item_payload
+
+    @pytest.mark.asyncio
+    async def test_request_detail_route_passes_profile_scoped_request_id_to_service(
+        self,
+    ):
+        from app.routers.stats import request_log_detail
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_request_log_detail", new_callable=AsyncMock
+        ) as mock_get_request_log_detail:
+            mock_get_request_log_detail.return_value = _request_log_row()
+            response = await request_log_detail(
+                db=mock_db,
+                profile_id=7,
+                request_id=321,
+            )
+
+        _, call_kwargs = cast(
+            tuple[tuple[object, ...], dict[str, object]],
+            mock_get_request_log_detail.await_args_list[0],
+        )
+        assert call_kwargs["profile_id"] == 7
+        assert call_kwargs["request_id"] == 321
+        assert response.summary.id == 321
+        assert response.request.ingress_request_id == "ingress-321"
+        assert response.routing.vendor_name == "OpenAI"
+        assert response.usage.total_tokens == 200
+        assert response.costing.report_currency_symbol == "$"
+        assert response.pricing.pricing_snapshot_input == "0.1"
+
+    @pytest.mark.asyncio
+    async def test_request_detail_route_returns_404_for_missing_or_out_of_scope_request(
+        self,
+    ):
+        from app.routers.stats import request_log_detail
+
+        mock_db = AsyncMock()
+
+        with patch(
+            "app.routers.stats.get_request_log_detail", new_callable=AsyncMock
+        ) as mock_get_request_log_detail:
+            mock_get_request_log_detail.return_value = None
+
+            with pytest.raises(HTTPException) as exc_info:
+                await request_log_detail(
+                    db=mock_db,
+                    profile_id=7,
+                    request_id=404,
+                )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "Request log not found"
+
     def test_operations_requests_route_is_absent(self):
         import app.routers.stats as stats_router
 
@@ -118,6 +257,7 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         removed_handler_name = "list_" + "operations_request_logs"
 
         assert removed_route_path not in registered_paths
+        assert "/api/stats/requests/{request_id}" in registered_paths
         assert not hasattr(stats_router, removed_handler_name)
 
     @pytest.mark.asyncio

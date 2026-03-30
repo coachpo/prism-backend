@@ -335,6 +335,56 @@ async def test_get_request_logs_preserves_resolved_target_model_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_request_log_detail_returns_none_outside_profile_scope() -> None:
+    from app.services.stats.request_logs import get_request_log_detail
+
+    created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
+
+    async with AsyncSessionLocal() as db:
+        owner_profile = Profile(
+            name=f"detail-owner-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        other_profile = Profile(
+            name=f"detail-other-profile-{uuid4()}",
+            is_active=False,
+            is_default=False,
+        )
+        db.add_all([owner_profile, other_profile])
+        await db.flush()
+
+        entry = _request_log(
+            profile_id=owner_profile.id,
+            response_time_ms=100,
+            created_at=created_at,
+            ingress_request_id="ingress-detail-1",
+            attempt_number=2,
+            provider_correlation_id="provider-detail-1",
+        )
+        db.add(entry)
+        await db.commit()
+
+        owner_detail = await get_request_log_detail(
+            db,
+            profile_id=owner_profile.id,
+            request_id=entry.id,
+        )
+        other_detail = await get_request_log_detail(
+            db,
+            profile_id=other_profile.id,
+            request_id=entry.id,
+        )
+
+    assert owner_detail is not None
+    assert owner_detail.id == entry.id
+    assert owner_detail.ingress_request_id == "ingress-detail-1"
+    assert owner_detail.attempt_number == 2
+    assert owner_detail.provider_correlation_id == "provider-detail-1"
+    assert other_detail is None
+
+
+@pytest.mark.asyncio
 async def test_get_request_logs_filters_by_api_family() -> None:
     from app.services.stats.request_logs import get_request_logs
 

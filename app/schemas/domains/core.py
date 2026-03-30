@@ -1,3 +1,5 @@
+from pydantic import BaseModel
+
 from .common import (
     ApiFamily,
     AuthType,
@@ -60,6 +62,17 @@ from .profile_vendor import (
     VendorUpdate,
 )
 
+
+class ProfileLimitsResponse(BaseModel):
+    max_profiles: int
+
+
+class ProfileBootstrapResponse(BaseModel):
+    profiles: list[ProfileResponse]
+    active_profile: ProfileResponse | None
+    profile_limits: ProfileLimitsResponse
+
+
 __all__ = [
     "ApiFamily",
     "AuthType",
@@ -101,8 +114,10 @@ __all__ = [
     "PricingTemplateResponse",
     "PricingTemplateUpdate",
     "ProfileActivateRequest",
+    "ProfileBootstrapResponse",
     "ProfileBase",
     "ProfileCreate",
+    "ProfileLimitsResponse",
     "ProfileResponse",
     "ProfileUpdate",
     "VendorBase",
