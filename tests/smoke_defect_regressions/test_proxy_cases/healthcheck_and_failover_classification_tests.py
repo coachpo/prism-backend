@@ -29,8 +29,22 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == {
             "model": "gpt-4o-mini",
-            "input": "ping",
+            "input": ".",
             "max_output_tokens": 1,
+            "store": False,
+        }
+
+    def test_openai_health_check_keeps_gpt5_responses_probe_minimal(self):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request("openai", "gpt-5.4-mini")
+
+        assert path == "/v1/responses"
+        assert body == {
+            "model": "gpt-5.4-mini",
+            "input": ".",
+            "max_output_tokens": 1,
+            "store": False,
         }
 
     def test_openai_chat_completions_health_check_uses_chat_completions_endpoint(self):
@@ -43,11 +57,25 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/chat/completions"
         assert body == {
             "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "ping"}],
+            "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
         }
 
-    def test_openai_responses_basic_fallback_uses_string_input(self):
+    def test_openai_chat_completions_health_check_keeps_gpt5_probe_minimal(self):
+        from app.routers.connections import (
+            _build_openai_chat_completions_health_check_request,
+        )
+
+        path, body = _build_openai_chat_completions_health_check_request("gpt-5.4-mini")
+
+        assert path == "/v1/chat/completions"
+        assert body == {
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "."}],
+            "max_tokens": 1,
+        }
+
+    def test_openai_responses_fallback_uses_minimal_generation_request(self):
         from app.routers.connections import (
             _build_openai_responses_basic_health_check_request,
         )
@@ -57,7 +85,9 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == {
             "model": "gpt-4o-mini",
-            "input": "ping",
+            "input": ".",
+            "max_output_tokens": 1,
+            "store": False,
         }
 
     def test_gemini_health_check_uses_generate_content_endpoint(self):
@@ -70,8 +100,20 @@ class TestDEF059_HealthCheckRequestBuilder:
         generation_config = cast(dict[str, int], payload["generationConfig"])
 
         assert path == "/v1beta/models/gemini-3.1-pro-preview:generateContent"
-        assert parts[0]["text"] == "ping"
+        assert parts[0]["text"] == "."
         assert generation_config["maxOutputTokens"] == 1
+
+    def test_anthropic_health_check_uses_messages_endpoint_with_minimal_prompt(self):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request("anthropic", "claude-sonnet-4")
+
+        assert path == "/v1/messages"
+        assert body == {
+            "model": "claude-sonnet-4",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "."}],
+        }
 
     def test_cross_vendor_model_id_still_uses_api_family_native_path(self):
         from app.routers.connections import _build_health_check_request
@@ -142,6 +184,80 @@ class TestDEF059_HealthCheckRequestBuilder:
             .kwargs["upstream_url"]
             .endswith("/v1/messages")
         )
+
+    @pytest.mark.asyncio
+    async def test_probe_runner_uses_openai_chat_completions_variant_for_both_probe_legs(
+        self,
+    ):
+        from app.services.monitoring_service import run_connection_probe
+
+        vendor = MagicMock()
+        vendor.id = 23
+        vendor.key = "openai"
+
+        endpoint = MagicMock()
+        endpoint.id = 777
+        endpoint.base_url = "https://api.openai.com"
+
+        connection = MagicMock()
+        connection.id = 2002
+        connection.profile_id = 1
+        connection.endpoint_id = 777
+        connection.openai_probe_endpoint_variant = "chat_completions"
+        connection.endpoint_rel = endpoint
+        connection.model_config_rel = MagicMock(
+            id=401,
+            api_family="openai",
+            model_id="gpt-5.4-mini",
+            vendor=vendor,
+            loadbalance_strategy=MagicMock(
+                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
+            ),
+        )
+
+        execute_probe_request_fn = AsyncMock(
+            side_effect=[
+                ("healthy", "Connection successful", 9),
+                ("healthy", "Connection successful", 12),
+            ]
+        )
+
+        result = await run_connection_probe(
+            db=AsyncMock(),
+            client=AsyncMock(),
+            profile_id=1,
+            connection_id=connection.id,
+            load_connection_fn=AsyncMock(return_value=connection),
+            load_blocklist_rules_fn=AsyncMock(return_value=[]),
+            build_upstream_headers_fn=MagicMock(
+                return_value={"authorization": "Bearer sk-test"}
+            ),
+            execute_probe_request_fn=execute_probe_request_fn,
+            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
+        )
+
+        assert result.fused_status == "healthy"
+        assert execute_probe_request_fn.await_count == 2
+        assert (
+            execute_probe_request_fn.await_args_list[0]
+            .kwargs["upstream_url"]
+            .endswith("/v1/chat/completions")
+        )
+        assert (
+            execute_probe_request_fn.await_args_list[1]
+            .kwargs["upstream_url"]
+            .endswith("/v1/chat/completions")
+        )
+        assert execute_probe_request_fn.await_args_list[0].kwargs["body"] == {
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "."}],
+            "max_tokens": 1,
+        }
+        assert execute_probe_request_fn.await_args_list[1].kwargs["body"] == {
+            "model": "gpt-5.4-mini",
+            "messages": [{"role": "user", "content": "."}],
+            "max_tokens": 1,
+        }
 
 
 class TestMonitoringManualHealthChecksAndPersistence:
@@ -308,7 +424,7 @@ class TestMonitoringManualHealthChecksAndPersistence:
 
 
 class TestDEF066_OpenAIHealthCheckFallback:
-    """DEF-066 (P1): OpenAI health checks should try responses-basic fallback before chat-completions fallback."""
+    """DEF-066 (P1): OpenAI health checks should fall back from responses to chat-completions when needed."""
 
     @pytest.mark.asyncio
     async def test_openai_health_check_skips_chat_completions_fallback_when_primary_is_healthy(
@@ -346,7 +462,7 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert execute_mock.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_uses_responses_basic_fallback_when_primary_fails(
+    async def test_openai_health_check_uses_chat_completions_fallback_when_responses_probe_fails(
         self,
     ):
         from types import SimpleNamespace
@@ -378,9 +494,9 @@ class TestDEF066_OpenAIHealthCheckFallback:
             )
 
         assert health_status == "healthy"
-        assert detail == "Connection successful (fallback /v1/responses basic input)"
+        assert detail == "Connection successful (fallback /v1/chat/completions)"
         assert response_time_ms == 5
-        assert log_url == "https://api.openai.com/v1/responses"
+        assert log_url == "https://api.openai.com/v1/chat/completions"
         assert execute_mock.await_count == 2
         assert (
             execute_mock.await_args_list[0]
@@ -390,14 +506,19 @@ class TestDEF066_OpenAIHealthCheckFallback:
         assert (
             execute_mock.await_args_list[1]
             .kwargs["upstream_url"]
-            .endswith("/v1/responses")
+            .endswith("/v1/chat/completions")
         )
-        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "ping"
+        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "."
         assert execute_mock.await_args_list[0].kwargs["body"]["max_output_tokens"] == 1
-        assert execute_mock.await_args_list[1].kwargs["body"]["input"] == "ping"
+        assert execute_mock.await_args_list[0].kwargs["body"]["store"] is False
+        assert execute_mock.await_args_list[1].kwargs["body"] == {
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "."}],
+            "max_tokens": 1,
+        }
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_uses_chat_completions_fallback_when_responses_fallback_fails(
+    async def test_openai_health_check_returns_combined_detail_when_chat_completions_fallback_fails(
         self,
     ):
         from types import SimpleNamespace
@@ -413,7 +534,6 @@ class TestDEF066_OpenAIHealthCheckFallback:
             execute_mock.side_effect = [
                 ("unhealthy", "HTTP 404", 8),
                 ("unhealthy", "HTTP 400", 6),
-                ("healthy", "Connection successful", 4),
             ]
             (
                 health_status,
@@ -429,11 +549,14 @@ class TestDEF066_OpenAIHealthCheckFallback:
                 headers={},
             )
 
-        assert health_status == "healthy"
-        assert detail == "Connection successful (fallback /v1/chat/completions)"
-        assert response_time_ms == 4
-        assert log_url == "https://api.openai.com/v1/chat/completions"
-        assert execute_mock.await_count == 3
+        assert health_status == "unhealthy"
+        assert detail == "HTTP 404; fallback /v1/chat/completions failed: HTTP 400"
+        assert response_time_ms == 6
+        assert (
+            log_url
+            == "https://api.openai.com/v1/responses -> https://api.openai.com/v1/chat/completions"
+        )
+        assert execute_mock.await_count == 2
         assert (
             execute_mock.await_args_list[0]
             .kwargs["upstream_url"]
@@ -441,11 +564,6 @@ class TestDEF066_OpenAIHealthCheckFallback:
         )
         assert (
             execute_mock.await_args_list[1]
-            .kwargs["upstream_url"]
-            .endswith("/v1/responses")
-        )
-        assert (
-            execute_mock.await_args_list[2]
             .kwargs["upstream_url"]
             .endswith("/v1/chat/completions")
         )

@@ -10,13 +10,6 @@ from .health_check_request_helpers import _execute_health_check_request
 logger = logging.getLogger(__name__)
 
 
-def _openai_model_supports_reasoning_effort(model_id: str) -> bool:
-    normalized_model_id = model_id.strip().lower()
-    return normalized_model_id.startswith("o") or normalized_model_id.startswith(
-        "gpt-5"
-    )
-
-
 def _build_health_check_request(
     api_family: str,
     model_id: str,
@@ -27,26 +20,24 @@ def _build_health_check_request(
         if openai_variant == "chat_completions":
             return _build_openai_chat_completions_health_check_request(model_id)
 
-        body: dict[str, object] = {
+        return "/v1/responses", {
             "model": model_id,
-            "input": "ping",
+            "input": ".",
             "max_output_tokens": 1,
+            "store": False,
         }
-        if _openai_model_supports_reasoning_effort(model_id):
-            body["reasoning"] = {"effort": "low"}
-        return "/v1/responses", body
     if api_family == "anthropic":
         return "/v1/messages", {
             "model": model_id,
             "max_tokens": 1,
-            "messages": [{"role": "user", "content": "ping"}],
+            "messages": [{"role": "user", "content": "."}],
         }
     if api_family == "gemini":
         return f"/v1beta/models/{model_id}:generateContent", {
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": "ping"}],
+                    "parts": [{"text": "."}],
                 }
             ],
             "generationConfig": {"maxOutputTokens": 1},
@@ -57,14 +48,11 @@ def _build_health_check_request(
 def _build_openai_chat_completions_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    body: dict[str, object] = {
+    return "/v1/chat/completions", {
         "model": model_id,
-        "messages": [{"role": "user", "content": "ping"}],
+        "messages": [{"role": "user", "content": "."}],
         "max_tokens": 1,
     }
-    if _openai_model_supports_reasoning_effort(model_id):
-        body["reasoning_effort"] = "low"
-    return "/v1/chat/completions", body
 
 
 def _build_openai_responses_basic_health_check_request(
@@ -72,7 +60,9 @@ def _build_openai_responses_basic_health_check_request(
 ) -> tuple[str, dict[str, object]]:
     return "/v1/responses", {
         "model": model_id,
-        "input": "ping",
+        "input": ".",
+        "max_output_tokens": 1,
+        "store": False,
     }
 
 
@@ -112,30 +102,6 @@ async def _probe_connection_health(
     log_url = upstream_url
 
     if api_family == "openai" and health_status != "healthy":
-        responses_basic_path, responses_basic_body = (
-            _build_openai_responses_basic_health_check_request(model_id)
-        )
-        responses_basic_url = build_upstream_url(
-            connection, responses_basic_path, endpoint=endpoint
-        )
-        (
-            responses_basic_status,
-            responses_basic_detail,
-            responses_basic_response_time_ms,
-        ) = await execute_health_check_request_fn(
-            client,
-            upstream_url=responses_basic_url,
-            headers=headers,
-            body=responses_basic_body,
-        )
-        if responses_basic_status == "healthy":
-            return (
-                "healthy",
-                f"{responses_basic_detail} (fallback /v1/responses basic input)",
-                responses_basic_response_time_ms,
-                responses_basic_url,
-            )
-
         fallback_path, fallback_body = (
             _build_openai_chat_completions_health_check_request(model_id)
         )
@@ -159,16 +125,11 @@ async def _probe_connection_health(
             )
         detail_parts = [
             detail,
-            f"fallback /v1/responses basic input failed: {responses_basic_detail}",
             f"fallback /v1/chat/completions failed: {fallback_detail}",
         ]
         detail = "; ".join(part for part in detail_parts if part)
-        response_time_ms = (
-            fallback_response_time_ms
-            or responses_basic_response_time_ms
-            or response_time_ms
-        )
-        log_url = f"{upstream_url} -> {responses_basic_url} -> {fallback_url}"
+        response_time_ms = fallback_response_time_ms or response_time_ms
+        log_url = f"{upstream_url} -> {fallback_url}"
 
     return health_status, detail, response_time_ms, log_url
 
