@@ -1,13 +1,11 @@
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator, cast
+from typing import AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
-from app.schemas.domains.connection_model import AutoRecovery
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
@@ -17,11 +15,8 @@ from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
     make_auto_recovery_disabled,
     make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
 )
-
-
-def as_auto_recovery(value: dict[str, object]) -> AutoRecovery:
-    return cast(AutoRecovery, cast(object, value))
 
 
 class TestLoadbalanceStrategyFieldValidation:
@@ -69,7 +64,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 {
                     "name": "single-with-recovery",
                     "strategy_type": "single",
-                    "auto_recovery": as_auto_recovery(make_auto_recovery_enabled()),
+                    "auto_recovery": make_auto_recovery_enabled(),
                 }
             )
         assert "routing_policy" in str(exc_info.value)
@@ -83,8 +78,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         strategy = ConfigLoadbalanceStrategyExport(
             name="failover-primary",
-            strategy_type="failover",
-            auto_recovery=as_auto_recovery(make_auto_recovery_disabled()),
+            routing_policy=make_routing_policy_adaptive(),
         )
         model = ConfigModelExport(
             vendor_key="openai",
@@ -100,7 +94,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 )
             ],
         )
-        assert strategy.auto_recovery.mode == "disabled"
+        assert strategy.routing_policy.kind == "adaptive"
         exported = model.model_dump(mode="json")
         assert exported["loadbalance_strategy_name"] == "failover-primary"
 
@@ -109,54 +103,50 @@ class TestLoadbalanceStrategyFieldValidation:
 
         strategy = ConfigLoadbalanceStrategyExport(
             name="failover-primary",
-            strategy_type="failover",
-            auto_recovery=as_auto_recovery(
-                make_auto_recovery_enabled(
-                    status_codes=[503, 429],
-                    base_seconds=45,
-                    failure_threshold=4,
-                    backoff_multiplier=3.5,
-                    max_cooldown_seconds=720,
-                    jitter_ratio=0.35,
-                    ban_mode="temporary",
-                    max_cooldown_strikes_before_ban=3,
-                    ban_duration_seconds=600,
-                )
+            routing_policy=make_routing_policy_adaptive(
+                routing_objective="maximize_availability",
+                failure_status_codes=[503, 429],
+                base_open_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_open_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_open_strikes_before_ban=3,
+                ban_duration_seconds=600,
             ),
         )
 
         exported = strategy.model_dump(mode="json")
 
-        assert exported["auto_recovery"] == {
-            "mode": "enabled",
-            "status_codes": [429, 503],
-            "cooldown": {
-                "base_seconds": 45,
-                "failure_threshold": 4,
-                "backoff_multiplier": 3.5,
-                "max_cooldown_seconds": 720,
-                "jitter_ratio": 0.35,
-            },
-            "ban": {
-                "mode": "temporary",
-                "max_cooldown_strikes_before_ban": 3,
-                "ban_duration_seconds": 600,
-            },
-        }
-        assert all(not field.startswith("failover_") for field in exported)
+        assert exported["routing_policy"] == make_routing_policy_adaptive(
+            routing_objective="maximize_availability",
+            failure_status_codes=[503, 429],
+            base_open_seconds=45,
+            failure_threshold=4,
+            backoff_multiplier=3.5,
+            max_open_seconds=720,
+            jitter_ratio=0.35,
+            ban_mode="temporary",
+            max_open_strikes_before_ban=3,
+            ban_duration_seconds=600,
+        )
+        assert "strategy_type" not in exported
+        assert "auto_recovery" not in exported
 
     def test_strategy_contract_accepts_sorted_unique_failover_status_codes(self):
         from app.schemas.schemas import ConfigLoadbalanceStrategyImport
 
         strategy = ConfigLoadbalanceStrategyImport(
             name="failover-primary",
-            strategy_type="failover",
-            auto_recovery=as_auto_recovery(
-                make_auto_recovery_enabled(status_codes=[503, 429])
+            routing_policy=make_routing_policy_adaptive(
+                failure_status_codes=[503, 429]
             ),
         )
 
-        assert strategy.model_dump(mode="json")["auto_recovery"]["status_codes"] == [
+        assert strategy.model_dump(mode="json")["routing_policy"]["circuit_breaker"][
+            "failure_status_codes"
+        ] == [
             429,
             503,
         ]
@@ -168,13 +158,12 @@ class TestLoadbalanceStrategyFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigLoadbalanceStrategyImport(
                 name="failover-primary",
-                strategy_type="failover",
-                auto_recovery=as_auto_recovery(
-                    make_auto_recovery_enabled(status_codes=[99, 503])
+                routing_policy=make_routing_policy_adaptive(
+                    failure_status_codes=[99, 503]
                 ),
             )
 
-        assert "status_codes" in str(exc_info.value)
+        assert "failure_status_codes" in str(exc_info.value)
 
     def test_strategy_contract_rejects_auth_cooldown_field(self):
         from app.schemas.schemas import ConfigLoadbalanceStrategyImport
@@ -184,26 +173,19 @@ class TestLoadbalanceStrategyFieldValidation:
             ConfigLoadbalanceStrategyImport.model_validate(
                 {
                     "name": "failover-primary",
-                    "strategy_type": "failover",
-                    "auto_recovery": {
-                        "mode": "enabled",
-                        "status_codes": [429, 503],
-                        "cooldown": {
-                            "base_seconds": 60,
-                            "failure_threshold": 2,
-                            "backoff_multiplier": 2.0,
-                            "max_cooldown_seconds": 900,
-                            "jitter_ratio": 0.2,
+                    "routing_policy": {
+                        **make_routing_policy_adaptive(),
+                        "circuit_breaker": {
+                            **make_routing_policy_adaptive()["circuit_breaker"],
                             "unexpected_cooldown_seconds": 2400,
                         },
-                        "ban": {"mode": "off"},
                     },
                 }
             )
 
         assert "unexpected_cooldown_seconds" in str(exc_info.value)
 
-    def test_config_export_version_1_allows_fill_first_strategy(self):
+    def test_config_export_version_1_allows_adaptive_max_availability_policy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -228,20 +210,18 @@ class TestLoadbalanceStrategyFieldValidation:
             pricing_templates=[],
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
-                    name="fill-first-primary",
-                    strategy_type="fill-first",
-                    auto_recovery=as_auto_recovery(
-                        make_auto_recovery_enabled(
-                            status_codes=[503, 429],
-                            base_seconds=45,
-                            failure_threshold=4,
-                            backoff_multiplier=3.5,
-                            max_cooldown_seconds=720,
-                            jitter_ratio=0.35,
-                            ban_mode="temporary",
-                            max_cooldown_strikes_before_ban=3,
-                            ban_duration_seconds=600,
-                        )
+                    name="adaptive-availability",
+                    routing_policy=make_routing_policy_adaptive(
+                        routing_objective="maximize_availability",
+                        failure_status_codes=[503, 429],
+                        base_open_seconds=45,
+                        failure_threshold=4,
+                        backoff_multiplier=3.5,
+                        max_open_seconds=720,
+                        jitter_ratio=0.35,
+                        ban_mode="temporary",
+                        max_open_strikes_before_ban=3,
+                        ban_duration_seconds=600,
                     ),
                 )
             ],
@@ -251,12 +231,12 @@ class TestLoadbalanceStrategyFieldValidation:
         exported = config.model_dump(mode="json")
 
         assert exported["version"] == 1
-        assert exported["loadbalance_strategies"][0]["strategy_type"] == "fill-first"
         assert (
-            exported["loadbalance_strategies"][0]["auto_recovery"]["mode"] == "enabled"
+            exported["loadbalance_strategies"][0]["routing_policy"]["routing_objective"]
+            == "maximize_availability"
         )
 
-    def test_config_export_version_1_allows_round_robin_strategy(self):
+    def test_config_export_version_1_preserves_adaptive_circuit_breaker_policy(self):
         from datetime import datetime, timezone
 
         from app.schemas.schemas import (
@@ -281,20 +261,17 @@ class TestLoadbalanceStrategyFieldValidation:
             pricing_templates=[],
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
-                    name="round-robin-primary",
-                    strategy_type="round-robin",
-                    auto_recovery=as_auto_recovery(
-                        make_auto_recovery_enabled(
-                            status_codes=[503, 429],
-                            base_seconds=45,
-                            failure_threshold=4,
-                            backoff_multiplier=3.5,
-                            max_cooldown_seconds=720,
-                            jitter_ratio=0.35,
-                            ban_mode="temporary",
-                            max_cooldown_strikes_before_ban=3,
-                            ban_duration_seconds=600,
-                        )
+                    name="adaptive-latency",
+                    routing_policy=make_routing_policy_adaptive(
+                        failure_status_codes=[503, 429],
+                        base_open_seconds=45,
+                        failure_threshold=4,
+                        backoff_multiplier=3.5,
+                        max_open_seconds=720,
+                        jitter_ratio=0.35,
+                        ban_mode="temporary",
+                        max_open_strikes_before_ban=3,
+                        ban_duration_seconds=600,
                     ),
                 )
             ],
@@ -304,9 +281,11 @@ class TestLoadbalanceStrategyFieldValidation:
         exported = config.model_dump(mode="json")
 
         assert exported["version"] == 1
-        assert exported["loadbalance_strategies"][0]["strategy_type"] == "round-robin"
         assert (
-            exported["loadbalance_strategies"][0]["auto_recovery"]["mode"] == "enabled"
+            exported["loadbalance_strategies"][0]["routing_policy"]["circuit_breaker"][
+                "ban_mode"
+            ]
+            == "temporary"
         )
 
     def test_config_import_accepts_minimal_payload(self):
@@ -326,7 +305,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert validation.loadbalance_strategies == []
         assert validation.models == []
 
-    def test_config_import_requires_explicit_auto_recovery_under_version_1(
+    def test_config_import_requires_explicit_routing_policy_under_version_1(
         self,
     ):
         from app.schemas.schemas import ConfigImportRequest
@@ -357,7 +336,6 @@ class TestLoadbalanceStrategyFieldValidation:
                     "loadbalance_strategies": [
                         {
                             "name": "failover-primary",
-                            "strategy_type": "failover",
                         }
                     ],
                     "models": [
@@ -453,8 +431,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "strategy_type": "single",
-                        "auto_recovery": {"mode": "disabled"},
+                        "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
                 "models": [
@@ -524,8 +501,7 @@ class TestLoadbalanceStrategyFieldValidation:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="failover-primary",
-                    strategy_type="failover",
-                    auto_recovery=as_auto_recovery(make_auto_recovery_disabled()),
+                    routing_policy=make_routing_policy_adaptive(),
                 )
             ],
             models=[
@@ -554,7 +530,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert len(reimported.models) == 1
         strategy = reimported.loadbalance_strategies[0]
         assert strategy.name == "failover-primary"
-        assert strategy.auto_recovery.mode == "disabled"
+        assert strategy.routing_policy.kind == "adaptive"
         model = reimported.models[0]
         assert model.loadbalance_strategy_name == "failover-primary"
 

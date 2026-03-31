@@ -62,6 +62,7 @@ from app.services.audit_service import record_audit_log
 from tests.loadbalance_strategy_helpers import (
     make_auto_recovery_disabled,
     make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
     make_loadbalance_strategy,
 )
 
@@ -284,14 +285,14 @@ class TestConfigExportImportIsolation:
             loadbalance_strategy_id=11,
             loadbalance_strategy=SimpleNamespace(
                 id=11,
-                name="fill-first-primary",
-                strategy_type="fill-first",
-                auto_recovery=make_auto_recovery_enabled(
-                    status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
-                    base_seconds=45,
+                name="adaptive-availability",
+                routing_policy=make_routing_policy_adaptive(
+                    routing_objective="maximize_availability",
+                    failure_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
+                    base_open_seconds=45,
                     failure_threshold=4,
                     backoff_multiplier=3.5,
-                    max_cooldown_seconds=720,
+                    max_open_seconds=720,
                     jitter_ratio=0.35,
                 ),
             ),
@@ -402,22 +403,17 @@ class TestConfigExportImportIsolation:
         assert len(payload["loadbalance_strategies"]) == 1
         assert len(payload["models"]) == 2
         strategy_payload = payload["loadbalance_strategies"][0]
-        assert strategy_payload["strategy_type"] == "fill-first"
-        assert strategy_payload["auto_recovery"] == {
-            "mode": "enabled",
-            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
-            "cooldown": {
-                "base_seconds": 45,
-                "failure_threshold": 4,
-                "backoff_multiplier": 3.5,
-                "max_cooldown_seconds": 720,
-                "jitter_ratio": 0.35,
-            },
-            "ban": {"mode": "off"},
-        }
-        assert all(
-            not field_name.startswith("failover_") for field_name in strategy_payload
+        assert strategy_payload["routing_policy"] == make_routing_policy_adaptive(
+            routing_objective="maximize_availability",
+            failure_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
+            base_open_seconds=45,
+            failure_threshold=4,
+            backoff_multiplier=3.5,
+            max_open_seconds=720,
+            jitter_ratio=0.35,
         )
+        assert "strategy_type" not in strategy_payload
+        assert "auto_recovery" not in strategy_payload
         exported_connection = payload["models"][0]["connections"][0]
         assert exported_connection["qps_limit"] == 3
         assert exported_connection["max_in_flight_non_stream"] == 5
@@ -654,11 +650,10 @@ class TestConfigExportImportIsolation:
                 "pricing_templates": [],
                 "loadbalance_strategies": [
                     {
-                        "name": "fill-first-primary",
-                        "strategy_type": "fill-first",
-                        "auto_recovery": {
-                            "mode": "enabled",
-                            "status_codes": [
+                        "name": "adaptive-availability",
+                        "routing_policy": make_routing_policy_adaptive(
+                            routing_objective="maximize_availability",
+                            failure_status_codes=[
                                 403,
                                 422,
                                 429,
@@ -668,19 +663,15 @@ class TestConfigExportImportIsolation:
                                 504,
                                 529,
                             ],
-                            "cooldown": {
-                                "base_seconds": 45,
-                                "failure_threshold": 4,
-                                "backoff_multiplier": 3.5,
-                                "max_cooldown_seconds": 720,
-                                "jitter_ratio": 0.35,
-                            },
-                            "ban": {
-                                "mode": "temporary",
-                                "max_cooldown_strikes_before_ban": 2,
-                                "ban_duration_seconds": 600,
-                            },
-                        },
+                            base_open_seconds=45,
+                            failure_threshold=4,
+                            backoff_multiplier=3.5,
+                            max_open_seconds=720,
+                            jitter_ratio=0.35,
+                            ban_mode="temporary",
+                            max_open_strikes_before_ban=2,
+                            ban_duration_seconds=600,
+                        ),
                     }
                 ],
                 "models": [
@@ -689,7 +680,7 @@ class TestConfigExportImportIsolation:
                         "api_family": "openai",
                         "model_id": new_model_id,
                         "model_type": "native",
-                        "loadbalance_strategy_name": "fill-first-primary",
+                        "loadbalance_strategy_name": "adaptive-availability",
                         "connections": [
                             {
                                 "endpoint_name": new_endpoint_name,
@@ -890,23 +881,18 @@ class TestConfigExportImportIsolation:
         assert target_models[0].api_family == "openai"
 
         assert len(target_strategies) == 1
-        assert target_strategies[0].strategy_type == "fill-first"
-        assert target_strategies[0].auto_recovery == {
-            "mode": "enabled",
-            "status_codes": [403, 422, 429, 500, 502, 503, 504, 529],
-            "cooldown": {
-                "base_seconds": 45,
-                "failure_threshold": 4,
-                "backoff_multiplier": 3.5,
-                "max_cooldown_seconds": 720,
-                "jitter_ratio": 0.35,
-            },
-            "ban": {
-                "mode": "temporary",
-                "max_cooldown_strikes_before_ban": 2,
-                "ban_duration_seconds": 600,
-            },
-        }
+        assert target_strategies[0].routing_policy == make_routing_policy_adaptive(
+            routing_objective="maximize_availability",
+            failure_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
+            base_open_seconds=45,
+            failure_threshold=4,
+            backoff_multiplier=3.5,
+            max_open_seconds=720,
+            jitter_ratio=0.35,
+            ban_mode="temporary",
+            max_open_strikes_before_ban=2,
+            ban_duration_seconds=600,
+        )
 
         assert len(target_connections) == 1
         assert target_connections[0].name == new_connection_name
@@ -1094,8 +1080,7 @@ class TestConfigExportImportIsolation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "strategy_type": "single",
-                        "auto_recovery": {"mode": "disabled"},
+                        "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
                 "models": [

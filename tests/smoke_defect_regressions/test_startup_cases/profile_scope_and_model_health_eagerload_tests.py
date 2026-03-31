@@ -9,8 +9,8 @@ from fastapi.routing import APIRoute
 
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
-    make_auto_recovery_enabled,
     make_loadbalance_strategy,
+    make_routing_policy_adaptive,
 )
 from fastapi import HTTPException
 
@@ -79,7 +79,6 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             Vendor,
         )
         from app.routers.models import get_model
-        from app.schemas.domains.connection_model import AutoRecoveryEnabled
         from app.schemas.schemas import ModelConfigResponse
 
         await get_engine().dispose()
@@ -121,7 +120,7 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
                 model_type="native",
                 loadbalance_strategy=make_loadbalance_strategy(
                     profile_id=profile.id,
-                    strategy_type="single",
+                    routing_policy=make_routing_policy_adaptive(),
                 ),
                 is_enabled=True,
             )
@@ -169,7 +168,6 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
         from app.core.database import AsyncSessionLocal, get_engine
         from app.models.models import ModelConfig, Profile, Vendor
         from app.routers.models import get_model, list_models
-        from app.schemas.domains.connection_model import AutoRecoveryEnabled
         from app.schemas.schemas import ModelConfigResponse
 
         await get_engine().dispose()
@@ -206,13 +204,13 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
 
             strategy = make_loadbalance_strategy(
                 profile_id=profile.id,
-                strategy_type="failover",
-                auto_recovery=make_auto_recovery_enabled(
-                    status_codes=DEFAULT_FAILOVER_STATUS_CODES,
-                    base_seconds=settings.failover_cooldown_seconds,
+                routing_policy=make_routing_policy_adaptive(
+                    routing_objective="maximize_availability",
+                    failure_status_codes=DEFAULT_FAILOVER_STATUS_CODES,
+                    base_open_seconds=settings.failover_cooldown_seconds,
                     failure_threshold=settings.failover_failure_threshold,
                     backoff_multiplier=settings.failover_backoff_multiplier,
-                    max_cooldown_seconds=settings.failover_max_cooldown_seconds,
+                    max_open_seconds=settings.failover_max_cooldown_seconds,
                     jitter_ratio=settings.failover_jitter_ratio,
                 ),
             )
@@ -237,28 +235,27 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
             response = ModelConfigResponse.model_validate(config, from_attributes=True)
 
             assert response.loadbalance_strategy is not None
-            assert response.loadbalance_strategy.strategy_type == "failover"
-            response_auto_recovery = response.loadbalance_strategy.auto_recovery
-            assert isinstance(response_auto_recovery, AutoRecoveryEnabled)
+            response_policy = response.loadbalance_strategy.routing_policy
+            assert response_policy.kind == "adaptive"
             assert (
-                response_auto_recovery.cooldown.base_seconds
+                response_policy.circuit_breaker.base_open_seconds
                 == settings.failover_cooldown_seconds
             )
             assert (
-                response_auto_recovery.cooldown.failure_threshold
+                response_policy.circuit_breaker.failure_threshold
                 == settings.failover_failure_threshold
             )
-            assert response_auto_recovery.cooldown.backoff_multiplier == pytest.approx(
+            assert response_policy.circuit_breaker.backoff_multiplier == pytest.approx(
                 settings.failover_backoff_multiplier
             )
             assert (
-                response_auto_recovery.cooldown.max_cooldown_seconds
+                response_policy.circuit_breaker.max_open_seconds
                 == settings.failover_max_cooldown_seconds
             )
-            assert response_auto_recovery.cooldown.jitter_ratio == pytest.approx(
+            assert response_policy.circuit_breaker.jitter_ratio == pytest.approx(
                 settings.failover_jitter_ratio
             )
-            assert response_auto_recovery.status_codes == [
+            assert response_policy.circuit_breaker.failure_status_codes == [
                 403,
                 422,
                 429,
@@ -277,14 +274,14 @@ class TestDEF065_ModelDetailEndpointEagerLoad:
 
             assert len(listed) == 1
             assert listed[0].loadbalance_strategy is not None
-            listed_auto_recovery = listed[0].loadbalance_strategy.auto_recovery
-            assert isinstance(listed_auto_recovery, AutoRecoveryEnabled)
+            listed_policy = listed[0].loadbalance_strategy.routing_policy
+            assert listed_policy.kind == "adaptive"
             assert (
-                listed_auto_recovery.cooldown.base_seconds
+                listed_policy.circuit_breaker.base_open_seconds
                 == settings.failover_cooldown_seconds
             )
             assert (
-                listed_auto_recovery.cooldown.failure_threshold
+                listed_policy.circuit_breaker.failure_threshold
                 == settings.failover_failure_threshold
             )
 

@@ -8,15 +8,13 @@ import pytest
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from app.schemas.domains.connection_model import AutoRecovery
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
 from tests.loadbalance_strategy_helpers import (
-    make_auto_recovery_disabled,
-    make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
 )
 
 
@@ -253,8 +251,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         fields = set(ConfigLoadbalanceStrategyExport.model_fields.keys())
         expected = {
             "name",
-            "strategy_type",
-            "auto_recovery",
+            "routing_policy",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
@@ -338,20 +335,14 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="failover-primary",
-                    strategy_type="failover",
-                    auto_recovery=cast(
-                        AutoRecovery,
-                        cast(
-                            object,
-                            make_auto_recovery_enabled(
-                                status_codes=[503, 429],
-                                base_seconds=45,
-                                failure_threshold=4,
-                                backoff_multiplier=3.5,
-                                max_cooldown_seconds=720,
-                                jitter_ratio=0.35,
-                            ),
-                        ),
+                    routing_policy=make_routing_policy_adaptive(
+                        routing_objective="maximize_availability",
+                        failure_status_codes=[503, 429],
+                        base_open_seconds=45,
+                        failure_threshold=4,
+                        backoff_multiplier=3.5,
+                        max_open_seconds=720,
+                        jitter_ratio=0.35,
                     ),
                 )
             ],
@@ -387,13 +378,16 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert m.api_family == "openai"
         assert m.loadbalance_strategy_name == "failover-primary"
         strategy = reimported.loadbalance_strategies[0]
-        assert strategy.auto_recovery.mode == "enabled"
-        assert strategy.auto_recovery.cooldown.base_seconds == 45
-        assert strategy.auto_recovery.cooldown.failure_threshold == 4
-        assert strategy.auto_recovery.cooldown.backoff_multiplier == 3.5
-        assert strategy.auto_recovery.cooldown.max_cooldown_seconds == 720
-        assert strategy.auto_recovery.cooldown.jitter_ratio == 0.35
-        assert strategy.auto_recovery.status_codes == [429, 503]
+        assert strategy.routing_policy.routing_objective == "maximize_availability"
+        assert strategy.routing_policy.circuit_breaker.base_open_seconds == 45
+        assert strategy.routing_policy.circuit_breaker.failure_threshold == 4
+        assert strategy.routing_policy.circuit_breaker.backoff_multiplier == 3.5
+        assert strategy.routing_policy.circuit_breaker.max_open_seconds == 720
+        assert strategy.routing_policy.circuit_breaker.jitter_ratio == 0.35
+        assert strategy.routing_policy.circuit_breaker.failure_status_codes == [
+            429,
+            503,
+        ]
         assert len(m.connections) == 1
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}
@@ -430,24 +424,19 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 "pricing_templates": [],
                 "loadbalance_strategies": [
                     {
-                        "name": "fill-first-primary",
-                        "strategy_type": "fill-first",
-                        "auto_recovery": {
-                            "mode": "enabled",
-                            "status_codes": [503, 429],
-                            "cooldown": {
-                                "base_seconds": 45,
-                                "failure_threshold": 4,
-                                "backoff_multiplier": 3.5,
-                                "max_cooldown_seconds": 720,
-                                "jitter_ratio": 0.35,
-                            },
-                            "ban": {
-                                "mode": "temporary",
-                                "max_cooldown_strikes_before_ban": 3,
-                                "ban_duration_seconds": 600,
-                            },
-                        },
+                        "name": "adaptive-availability",
+                        "routing_policy": make_routing_policy_adaptive(
+                            routing_objective="maximize_availability",
+                            failure_status_codes=[503, 429],
+                            base_open_seconds=45,
+                            failure_threshold=4,
+                            backoff_multiplier=3.5,
+                            max_open_seconds=720,
+                            jitter_ratio=0.35,
+                            ban_mode="temporary",
+                            max_open_strikes_before_ban=3,
+                            ban_duration_seconds=600,
+                        ),
                     }
                 ],
                 "models": [
@@ -456,7 +445,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         "api_family": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
-                        "loadbalance_strategy_name": "fill-first-primary",
+                        "loadbalance_strategy_name": "adaptive-availability",
                         "connections": [{"endpoint_name": "openai-main"}],
                     }
                 ],
@@ -464,11 +453,10 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         )
 
         strategy = validation.loadbalance_strategies[0]
-        assert strategy.strategy_type == "fill-first"
-        assert strategy.auto_recovery.mode == "enabled"
-        assert strategy.auto_recovery.ban.mode == "temporary"
-        assert strategy.auto_recovery.ban.max_cooldown_strikes_before_ban == 3
-        assert strategy.auto_recovery.ban.ban_duration_seconds == 600
+        assert strategy.routing_policy.routing_objective == "maximize_availability"
+        assert strategy.routing_policy.circuit_breaker.ban_mode == "temporary"
+        assert strategy.routing_policy.circuit_breaker.max_open_strikes_before_ban == 3
+        assert strategy.routing_policy.circuit_breaker.ban_duration_seconds == 600
 
     def test_config_import_schema_accepts_nullable_vendor_icon_key(self):
         from app.schemas.schemas import ConfigImportRequest
@@ -497,8 +485,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "strategy_type": "single",
-                        "auto_recovery": {"mode": "disabled"},
+                        "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
                 "models": [
@@ -543,8 +530,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     "loadbalance_strategies": [
                         {
                             "name": "single-primary",
-                            "strategy_type": "single",
-                            "auto_recovery": {"mode": "disabled"},
+                            "routing_policy": make_routing_policy_adaptive(),
                         }
                     ],
                     "models": [
@@ -588,8 +574,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     "loadbalance_strategies": [
                         {
                             "name": "single-primary",
-                            "strategy_type": "single",
-                            "auto_recovery": {"mode": "disabled"},
+                            "routing_policy": make_routing_policy_adaptive(),
                         }
                     ],
                     "models": [
@@ -638,8 +623,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                     "loadbalance_strategies": [
                         {
                             "name": "single-primary",
-                            "strategy_type": "single",
-                            "auto_recovery": {"mode": "disabled"},
+                            "routing_policy": make_routing_policy_adaptive(),
                         }
                     ],
                     "models": [
@@ -700,8 +684,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "strategy_type": "single",
-                        "auto_recovery": {"mode": "disabled"},
+                        "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
                 "models": [
@@ -763,8 +746,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "strategy_type": "single",
-                        "auto_recovery": {"mode": "disabled"},
+                        "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
                 "models": [

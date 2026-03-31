@@ -19,8 +19,6 @@ from app.models.models import (
 )
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
-    make_auto_recovery_disabled,
-    make_auto_recovery_enabled,
     make_routing_policy_adaptive,
 )
 
@@ -128,7 +126,7 @@ async def _create_connection_fixture(*, suffix: str) -> tuple[int, int]:
 
 
 class TestLoadbalancerRecovery:
-    def test_resolve_effective_loadbalance_policy_reads_nested_auto_recovery_document(
+    def test_resolve_effective_loadbalance_policy_reads_adaptive_routing_policy_document(
         self,
     ):
         from app.core.config import get_settings
@@ -138,8 +136,10 @@ class TestLoadbalancerRecovery:
 
         settings = get_settings()
         strategy = SimpleNamespace(
-            strategy_type="failover",
-            auto_recovery=make_auto_recovery_enabled(status_codes=[503, 429]),
+            routing_policy=make_routing_policy_adaptive(
+                routing_objective="maximize_availability",
+                failure_status_codes=[503, 429],
+            ),
         )
 
         policy = resolve_effective_loadbalance_policy(strategy)
@@ -159,17 +159,14 @@ class TestLoadbalancerRecovery:
         )
         assert policy.failover_status_codes == (429, 503)
 
-    def test_resolve_effective_loadbalance_policy_normalizes_legacy_disabled_branch(
+    def test_resolve_effective_loadbalance_policy_defaults_adaptive_branch_values(
         self,
     ):
         from app.services.loadbalancer.policy import (
             resolve_effective_loadbalance_policy,
         )
 
-        strategy = SimpleNamespace(
-            strategy_type="round-robin",
-            auto_recovery=make_auto_recovery_disabled(),
-        )
+        strategy = SimpleNamespace(routing_policy=make_routing_policy_adaptive())
 
         policy = resolve_effective_loadbalance_policy(strategy)
 

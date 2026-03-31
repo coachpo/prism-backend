@@ -5,13 +5,12 @@ from uuid import uuid4
 import pytest
 
 from tests.loadbalance_strategy_helpers import (
-    make_auto_recovery_disabled,
-    make_auto_recovery_enabled,
     make_loadbalance_strategy,
+    make_routing_policy_adaptive,
 )
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy import select, text
+from sqlalchemy import select
 
 
 def _unique_suffix() -> str:
@@ -45,22 +44,6 @@ async def _get_or_create_vendor(db, *, api_family: str = "openai"):
     db.add(vendor)
     await db.flush()
     return vendor
-
-
-async def _get_round_robin_cursor_row(db, *, profile_id: int, model_config_id: int):
-    return (
-        (
-            await db.execute(
-                text(
-                    "SELECT next_cursor FROM loadbalance_round_robin_state "
-                    "WHERE profile_id = :profile_id AND model_config_id = :model_config_id"
-                ),
-                {"profile_id": profile_id, "model_config_id": model_config_id},
-            )
-        )
-        .mappings()
-        .first()
-    )
 
 
 @pytest.mark.asyncio
@@ -210,185 +193,6 @@ async def test_connection_priority_crud_flow():
         assert [connection.priority for connection in remaining] == [0, 1]
 
 
-@pytest.mark.asyncio
-async def test_connection_mutations_clear_round_robin_cursor_state():
-    from app.core.database import AsyncSessionLocal, get_engine
-    from app.models.models import Endpoint, ModelConfig, Profile
-    from app.routers.connections import (
-        create_connection,
-        delete_connection,
-        move_connection_priority,
-        update_connection,
-    )
-    from app.schemas.schemas import (
-        ConnectionCreate,
-        ConnectionPriorityMoveRequest,
-        ConnectionUpdate,
-    )
-    from app.services.loadbalancer.planner import (
-        build_attempt_plan,
-        get_model_config_with_connections,
-    )
-
-    await get_engine().dispose()
-
-    suffix = _unique_suffix()
-
-    async with AsyncSessionLocal() as db:
-        vendor = await _get_or_create_vendor(db)
-        profile = Profile(
-            name=f"RR Cursor Reset Profile {suffix}",
-            is_active=False,
-            is_default=False,
-            is_editable=True,
-            version=0,
-        )
-        db.add(profile)
-        await db.flush()
-
-        model = ModelConfig(
-            profile_id=profile.id,
-            vendor_id=vendor.id,
-            api_family="openai",
-            model_id=f"rr-reset-model-{suffix}",
-            model_type="native",
-            loadbalance_strategy=make_loadbalance_strategy(
-                profile_id=profile.id,
-                strategy_type="round-robin",
-            ),
-            is_enabled=True,
-        )
-        db.add(model)
-        await db.flush()
-
-        endpoints: list[Endpoint] = []
-        for index, label in enumerate(("Alpha", "Bravo", "Charlie")):
-            endpoint = Endpoint(
-                profile_id=profile.id,
-                name=f"RR Cursor {label} {suffix}",
-                base_url=f"https://rr-cursor-{label.lower()}.{suffix}.example.com",
-                api_key=f"sk-rr-{label.lower()}",
-                position=index,
-            )
-            db.add(endpoint)
-            endpoints.append(endpoint)
-        await db.commit()
-
-        first = await create_connection(
-            model_config_id=model.id,
-            body=ConnectionCreate(endpoint_id=endpoints[0].id, name=f"first-{suffix}"),
-            db=db,
-            profile_id=profile.id,
-        )
-        second = await create_connection(
-            model_config_id=model.id,
-            body=ConnectionCreate(endpoint_id=endpoints[1].id, name=f"second-{suffix}"),
-            db=db,
-            profile_id=profile.id,
-        )
-        await db.commit()
-
-        async with AsyncSessionLocal() as verify_db:
-            resolved = await get_model_config_with_connections(
-                verify_db, profile.id, model.model_id
-            )
-            assert resolved is not None
-            await build_attempt_plan(verify_db, profile.id, resolved, None)
-            assert (
-                await _get_round_robin_cursor_row(
-                    verify_db, profile_id=profile.id, model_config_id=model.id
-                )
-            ) == {"next_cursor": 1}
-
-        third = await create_connection(
-            model_config_id=model.id,
-            body=ConnectionCreate(endpoint_id=endpoints[2].id, name=f"third-{suffix}"),
-            db=db,
-            profile_id=profile.id,
-        )
-        assert (
-            await _get_round_robin_cursor_row(
-                db, profile_id=profile.id, model_config_id=model.id
-            )
-        ) is None
-        await db.commit()
-
-        async with AsyncSessionLocal() as verify_db:
-            resolved_after_create = await get_model_config_with_connections(
-                verify_db, profile.id, model.model_id
-            )
-            assert resolved_after_create is not None
-            await build_attempt_plan(verify_db, profile.id, resolved_after_create, None)
-            assert (
-                await _get_round_robin_cursor_row(
-                    verify_db, profile_id=profile.id, model_config_id=model.id
-                )
-            ) == {"next_cursor": 1}
-
-        await move_connection_priority(
-            model_config_id=model.id,
-            connection_id=third.id,
-            body=ConnectionPriorityMoveRequest(to_index=0),
-            db=db,
-            profile_id=profile.id,
-        )
-        assert (
-            await _get_round_robin_cursor_row(
-                db, profile_id=profile.id, model_config_id=model.id
-            )
-        ) is None
-        await db.commit()
-
-        async with AsyncSessionLocal() as verify_db:
-            resolved_after_reorder = await get_model_config_with_connections(
-                verify_db, profile.id, model.model_id
-            )
-            assert resolved_after_reorder is not None
-            await build_attempt_plan(
-                verify_db, profile.id, resolved_after_reorder, None
-            )
-            assert (
-                await _get_round_robin_cursor_row(
-                    verify_db, profile_id=profile.id, model_config_id=model.id
-                )
-            ) == {"next_cursor": 1}
-
-        await update_connection(
-            connection_id=first.id,
-            body=ConnectionUpdate(is_active=False),
-            db=db,
-            profile_id=profile.id,
-        )
-        assert (
-            await _get_round_robin_cursor_row(
-                db, profile_id=profile.id, model_config_id=model.id
-            )
-        ) is None
-        await db.commit()
-
-        async with AsyncSessionLocal() as verify_db:
-            resolved_after_disable = await get_model_config_with_connections(
-                verify_db, profile.id, model.model_id
-            )
-            assert resolved_after_disable is not None
-            await build_attempt_plan(
-                verify_db, profile.id, resolved_after_disable, None
-            )
-            assert (
-                await _get_round_robin_cursor_row(
-                    verify_db, profile_id=profile.id, model_config_id=model.id
-                )
-            ) == {"next_cursor": 1}
-
-        await delete_connection(connection_id=second.id, db=db, profile_id=profile.id)
-        assert (
-            await _get_round_robin_cursor_row(
-                db, profile_id=profile.id, model_config_id=model.id
-            )
-        ) is None
-        await db.commit()
-
-
 def test_connection_priority_validation_and_loadbalancer_tie_break():
     from app.models.models import Connection, Endpoint, ModelConfig
     from app.schemas.schemas import (
@@ -530,10 +334,10 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
                 "pricing_templates": [],
                 "loadbalance_strategies": [
                     {
-                        "name": "failover-primary",
-                        "strategy_type": "failover",
-                        "auto_recovery": make_auto_recovery_enabled(
-                            status_codes=[429, 503]
+                        "name": "adaptive-primary",
+                        "routing_policy": make_routing_policy_adaptive(
+                            routing_objective="maximize_availability",
+                            failure_status_codes=[429, 503],
                         ),
                     }
                 ],
@@ -543,7 +347,7 @@ async def test_connection_priority_import_normalizes_and_preserves_payload_order
                         "api_family": "openai",
                         "model_id": f"def068-model-{suffix}",
                         "model_type": "native",
-                        "loadbalance_strategy_name": "failover-primary",
+                        "loadbalance_strategy_name": "adaptive-primary",
                         "connections": [
                             {
                                 "endpoint_name": f"DEF068 E1 {suffix}",

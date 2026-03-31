@@ -113,31 +113,35 @@ def make_loadbalance_strategy(
     *,
     profile_id: int | None = None,
     profile: object | None = None,
-    strategy_type: Literal[
-        "single", "fill-first", "round-robin", "failover"
-    ] = "single",
+    strategy_type: Literal["single", "fill-first", "round-robin", "failover"]
+    | None = None,
     auto_recovery: dict[str, object] | None = None,
     failover_recovery_enabled: bool | None = None,
     failover_status_codes: list[int] | None = None,
     routing_policy: dict[str, object] | None = None,
     name: str | None = None,
 ) -> LoadbalanceStrategy:
-    if failover_recovery_enabled is None:
-        failover_recovery_enabled = strategy_type != "single"
-
-    resolved_auto_recovery = auto_recovery or (
-        make_auto_recovery_enabled(status_codes=failover_status_codes)
-        if strategy_type != "single" and failover_recovery_enabled
-        else make_auto_recovery_disabled()
-    )
     resolved_routing_policy = routing_policy
     if resolved_routing_policy is None:
+        if failover_recovery_enabled is None:
+            failover_recovery_enabled = strategy_type not in {None, "single"}
+
+        resolved_auto_recovery = auto_recovery or (
+            make_auto_recovery_enabled(status_codes=failover_status_codes)
+            if strategy_type not in {None, "single"} and failover_recovery_enabled
+            else make_auto_recovery_disabled()
+        )
         resolved_auto_recovery_dict = cast(dict[str, object], resolved_auto_recovery)
         cooldown = cast(
             dict[str, object], resolved_auto_recovery_dict.get("cooldown", {})
         )
         ban = cast(dict[str, object], resolved_auto_recovery_dict.get("ban", {}))
         resolved_routing_policy = make_routing_policy_adaptive(
+            routing_objective=(
+                "maximize_availability"
+                if strategy_type in {"fill-first", "round-robin", "failover"}
+                else "minimize_latency"
+            ),
             failure_status_codes=cast(
                 list[int] | None,
                 resolved_auto_recovery_dict.get("status_codes", failover_status_codes),
@@ -157,14 +161,10 @@ def make_loadbalance_strategy(
             ),
             ban_duration_seconds=cast(int, ban.get("ban_duration_seconds", 0)),
         )
-        resolved_routing_policy = {
-            **resolved_routing_policy,
-            "legacy_strategy_type": strategy_type,
-            "legacy_auto_recovery": resolved_auto_recovery_dict,
-        }
 
     payload: dict[str, object] = {
-        "name": name or f"{strategy_type}-strategy-{next(_strategy_counter)}",
+        "name": name
+        or f"{strategy_type or 'adaptive'}-strategy-{next(_strategy_counter)}",
         "routing_policy": resolved_routing_policy,
     }
     if profile is not None:
