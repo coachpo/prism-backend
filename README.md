@@ -186,12 +186,11 @@ Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, An
 - **Native**: real models with their own connection configurations and load balancing
 - **Proxy**: models that forward requests to native targets while keeping their own routing metadata
 
-### Load balancing strategies
+### Adaptive routing policies
 
-- **single**: always use the first active connection
-- **round-robin**: rotate the primary attempt across active connections in order
-- **failover**: try connections in priority order with adaptive auto-recovery
-- **fill-first**: strict priority spillover after the active target is exhausted
+- Native models attach one reusable adaptive `routing_policy`
+- Routing policies control objective, deadline budget, circuit-breaker recovery, admission limits, and monitoring influence
+- Runtime retries and failover behavior are derived from that adaptive policy instead of retired named strategy types
 
 ### Audit logging
 

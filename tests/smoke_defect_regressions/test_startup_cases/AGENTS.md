@@ -12,7 +12,7 @@ test_startup_cases/
 ├── health_contract_tests.py                          # `/health` status and version contract
 ├── loadbalance_delete_contract_tests.py              # Loadbalance event batch-delete contract
 ├── loadbalance_profile_primary_key_tests.py          # Profile/vendor primary-key contract regression
-├── loadbalance_strategy_preset_seed_tests.py         # Default failover preset seeding at startup
+├── loadbalance_strategy_preset_seed_tests.py         # Default adaptive routing preset seeding at startup
 ├── logging_endpoint_owner_and_connection_defaults_tests.py # Logging endpoint ownership and connection-default regressions
 ├── observability_storage_mode_tests.py               # Observability persistence-mode regression
 ├── profile_scope_and_model_health_eagerload_tests.py # Profile-scope and model-health eager-load regressions
