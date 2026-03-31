@@ -340,12 +340,7 @@ async def execute_import_payload(
             profile_id=profile_id,
             name=strategy_name,
             routing_policy=canonicalize_routing_policy_document(
-                None,
-                legacy_strategy_type=cast(
-                    Literal["single", "fill-first", "round-robin", "failover"],
-                    strategy_data.strategy_type,
-                ),
-                legacy_auto_recovery=strategy_data.auto_recovery,
+                strategy_data.routing_policy,
             ),
         )
         db.add(strategy)

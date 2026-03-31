@@ -34,7 +34,7 @@ from app.schemas.schemas import (
 )
 from app.services.loadbalancer.policy import (
     resolve_effective_loadbalance_policy,
-    serialize_auto_recovery,
+    serialize_routing_policy,
 )
 
 
@@ -167,8 +167,9 @@ async def build_export_payload(
             ConfigLoadbalanceStrategyExport.model_validate(
                 {
                     "name": strategy.name,
-                    "strategy_type": strategy.strategy_type,
-                    "auto_recovery": strategy.auto_recovery,
+                    "routing_policy": serialize_routing_policy(
+                        resolve_effective_loadbalance_policy(strategy)
+                    ),
                 }
             )
         )

@@ -4,7 +4,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .common import ApiFamily, AuthType, _HEADER_TOKEN_RE
-from .connection_model import AutoRecovery
+from .connection_model import RoutingPolicy
 
 # --- Config Export/Import Schemas ---
 
@@ -46,16 +46,14 @@ class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
 
 class ConfigLoadbalanceStrategyExport(BaseModel):
     name: str
-    strategy_type: str
-    auto_recovery: AutoRecovery
+    routing_policy: RoutingPolicy
 
 
 class ConfigLoadbalanceStrategyImport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    strategy_type: str
-    auto_recovery: AutoRecovery
+    routing_policy: RoutingPolicy
 
 
 class ConfigVendorExport(BaseModel):
