@@ -112,6 +112,99 @@ class TestProfileScopedDataIsolation:
         assert response.profile_limits.max_profiles == 10
 
     @pytest.mark.asyncio
+    async def test_management_bootstrap_and_model_scope_match_smoke_contract(self):
+        from app.dependencies import get_effective_profile
+
+        mock_db = AsyncMock()
+        now = datetime.now(timezone.utc)
+
+        default_profile = SimpleNamespace(
+            id=1,
+            name="Default",
+            description=None,
+            is_active=True,
+            is_default=True,
+            is_editable=True,
+            version=1,
+            deleted_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        list_result = MagicMock()
+        list_result.scalars.return_value.all.return_value = [default_profile]
+
+        profile_lookup_result = MagicMock()
+        profile_lookup_result.scalar_one_or_none.return_value = default_profile
+
+        vendor = SimpleNamespace(
+            id=1,
+            key="openai",
+            name="OpenAI",
+            description="OpenAI vendor",
+            audit_enabled=True,
+            audit_capture_bodies=False,
+            created_at=now,
+            updated_at=now,
+        )
+        model_result = MagicMock()
+        model_result.scalars.return_value.all.return_value = [
+            SimpleNamespace(
+                id=1,
+                profile_id=1,
+                vendor_id=1,
+                vendor=vendor,
+                api_family="openai",
+                model_id="gpt-5.4",
+                display_name="GPT-5.4",
+                model_type="native",
+                proxy_targets=[],
+                loadbalance_strategy_id=11,
+                loadbalance_strategy=SimpleNamespace(
+                    id=11,
+                    name="single-primary",
+                    strategy_type="single",
+                    failover_recovery_enabled=False,
+                ),
+                is_enabled=True,
+                connections=[],
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+
+        mock_db.execute.side_effect = [list_result, profile_lookup_result, model_result]
+
+        with (
+            patch(
+                "app.routers.profiles.ensure_profile_invariants",
+                new_callable=AsyncMock,
+                return_value=default_profile,
+            ),
+            patch(
+                "app.routers.models.get_model_health_stats",
+                new_callable=AsyncMock,
+                return_value={},
+            ),
+        ):
+            bootstrap = await get_profile_bootstrap(db=mock_db)
+            effective_profile = await get_effective_profile(
+                db=mock_db, x_profile_id="1"
+            )
+            models = await list_models(db=mock_db, profile_id=effective_profile.id)
+
+        assert bootstrap.active_profile is not None
+        assert bootstrap.active_profile.id == 1
+        assert [profile.id for profile in bootstrap.profiles] == [1]
+        assert effective_profile.id == 1
+        assert [model.model_id for model in models] == ["gpt-5.4"]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_effective_profile(db=mock_db, x_profile_id=None)
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "X-Profile-Id header is required"
+
+    @pytest.mark.asyncio
     async def test_same_model_id_in_different_profiles(self):
         """Same model_id can exist in multiple profiles without collision."""
         # Profile 1 has gpt-4

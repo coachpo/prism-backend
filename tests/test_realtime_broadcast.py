@@ -507,16 +507,28 @@ async def test_build_dashboard_update_message_preserves_full_request_log_payload
             AsyncMock(return_value=None),
         ),
     ):
-        message = await stats_logging.build_dashboard_update_message(db=db, entry=entry)
+        message = cast(
+            dict[str, object],
+            await stats_logging.build_dashboard_update_message(db=db, entry=entry),
+        )
 
-    request_log = message["request_log"]
-    assert isinstance(request_log, dict)
+    request_log = cast(dict[str, object], message["request_log"])
+    stats_summary = cast(dict[str, object], message["stats_summary_24h"])
+    throughput_summary = cast(dict[str, object], message["throughput_24h"])
+    api_family_summary = cast(dict[str, object], message["api_family_summary_24h"])
+    api_family_groups = cast(list[dict[str, object]], api_family_summary["groups"])
+
     assert request_log["endpoint_base_url"] == "https://api.openai.com"
     assert request_log["proxy_api_key_name_snapshot"] == "primary-key"
     assert request_log["pricing_snapshot_input"] == "0.1"
     assert request_log["pricing_snapshot_reasoning"] == "0.03"
     assert request_log["report_currency_symbol"] == "$"
     assert request_log["resolved_target_model_id"] == "gpt-4.1-mini"
+    assert request_log["status_code"] == 503
+    assert request_log["total_tokens"] == 200
+    assert stats_summary["total_requests"] == 1
+    assert throughput_summary["total_requests"] == 1
+    assert api_family_groups[0]["total_requests"] == 1
 
 
 @pytest.mark.asyncio

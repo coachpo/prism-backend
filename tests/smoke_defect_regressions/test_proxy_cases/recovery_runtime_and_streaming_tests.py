@@ -1249,7 +1249,7 @@ class TestDEF011_RuntimeEndpointActivityCheck:
 
 class TestDEF012_RuntimeEndpointToggleFailoverE2E:
     @pytest.mark.asyncio
-    async def test_proxy_skips_endpoint_disabled_after_plan_and_uses_next_endpoint(
+    async def test_proxy_skips_endpoint_disabled_after_plan_uses_next_endpoint_and_preserves_chat_completion_payload(
         self,
     ):
         import httpx
@@ -1295,6 +1295,16 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     content=json.dumps(
                         {
                             "id": "chatcmpl-ok",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "message": {
+                                        "role": "assistant",
+                                        "content": "ALPHA",
+                                    },
+                                    "finish_reason": "stop",
+                                }
+                            ],
                             "usage": {
                                 "prompt_tokens": 1,
                                 "completion_tokens": 1,
@@ -1470,6 +1480,11 @@ class TestDEF012_RuntimeEndpointToggleFailoverE2E:
                     )
 
                 assert response.status_code == 200
+                payload = json.loads(response.body.decode("utf-8"))
+
+                assert payload["id"] == "chatcmpl-ok"
+                assert payload["choices"][0]["message"]["content"] == "ALPHA"
+                assert payload["usage"]["total_tokens"] == 2
                 assert len(client.sent_urls) == 1
                 assert "secondary.example.com" in client.sent_urls[0]
 

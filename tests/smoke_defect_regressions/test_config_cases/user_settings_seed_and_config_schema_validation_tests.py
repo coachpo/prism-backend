@@ -590,6 +590,59 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 }
             )
 
+    @pytest.mark.asyncio
+    async def test_import_route_rejects_version_two_with_literal_error_detail(self):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.main import app
+        from app.models.models import Profile
+
+        await get_engine().dispose()
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF089 Config Version Gate {int(asyncio.get_running_loop().time() * 1_000_000)}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.commit()
+            await db.refresh(profile)
+            profile_id = profile.id
+
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response = await client.post(
+                "/api/config/import",
+                headers={"X-Profile-Id": str(profile_id)},
+                json={
+                    "version": 2,
+                    "vendors": [],
+                    "endpoints": [],
+                    "pricing_templates": [],
+                    "loadbalance_strategies": [],
+                    "models": [],
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == [
+            {
+                "type": "literal_error",
+                "loc": ["body", "version"],
+                "msg": "Input should be 1",
+                "input": 2,
+                "ctx": {"expected": "1"},
+            }
+        ]
+
 
 class TestDEF023_ConfigImportReferenceValidation:
     def test_validate_import_rejects_numeric_ids(self):
