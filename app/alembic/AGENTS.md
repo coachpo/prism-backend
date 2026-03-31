@@ -32,6 +32,7 @@ alembic/
 - Keep revision content in `versions/` and treat the checked-in initial revision as the authoritative schema install path.
 - Keep runtime migration orchestration in `env.py` and the shared helper seam in `../core/migrations.py`.
 - Keep this doc focused on the packaged Alembic surface, not backend schema design in general.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

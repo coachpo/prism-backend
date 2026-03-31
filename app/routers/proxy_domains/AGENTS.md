@@ -40,6 +40,7 @@ proxy_domains/
 - Keep request setup separate from attempt execution so model resolution, path rewrites, and costing setup stay testable without making upstream calls.
 - Keep streaming-specific parsing and finalization inside `attempt_streaming.py` and `attempt_outcome_reporting.py` instead of mixing that flow into buffered handlers.
 - Reuse the typed dependency seam in `attempt_types.py` when wiring new runtime collaborators.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

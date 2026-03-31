@@ -33,6 +33,7 @@ core/
 - Keep migration execution behind `run_migrations()`; `bootstrap/startup.py` owns when it runs.
 - Keep time handling UTC-first via `time.py` or `auth.py` helpers.
 - Keep backend runtime version reads behind `version.py`; runtime code should not read root-level version files.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

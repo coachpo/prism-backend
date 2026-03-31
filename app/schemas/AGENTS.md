@@ -45,6 +45,7 @@ schemas/
 - Add or update models in the correct domain file, then re-export them through `schemas.py`.
 - Keep field naming aligned with the actual wire contract. Frontend mirror types follow this backend surface.
 - Keep response and request shapes explicit in the schema layer instead of constructing anonymous dict contracts in handlers.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

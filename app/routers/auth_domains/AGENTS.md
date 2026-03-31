@@ -25,6 +25,7 @@ auth_domains/
 - Keep cookie mutation centralized in `cookie_helpers.py` so session and password-reset flows reuse one contract.
 - Keep password-reset response shaping separate from session and WebAuthn handlers.
 - Keep WebAuthn request handling here and leave deeper passkey persistence or verification to `../../services/webauthn/`.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

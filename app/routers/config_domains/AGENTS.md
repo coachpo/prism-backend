@@ -27,6 +27,7 @@ config_domains/
 - Validate import payloads before execution and keep the explicit version gate in `import_export.py`.
 - Keep export payload assembly in `export_builder.py` instead of inlining JSON construction in routes.
 - Keep header-blocklist CRUD separate from config import/export so profile-scoped rule management stays isolated.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

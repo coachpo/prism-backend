@@ -25,6 +25,7 @@ models_domains/
 - Keep list/detail and by-endpoint reads in `query_*` modules, including health-stat hydration and eager loading.
 - Keep create/update/delete logic and proxy/native validation in `mutation_*` modules.
 - Reuse shared loaders and shaping helpers instead of duplicating model-detail fetch logic in both read and write paths.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

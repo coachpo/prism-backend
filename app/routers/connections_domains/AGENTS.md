@@ -33,6 +33,7 @@ connections_domains/
 - Keep health-check request building separate from route responses so it can be reused by multiple handlers.
 - Keep owner-scoped filtering explicit instead of folding it into generic CRUD helpers.
 - Keep the nested `crud_handlers/` cluster documented here; it supports this package and does not need another AGENTS file.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

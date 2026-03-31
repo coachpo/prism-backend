@@ -21,6 +21,7 @@ pricing_templates_domains/
 - Keep expected-updated-at conflict handling and pricing-version bumps in `route_handlers.py`.
 - Keep template-name uniqueness and connection-usage inspection in `helpers.py`.
 - Treat pricing templates as selected-profile resources, not global instance settings.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

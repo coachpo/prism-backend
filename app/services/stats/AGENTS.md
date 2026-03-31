@@ -44,6 +44,7 @@ stats/
 - Keep throughput aggregation in `throughput.py` rather than layering it into `summary.py` or route handlers.
 - Keep model-detail batch metric queries in `model_metrics.py` rather than overloading `summary.py`.
 - `logging.py` owns request-log side effects, including `dashboard.update` broadcasts with request-log, summary, api-family, spending, throughput, and routing snapshot payloads; callers should not duplicate those websocket emissions.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

@@ -26,6 +26,7 @@ monitoring/
 - Keep route shells thin; `../../routers/monitoring.py` should delegate to the monitoring service facade.
 - Keep probe execution in `probe_runner.py`, and keep runtime-store mutations in `routing_feedback.py`.
 - Keep per-profile monitoring cadence in `scheduler.py`, including settings-driven interval clamping and due-probe selection.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 - Do not duplicate monitoring response shaping in routers when `queries.py` already owns that contract.

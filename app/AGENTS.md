@@ -67,6 +67,7 @@ app/
 - Keep parent AGENTS files focused on package maps and ownership boundaries, not leaf implementation details.
 - Keep auth, runtime proxy routing, realtime fanout, and stats assembly inside their existing service or domain boundaries.
 - Keep Alembic revisions as the schema source of truth and use `core/migrations.py` for the programmatic migration seam.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 
