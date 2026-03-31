@@ -35,7 +35,7 @@ smoke_defect_regressions/
 - Standalone guards outside the grouped folders: `test_failover.py`, `test_headers.py`, `test_connection_priority.py`, `test_conditional_decompression.py`, `test_endpoint_ordering.py`
 
 ## DEF FACTS
-- The current top-level smoke range still reaches DEF087.
+- The current top-level smoke export surface reaches DEF088, while DEF087 still appears in both startup and proxy leaves.
 - `test_config_cases/` and `test_costing_cases/` now join the existing proxy and startup leaves as justified child docs because each folder holds a focused multi-file regression cluster.
 
 ## BOUNDARY NOTES

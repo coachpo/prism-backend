@@ -1,7 +1,7 @@
 # BACKEND SERVICES ROOT KNOWLEDGE BASE
 
 ## OVERVIEW
-`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, split child packages for auth, proxy support, realtime, stats, load balancing, monitoring, and WebAuthn, and small root-level helpers such as `loadbalance_event_summary.py`.
+`services/` is the backend service boundary. It holds the public facades imported by routers, shared runtime infrastructure such as `background_tasks.py`, split child packages for auth, proxy support, realtime, stats, load balancing, monitoring, and WebAuthn, and root helpers such as audit persistence, costing, cleanup, user-settings bootstrap, and load-balance event summaries.
 
 ## STRUCTURE
 ```
@@ -11,7 +11,7 @@ services/
 ├── stats_service.py                    # Public stats and observability re-export surface
 ├── monitoring_service.py               # Public monitoring facade over probe, query, and scheduler helpers
 ├── proxy_service.py                    # Upstream forwarding boundary
-├── loadbalancer/                       # Split planner, policy, limiter, state, recovery, events, and admin seams
+├── loadbalancer/                       # Split planner, scoring, execution, limiter, runtime-state, recovery, strategy/admin seams
 ├── monitoring/AGENTS.md                # Probe runner, scheduler, queries, and routing feedback
 ├── monitoring/                         # Package owned by the monitoring leaf doc above
 ├── audit_service.py                    # Audit persistence and redaction
@@ -23,7 +23,7 @@ services/
 ├── profile_invariants.py               # Active or default profile enforcement
 ├── user_settings.py                    # Per-profile settings bootstrap and access helpers
 ├── auth/AGENTS.md                      # Session, email, password reset, proxy-key internals
-├── loadbalancer/AGENTS.md              # Split planner, policy, limiter, state, recovery, events, and admin seams
+├── loadbalancer/AGENTS.md              # Split planner, scoring, execution, limiter, runtime-state, recovery, strategy/admin seams
 ├── proxy_support/AGENTS.md             # Upstream URL, header, body, transport helpers
 ├── realtime/AGENTS.md                  # Connection manager room state and broadcasts
 ├── stats/AGENTS.md                     # Telemetry, spending, throughput, dashboard helpers
@@ -35,7 +35,7 @@ services/
 - Shared worker lifecycle and metrics snapshots: `background_tasks.py`, `../main.py`
 - Public auth boundary: `auth_service.py`, `auth/AGENTS.md`
 - Public passkey boundary: `webauthn_service.py`, `webauthn/AGENTS.md`
-- Runtime routing, attempt planning, and upstream forwarding: `loadbalancer/AGENTS.md`, `proxy_service.py`, `proxy_support/AGENTS.md`
+- Runtime routing, attempt planning, candidate scoring, deadline-aware execution, runtime leases/state, and upstream forwarding: `loadbalancer/AGENTS.md`, `proxy_service.py`, `proxy_support/AGENTS.md`
 - Monitoring queries, manual probes, scheduled probes, and routing feedback: `monitoring_service.py`, `monitoring/AGENTS.md`
 - Observability, request logging, dashboard payload shaping, and batch model or connection metrics: `stats_service.py`, `audit_service.py`, `stats/AGENTS.md`
 - Load-balance event detail wording and cooldown summaries: `loadbalance_event_summary.py`, `loadbalancer/AGENTS.md`
@@ -47,6 +47,7 @@ services/
 - `background_tasks.py` defines `BackgroundTaskManager`, queue and worker lifecycle, retry handling, enqueue rejection tracking, and metrics snapshots.
 - FastAPI lifespan in `../main.py` configures `background_task_manager` with the settings-derived worker count, starts it, stores it on `app.state`, starts `MonitoringScheduler` against the shared `httpx` client, and shuts both down during teardown.
 - `auth_service.py`, `monitoring_service.py`, `stats_service.py`, and `webauthn_service.py` are intended public import surfaces over deeper packages.
+- `loadbalancer/` is no longer just planner or recovery logic; it now carries candidate scoring, deadline-aware execution, runtime lease/state persistence, strategy CRUD, and management-facing current-state/event helpers.
 - `loadbalance_event_summary.py` is the root helper for human-readable load-balance event labels, reasons, and cooldown text used by load-balance detail responses.
 - Realtime route handlers depend on `services/realtime/connection_manager.py` for connection tracking and room membership instead of owning that state themselves.
 - `services/stats/logging.py` owns request-log side effects and emits `dashboard.update` payloads.
@@ -59,6 +60,7 @@ services/
 - Keep passkey logic separate from the auth package. The public boundary is `webauthn_service.py` plus `services/webauthn/`.
 - Keep cleanup helpers explicit and separate from request-serving code so retention work stays testable.
 - Keep one-off reporting helpers at the service root only when they don't warrant a new package. `loadbalance_event_summary.py` is that kind of module.
+- Keep the loadbalancer package decomposed. Execution, scoring, runtime-store, limiter, recovery, and strategy/admin seams should stay separate instead of collapsing back into a flat service module.
 
 ## ANTI-PATTERNS
 
@@ -66,3 +68,4 @@ services/
 - Do not spawn ad hoc worker pools or background queues from feature code when `background_tasks.py` already owns the shared worker model.
 - Do not hide load-balance event presentation logic inside routers when `loadbalance_event_summary.py` already defines the supported summary payload.
 - Do not push routing, auth, or observability logic back into route handlers once an established service boundary already owns it.
+- Do not flatten `services/loadbalancer/` back into one module or bypass its runtime-store/scoring/execution seams from routers.
