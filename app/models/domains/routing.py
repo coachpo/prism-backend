@@ -3,7 +3,6 @@ from __future__ import annotations
 # ruff: noqa: F821,F401
 from datetime import datetime
 from typing import Any
-from typing import cast
 
 from sqlalchemy import (
     Boolean,
@@ -67,46 +66,6 @@ class LoadbalanceStrategy(Base):
         back_populates="loadbalance_strategy",
         overlaps="model_configs,profile",
     )
-
-    @property
-    def strategy_type(self) -> str:
-        legacy_strategy_type = self.routing_policy.get("legacy_strategy_type")
-        if isinstance(legacy_strategy_type, str) and legacy_strategy_type:
-            return legacy_strategy_type
-        return str(self.routing_policy.get("kind", "adaptive"))
-
-    @property
-    def auto_recovery(self) -> dict[str, Any]:
-        legacy_auto_recovery = self.routing_policy.get("legacy_auto_recovery")
-        if isinstance(legacy_auto_recovery, dict):
-            return cast(dict[str, Any], legacy_auto_recovery)
-        circuit_breaker = cast(
-            dict[str, Any], self.routing_policy.get("circuit_breaker", {})
-        )
-        ban_mode = str(circuit_breaker.get("ban_mode", "off"))
-        ban: dict[str, Any] = {"mode": ban_mode}
-        if ban_mode in {"manual", "temporary"}:
-            ban["max_cooldown_strikes_before_ban"] = int(
-                circuit_breaker.get("max_open_strikes_before_ban", 0)
-            )
-        if ban_mode == "temporary":
-            ban["ban_duration_seconds"] = int(
-                circuit_breaker.get("ban_duration_seconds", 0)
-            )
-        return {
-            "mode": "enabled",
-            "status_codes": list(circuit_breaker.get("failure_status_codes", [])),
-            "cooldown": {
-                "base_seconds": int(circuit_breaker.get("base_open_seconds", 0)),
-                "failure_threshold": int(circuit_breaker.get("failure_threshold", 1)),
-                "backoff_multiplier": float(
-                    circuit_breaker.get("backoff_multiplier", 1.0)
-                ),
-                "max_cooldown_seconds": int(circuit_breaker.get("max_open_seconds", 0)),
-                "jitter_ratio": float(circuit_breaker.get("jitter_ratio", 0.0)),
-            },
-            "ban": ban,
-        }
 
 
 class ModelConfig(Base):

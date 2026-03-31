@@ -184,71 +184,6 @@ class ModelConnectionsBatchResponse(BaseModel):
     items: list[ModelConnectionsBatchItem]
 
 
-class AutoRecoveryCooldown(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    base_seconds: int = Field(ge=0)
-    failure_threshold: int = Field(ge=1, le=10)
-    backoff_multiplier: float = Field(ge=1.0, le=10.0)
-    max_cooldown_seconds: int = Field(ge=1, le=86_400)
-    jitter_ratio: float = Field(ge=0.0, le=1.0)
-
-
-class AutoRecoveryBanOff(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["off"] = "off"
-
-
-class AutoRecoveryBanManual(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["manual"] = "manual"
-    max_cooldown_strikes_before_ban: int = Field(ge=1, le=100)
-
-
-class AutoRecoveryBanTemporary(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["temporary"] = "temporary"
-    max_cooldown_strikes_before_ban: int = Field(ge=1, le=100)
-    ban_duration_seconds: int = Field(ge=1, le=86_400)
-
-
-AutoRecoveryBan = Annotated[
-    AutoRecoveryBanOff | AutoRecoveryBanManual | AutoRecoveryBanTemporary,
-    Field(discriminator="mode"),
-]
-
-
-class AutoRecoveryDisabled(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["disabled"] = "disabled"
-
-
-class AutoRecoveryEnabled(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    mode: Literal["enabled"] = "enabled"
-    status_codes: list[int] = Field(
-        default_factory=lambda: [403, 422, 429, 500, 502, 503, 504, 529]
-    )
-    cooldown: AutoRecoveryCooldown
-    ban: AutoRecoveryBan
-
-    @field_validator("status_codes", mode="before")
-    @classmethod
-    def validate_status_codes(cls, value: object) -> list[int]:
-        return list(normalize_failover_status_codes(value))
-
-
-AutoRecovery = Annotated[
-    AutoRecoveryDisabled | AutoRecoveryEnabled,
-    Field(discriminator="mode"),
-]
-
-
 class RoutingPolicyHedge(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -365,8 +300,6 @@ class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    strategy_type: str = Field(default="adaptive", exclude=True)
-    auto_recovery: AutoRecovery | None = Field(default=None, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
@@ -378,44 +311,8 @@ class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
 
         policy = resolve_effective_loadbalance_policy(value)
         return {
-            **(
-                {
-                    "strategy_type": getattr(value, "strategy_type", policy.kind),
-                }
-            ),
             "id": getattr(value, "id"),
             "name": getattr(value, "name"),
-            "auto_recovery": getattr(
-                value,
-                "auto_recovery",
-                AutoRecoveryEnabled.model_validate(
-                    {
-                        "mode": "enabled",
-                        "status_codes": policy.circuit_failure_status_codes,
-                        "cooldown": {
-                            "base_seconds": int(policy.circuit_base_open_seconds),
-                            "failure_threshold": policy.circuit_failure_threshold,
-                            "backoff_multiplier": policy.circuit_backoff_multiplier,
-                            "max_cooldown_seconds": policy.circuit_max_open_seconds,
-                            "jitter_ratio": policy.circuit_jitter_ratio,
-                        },
-                        "ban": (
-                            {"mode": "off"}
-                            if policy.circuit_ban_mode == "off"
-                            else {
-                                "mode": "manual",
-                                "max_cooldown_strikes_before_ban": policy.circuit_max_open_strikes_before_ban,
-                            }
-                            if policy.circuit_ban_mode == "manual"
-                            else {
-                                "mode": "temporary",
-                                "max_cooldown_strikes_before_ban": policy.circuit_max_open_strikes_before_ban,
-                                "ban_duration_seconds": policy.circuit_ban_duration_seconds,
-                            }
-                        ),
-                    }
-                ),
-            ),
             "routing_policy": serialize_routing_policy(policy),
         }
 
@@ -563,14 +460,6 @@ class EndpointModelsBatchResponse(BaseModel):
 
 
 __all__ = [
-    "AutoRecovery",
-    "AutoRecoveryBan",
-    "AutoRecoveryBanManual",
-    "AutoRecoveryBanOff",
-    "AutoRecoveryBanTemporary",
-    "AutoRecoveryCooldown",
-    "AutoRecoveryDisabled",
-    "AutoRecoveryEnabled",
     "ConnectionBase",
     "ConnectionCreate",
     "ConnectionOwnerResponse",
