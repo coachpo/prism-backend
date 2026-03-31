@@ -51,6 +51,7 @@ smoke_defect_regressions/
 - Keep DEF numbering explicit and aligned with the aggregator's current export surface.
 - Put new regressions in the right concern folder first.
 - Keep file names explicit about the guarded behavior.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 - Do not reuse DEF numbers or insert a new regression into the wrong concern folder just because it is nearby.

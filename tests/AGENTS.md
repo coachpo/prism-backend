@@ -51,6 +51,7 @@ tests/
 - Keep top-level aggregators current when adding smoke leaves, and update the multi-profile top-level aggregator when a subtree leaf is meant to participate in that re-export surface.
 - Put defect-numbered regressions under `smoke_defect_regressions/` and cross-profile guarantees under `multi_profile_isolation/`.
 - Keep service or realtime tests outside those hierarchies when they do not map cleanly to a DEF or profile-isolation concern.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 - Do not assume SQLite-like behavior. This suite is grounded in PostgreSQL semantics.

@@ -42,6 +42,7 @@ services/
 
 - Keep this tree for service behavior that is neither a DEF regression nor a cross-profile isolation guarantee.
 - If a service test becomes a named defect or a profile-containment check, move it to the matching tree instead of duplicating it here.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

@@ -39,6 +39,7 @@ test_startup_cases/
 - Put startup-side named defects here first, then re-export them through `../test_startup.py` and `../../test_smoke_defect_regressions.py` when they belong in the top-level DEF corpus.
 - Keep file names explicit about the guarded startup contract so regressions stay searchable by concern.
 - Keep this cluster focused on startup, auth, middleware, schema, seed, storage, and closely related contract regressions.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 
