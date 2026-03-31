@@ -17,7 +17,9 @@ from app.services.stats_service import log_request
 
 class TestDEF024_ConfigImportExportRefRoundtrip:
     @pytest.mark.asyncio
-    async def test_create_and_update_connection_preserve_limiter_fields(self):
+    async def test_create_and_update_connection_preserve_limiter_fields_and_probe_interval(
+        self,
+    ):
         from sqlalchemy import select
 
         from app.core.database import AsyncSessionLocal, get_engine
@@ -84,6 +86,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                 body=ConnectionCreate(
                     endpoint_id=endpoint.id,
                     name=f"def024-limiter-connection-{suffix}",
+                    monitoring_probe_interval_seconds=180,
                     qps_limit=3,
                     max_in_flight_non_stream=5,
                     max_in_flight_stream=2,
@@ -95,10 +98,12 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             assert created.qps_limit == 3
             assert created.max_in_flight_non_stream == 5
             assert created.max_in_flight_stream == 2
+            assert created.monitoring_probe_interval_seconds == 180
 
             updated = await update_connection(
                 connection_id=created.id,
                 body=ConnectionUpdate(
+                    monitoring_probe_interval_seconds=240,
                     qps_limit=4,
                     max_in_flight_non_stream=None,
                     max_in_flight_stream=6,
@@ -110,6 +115,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             assert updated.qps_limit == 4
             assert updated.max_in_flight_non_stream is None
             assert updated.max_in_flight_stream == 6
+            assert updated.monitoring_probe_interval_seconds == 240
 
     @pytest.mark.asyncio
     async def test_import_export_roundtrip_omits_id_fields(self):

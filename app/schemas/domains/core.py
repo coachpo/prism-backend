@@ -10,6 +10,7 @@ from .common import (
 from .connection_model import (
     ConnectionBase,
     ConnectionCreate,
+    ConnectionHealthCheckPreviewResponse,
     ModelConnectionsBatchItem,
     ModelConnectionsBatchRequest,
     ModelConnectionsBatchResponse,
@@ -78,6 +79,7 @@ __all__ = [
     "AuthType",
     "ConnectionBase",
     "ConnectionCreate",
+    "ConnectionHealthCheckPreviewResponse",
     "ConnectionOwnerResponse",
     "ConnectionPricingTemplateSummary",
     "ConnectionPricingTemplateUpdate",

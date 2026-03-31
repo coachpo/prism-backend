@@ -319,6 +319,9 @@ class Connection(Base):
     qps_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_in_flight_non_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_in_flight_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    monitoring_probe_interval_seconds: Mapped[int] = mapped_column(
+        Integer, default=300, nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)

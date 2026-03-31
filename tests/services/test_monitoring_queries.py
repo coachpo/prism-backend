@@ -33,6 +33,7 @@ class MonitoringQueryFixture(TypedDict):
     anthropic_model_id: int
     primary_healthy_connection_id: int
     primary_degraded_connection_id: int
+    primary_degraded_endpoint_id: int
     backup_unhealthy_connection_id: int
 
 
@@ -150,6 +151,7 @@ async def _insert_monitoring_query_fixture(
         is_active=True,
         priority=0,
         name=f"primary-healthy-{suffix}",
+        monitoring_probe_interval_seconds=180,
     )
     primary_degraded_connection = Connection(
         profile=profile,
@@ -158,6 +160,7 @@ async def _insert_monitoring_query_fixture(
         is_active=True,
         priority=1,
         name=f"primary-degraded-{suffix}",
+        monitoring_probe_interval_seconds=240,
     )
     primary_inactive_connection = Connection(
         profile=profile,
@@ -370,6 +373,7 @@ async def _insert_monitoring_query_fixture(
         "anthropic_model_id": anthropic_model.id,
         "primary_healthy_connection_id": primary_healthy_connection.id,
         "primary_degraded_connection_id": primary_degraded_connection.id,
+        "primary_degraded_endpoint_id": endpoints[1].id,
         "backup_unhealthy_connection_id": backup_unhealthy_connection.id,
     }
 
@@ -396,7 +400,7 @@ class TestMonitoringQueryContracts:
             "POST",
         ) in registered_routes
 
-    def test_monitoring_overview_schema_groups_by_vendor(self):
+    def test_monitoring_overview_schema_returns_vendor_model_connection_tree(self):
         schemas = _load_module("app.schemas.schemas")
         MonitoringOverviewResponse = _require_attr(
             schemas, "MonitoringOverviewResponse"
@@ -410,10 +414,62 @@ class TestMonitoringQueryContracts:
                         "vendor_id": 11,
                         "vendor_key": "openai",
                         "vendor_name": "OpenAI",
+                        "fused_status": "degraded",
                         "model_count": 2,
                         "connection_count": 3,
                         "healthy_connection_count": 2,
                         "degraded_connection_count": 1,
+                        "models": [
+                            {
+                                "model_config_id": 21,
+                                "model_id": "gpt-4.1-mini",
+                                "display_name": "GPT 4.1 Mini",
+                                "fused_status": "degraded",
+                                "connection_count": 2,
+                                "connections": [
+                                    {
+                                        "connection_id": 31,
+                                        "connection_name": "primary-openai",
+                                        "endpoint_id": 41,
+                                        "endpoint_name": "primary-endpoint",
+                                        "monitoring_probe_interval_seconds": 180,
+                                        "last_probe_status": "healthy",
+                                        "last_probe_at": datetime(
+                                            2026, 3, 29, 11, 59, tzinfo=timezone.utc
+                                        ),
+                                        "circuit_state": "closed",
+                                        "live_p95_latency_ms": 123,
+                                        "last_live_failure_kind": None,
+                                        "last_live_failure_at": None,
+                                        "last_live_success_at": datetime(
+                                            2026, 3, 29, 11, 58, tzinfo=timezone.utc
+                                        ),
+                                        "endpoint_ping_status": "healthy",
+                                        "endpoint_ping_ms": 82,
+                                        "conversation_status": "healthy",
+                                        "conversation_delay_ms": 145,
+                                        "fused_status": "healthy",
+                                        "recent_history": [
+                                            {
+                                                "checked_at": datetime(
+                                                    2026,
+                                                    3,
+                                                    29,
+                                                    11,
+                                                    59,
+                                                    tzinfo=timezone.utc,
+                                                ),
+                                                "endpoint_ping_status": "healthy",
+                                                "endpoint_ping_ms": 82,
+                                                "conversation_status": "healthy",
+                                                "conversation_delay_ms": 145,
+                                                "failure_kind": None,
+                                            }
+                                        ],
+                                    }
+                                ],
+                            }
+                        ],
                     }
                 ],
             }
@@ -422,6 +478,13 @@ class TestMonitoringQueryContracts:
         assert len(payload.vendors) == 1
         assert payload.vendors[0].vendor_id == 11
         assert payload.vendors[0].model_count == 2
+        assert payload.vendors[0].models[0].model_config_id == 21
+        assert payload.vendors[0].models[0].connections[0].connection_id == 31
+        assert payload.vendors[0].models[0].connections[0].live_p95_latency_ms == 123
+        assert len(payload.vendors[0].models[0].connections[0].recent_history) == 1
+        assert not hasattr(
+            payload.vendors[0].models[0].connections[0], "availability_cells"
+        )
 
     def test_monitoring_vendor_schema_groups_by_model(self):
         schemas = _load_module("app.schemas.schemas")
@@ -467,6 +530,7 @@ class TestMonitoringQueryContracts:
                         "connection_id": 31,
                         "endpoint_id": 41,
                         "endpoint_name": "primary-openai",
+                        "monitoring_probe_interval_seconds": 180,
                         "endpoint_ping_status": "healthy",
                         "endpoint_ping_ms": 82,
                         "conversation_status": "healthy",
@@ -492,6 +556,7 @@ class TestMonitoringQueryContracts:
         assert payload.model_config_id == 21
         assert len(payload.connections) == 1
         assert payload.connections[0].connection_id == 31
+        assert payload.connections[0].monitoring_probe_interval_seconds == 180
         assert payload.connections[0].endpoint_ping_ms == 82
         assert payload.connections[0].conversation_delay_ms == 145
         assert payload.connections[0].fused_status == "healthy"
@@ -533,12 +598,37 @@ class TestMonitoringQueryBehavior:
             "query_monitoring_overview",
         )
         fixture = await _seed_monitoring_query_fixture()
+        fixed_now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
 
         async with AsyncSessionLocal() as session:
-            response = await query_monitoring_overview(
-                db=session,
-                profile_id=fixture["profile_id"],
+            session.add_all(
+                [
+                    MonitoringConnectionProbeResult(
+                        profile_id=fixture["profile_id"],
+                        vendor_id=fixture["openai_vendor_id"],
+                        model_config_id=fixture["openai_primary_model_id"],
+                        connection_id=fixture["primary_degraded_connection_id"],
+                        endpoint_id=fixture["primary_degraded_endpoint_id"],
+                        endpoint_ping_status="healthy",
+                        endpoint_ping_ms=100 + minute_offset,
+                        conversation_status="healthy",
+                        conversation_delay_ms=200 + minute_offset,
+                        failure_kind=None,
+                        detail=f"older probe {minute_offset}",
+                        checked_at=fixed_now - timedelta(minutes=minute_offset),
+                    )
+                    for minute_offset in range(3, 63)
+                ]
             )
+            await session.commit()
+
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            monkeypatch.setattr(queries_module, "utc_now", lambda: fixed_now)
+            async with AsyncSessionLocal() as session:
+                response = await query_monitoring_overview(
+                    db=session,
+                    profile_id=fixture["profile_id"],
+                )
 
         vendors_by_key = {item.vendor_key: item for item in response.vendors}
         assert sorted(vendors_by_key) == [
@@ -547,16 +637,52 @@ class TestMonitoringQueryBehavior:
         ]
 
         openai_item = vendors_by_key[str(fixture["openai_vendor_key"])]
+        assert openai_item.fused_status == "degraded"
         assert openai_item.model_count == 2
         assert openai_item.connection_count == 3
         assert openai_item.healthy_connection_count == 1
         assert openai_item.degraded_connection_count == 2
+        assert [model.model_config_id for model in openai_item.models] == [
+            fixture["openai_backup_model_id"],
+            fixture["openai_primary_model_id"],
+        ]
+        primary_model = openai_item.models[1]
+        assert [row.connection_id for row in primary_model.connections] == [
+            fixture["primary_healthy_connection_id"],
+            fixture["primary_degraded_connection_id"],
+        ]
+        healthy_row = primary_model.connections[0]
+        assert healthy_row.connection_name is not None
+        assert healthy_row.last_probe_status == "healthy"
+        assert healthy_row.circuit_state == "closed"
+        assert healthy_row.live_p95_latency_ms is None
+        assert not hasattr(healthy_row, "availability_cells")
+
+        degraded_row = primary_model.connections[1]
+        assert len(degraded_row.recent_history) == 60
+        assert degraded_row.recent_history[0].checked_at == fixed_now - timedelta(
+            minutes=2
+        )
+        assert degraded_row.recent_history[-1].checked_at == fixed_now - timedelta(
+            minutes=61
+        )
+        assert degraded_row.recent_history[0].endpoint_ping_ms == 115
+        assert degraded_row.recent_history[-1].endpoint_ping_ms == 161
+        assert degraded_row.recent_history[0].conversation_status == "unhealthy"
+        assert degraded_row.recent_history[0].conversation_delay_ms is None
+        assert degraded_row.recent_history[0].failure_kind == "timeout"
+        assert degraded_row.last_probe_at == fixed_now - timedelta(minutes=2)
+        assert degraded_row.endpoint_ping_ms == 115
+        assert degraded_row.conversation_status == "unhealthy"
+        assert degraded_row.conversation_delay_ms is None
 
         anthropic_item = vendors_by_key[str(fixture["anthropic_vendor_key"])]
+        assert anthropic_item.fused_status == "healthy"
         assert anthropic_item.model_count == 1
         assert anthropic_item.connection_count == 1
         assert anthropic_item.healthy_connection_count == 1
         assert anthropic_item.degraded_connection_count == 0
+        assert len(anthropic_item.models) == 1
 
     @pytest.mark.asyncio
     async def test_query_monitoring_vendor_groups_connections_by_model_and_rolls_up_status(
@@ -614,6 +740,7 @@ class TestMonitoringQueryBehavior:
 
         healthy_row = response.connections[0]
         assert healthy_row.endpoint_ping_status == "healthy"
+        assert healthy_row.monitoring_probe_interval_seconds == 180
         assert healthy_row.endpoint_ping_ms == 82
         assert healthy_row.conversation_status == "healthy"
         assert healthy_row.conversation_delay_ms == 145
@@ -625,6 +752,7 @@ class TestMonitoringQueryBehavior:
 
         degraded_row = response.connections[1]
         assert degraded_row.endpoint_ping_status == "healthy"
+        assert degraded_row.monitoring_probe_interval_seconds == 240
         assert degraded_row.endpoint_ping_ms == 115
         assert degraded_row.conversation_status == "unhealthy"
         assert degraded_row.conversation_delay_ms is None

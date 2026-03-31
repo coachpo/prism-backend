@@ -196,15 +196,6 @@ async def _apply_probe_feedback(
         else None,
         float(conversation_delay_ms) if conversation_delay_ms is not None else None,
     )
-    last_live_failure_kind = current_state.last_live_failure_kind
-    last_live_failure_at = current_state.last_live_failure_at
-    last_live_success_at = current_state.last_live_success_at
-
-    if fused_status == "healthy":
-        last_live_success_at = checked_at
-    else:
-        last_live_failure_kind = _normalize_failure_kind(failure_kind)
-        last_live_failure_at = checked_at
 
     _ = await apply_fused_monitoring_update(
         session=session,
@@ -215,9 +206,9 @@ async def _apply_probe_feedback(
         endpoint_ping_ewma_ms=endpoint_ping_ewma_ms,
         conversation_delay_ewma_ms=conversation_delay_ewma_ms,
         live_p95_latency_ms=current_state.live_p95_latency_ms,
-        last_live_failure_kind=last_live_failure_kind,
-        last_live_failure_at=last_live_failure_at,
-        last_live_success_at=last_live_success_at,
+        last_live_failure_kind=current_state.last_live_failure_kind,
+        last_live_failure_at=current_state.last_live_failure_at,
+        last_live_success_at=current_state.last_live_success_at,
         now_at=checked_at,
     )
     return fused_status

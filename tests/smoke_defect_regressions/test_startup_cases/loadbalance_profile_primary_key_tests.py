@@ -145,6 +145,7 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
             assert "routing_policy" in strategy_columns
             assert "strategy_type" not in strategy_columns
             assert "auto_recovery" not in strategy_columns
+            assert "monitoring_probe_interval_seconds" in connection_columns
             assert "openai_probe_endpoint_variant" in connection_columns
         finally:
             await _drop_database(drift_database_url)

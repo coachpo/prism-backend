@@ -22,6 +22,7 @@ from app.schemas.schemas import (
     MonitoringConnectionHistoryItem,
     MonitoringConnectionRow,
     MonitoringModelResponse,
+    MonitoringOverviewModelItem,
     MonitoringOverviewResponse,
     MonitoringOverviewVendorItem,
     MonitoringVendorModelItem,
@@ -29,6 +30,7 @@ from app.schemas.schemas import (
 )
 
 _HISTORY_LIMIT = 5
+_OVERVIEW_HISTORY_LIMIT = 60
 _KNOWN_FUSED_STATUSES = {"healthy", "degraded", "unhealthy"}
 
 
@@ -113,10 +115,27 @@ def _roll_up_group_status(statuses: list[str]) -> str:
 
 def _build_connection_row(
     bundle: _MonitoringConnectionBundle,
+    *,
+    history_oldest_first: bool = False,
 ) -> MonitoringConnectionRow:
-    latest_history = bundle.recent_history[0] if bundle.recent_history else None
+    history_rows = (
+        list(reversed(bundle.recent_history))
+        if history_oldest_first
+        else bundle.recent_history
+    )
+    latest_history = (
+        (history_rows[-1] if history_oldest_first else history_rows[0])
+        if history_rows
+        else None
+    )
     fused_status = _derive_connection_fused_status(bundle)
     runtime_state = bundle.runtime_state
+    last_probe_status = _normalize_fused_status(
+        runtime_state.last_probe_status if runtime_state is not None else None
+    ) or _derive_history_fused_status(latest_history)
+    last_probe_at = (
+        runtime_state.last_probe_at if runtime_state is not None else None
+    ) or (latest_history.checked_at if latest_history is not None else None)
 
     endpoint_ping_status = (
         latest_history.endpoint_ping_status
@@ -151,8 +170,29 @@ def _build_connection_row(
 
     return MonitoringConnectionRow(
         connection_id=bundle.connection.id,
+        connection_name=bundle.connection.name,
         endpoint_id=bundle.connection.endpoint_rel.id,
         endpoint_name=bundle.connection.endpoint_rel.name,
+        monitoring_probe_interval_seconds=(
+            bundle.connection.monitoring_probe_interval_seconds
+        ),
+        last_probe_status=last_probe_status,
+        last_probe_at=last_probe_at,
+        circuit_state=(
+            runtime_state.circuit_state if runtime_state is not None else None
+        ),
+        live_p95_latency_ms=_round_metric(
+            runtime_state.live_p95_latency_ms if runtime_state is not None else None
+        ),
+        last_live_failure_kind=(
+            runtime_state.last_live_failure_kind if runtime_state is not None else None
+        ),
+        last_live_failure_at=(
+            runtime_state.last_live_failure_at if runtime_state is not None else None
+        ),
+        last_live_success_at=(
+            runtime_state.last_live_success_at if runtime_state is not None else None
+        ),
         endpoint_ping_status=endpoint_ping_status,
         endpoint_ping_ms=endpoint_ping_ms,
         conversation_status=conversation_status,
@@ -167,8 +207,25 @@ def _build_connection_row(
                 conversation_delay_ms=row.conversation_delay_ms,
                 failure_kind=row.failure_kind,
             )
-            for row in bundle.recent_history
+            for row in history_rows
         ],
+    )
+
+
+def _build_overview_model_item(
+    bundles: list[_MonitoringConnectionBundle],
+) -> MonitoringOverviewModelItem:
+    model = bundles[0].connection.model_config_rel
+    connection_rows = [_build_connection_row(bundle) for bundle in bundles]
+    return MonitoringOverviewModelItem(
+        model_config_id=model.id,
+        model_id=model.model_id,
+        display_name=model.display_name,
+        fused_status=_roll_up_group_status(
+            [row.fused_status for row in connection_rows]
+        ),
+        connection_count=len(connection_rows),
+        connections=connection_rows,
     )
 
 
@@ -248,6 +305,7 @@ async def _load_recent_history_by_connection(
     profile_id: int,
     connection_ids: list[int],
     history_limit: int,
+    oldest_first: bool = False,
 ) -> dict[int, list[MonitoringConnectionProbeResult]]:
     if not connection_ids:
         return {}
@@ -269,6 +327,9 @@ async def _load_recent_history_by_connection(
         bucket = grouped[row.connection_id]
         if len(bucket) < history_limit:
             bucket.append(row)
+    if oldest_first:
+        for bucket in grouped.values():
+            bucket.reverse()
     return grouped
 
 
@@ -278,6 +339,7 @@ async def _load_connection_bundles(
     profile_id: int,
     connections: list[Connection],
     history_limit: int = _HISTORY_LIMIT,
+    history_oldest_first: bool = False,
 ) -> list[_MonitoringConnectionBundle]:
     connection_ids = [connection.id for connection in connections]
     runtime_state_by_connection = await _load_runtime_state_by_connection(
@@ -290,6 +352,7 @@ async def _load_connection_bundles(
         profile_id=profile_id,
         connection_ids=connection_ids,
         history_limit=history_limit,
+        oldest_first=history_oldest_first,
     )
     return [
         _MonitoringConnectionBundle(
@@ -348,11 +411,13 @@ async def query_monitoring_overview(
     db: AsyncSession,
     profile_id: int,
 ) -> MonitoringOverviewResponse:
+    generated_at = utc_now()
     connections = await _load_monitored_connections(db, profile_id=profile_id)
     bundles = await _load_connection_bundles(
         db,
         profile_id=profile_id,
         connections=connections,
+        history_limit=_OVERVIEW_HISTORY_LIMIT,
     )
     bundles_by_vendor: dict[int, list[_MonitoringConnectionBundle]] = defaultdict(list)
     for bundle in bundles:
@@ -361,16 +426,32 @@ async def query_monitoring_overview(
     vendor_items: list[MonitoringOverviewVendorItem] = []
     for vendor_id, vendor_bundles in bundles_by_vendor.items():
         vendor = vendor_bundles[0].connection.model_config_rel.vendor
-        statuses = [
-            _derive_connection_fused_status(bundle) for bundle in vendor_bundles
+        bundles_by_model: dict[int, list[_MonitoringConnectionBundle]] = defaultdict(
+            list
+        )
+        for bundle in vendor_bundles:
+            bundles_by_model[bundle.connection.model_config_id].append(bundle)
+
+        model_items = [
+            _build_overview_model_item(grouped_bundles)
+            for grouped_bundles in bundles_by_model.values()
         ]
-        model_ids = {bundle.connection.model_config_id for bundle in vendor_bundles}
+        model_items.sort(key=lambda item: (item.model_id.lower(), item.model_config_id))
+
+        statuses = [
+            row.fused_status
+            for model_item in model_items
+            for row in model_item.connections
+        ]
         vendor_items.append(
             MonitoringOverviewVendorItem(
                 vendor_id=vendor_id,
                 vendor_key=vendor.key,
                 vendor_name=vendor.name,
-                model_count=len(model_ids),
+                fused_status=_roll_up_group_status(
+                    [model_item.fused_status for model_item in model_items]
+                ),
+                model_count=len(model_items),
                 connection_count=len(vendor_bundles),
                 healthy_connection_count=sum(
                     1 for status in statuses if status == "healthy"
@@ -378,11 +459,12 @@ async def query_monitoring_overview(
                 degraded_connection_count=sum(
                     1 for status in statuses if status != "healthy"
                 ),
+                models=model_items,
             )
         )
 
     vendor_items.sort(key=lambda item: (item.vendor_name.lower(), item.vendor_id))
-    return MonitoringOverviewResponse(generated_at=utc_now(), vendors=vendor_items)
+    return MonitoringOverviewResponse(generated_at=generated_at, vendors=vendor_items)
 
 
 async def query_monitoring_vendor(
@@ -391,6 +473,7 @@ async def query_monitoring_vendor(
     profile_id: int,
     vendor_id: int,
 ) -> MonitoringVendorResponse:
+    generated_at = utc_now()
     vendor = await _load_vendor_or_404(db, profile_id=profile_id, vendor_id=vendor_id)
     connections = await _load_monitored_connections(
         db,
@@ -426,7 +509,7 @@ async def query_monitoring_vendor(
 
     model_items.sort(key=lambda item: (item.model_id.lower(), item.model_config_id))
     return MonitoringVendorResponse(
-        generated_at=utc_now(),
+        generated_at=generated_at,
         vendor_id=vendor.id,
         vendor_key=vendor.key,
         vendor_name=vendor.name,
@@ -440,6 +523,7 @@ async def query_monitoring_model(
     profile_id: int,
     model_config_id: int,
 ) -> MonitoringModelResponse:
+    generated_at = utc_now()
     model = await _load_model_or_404(
         db,
         profile_id=profile_id,
@@ -458,7 +542,7 @@ async def query_monitoring_model(
     connection_rows = [_build_connection_row(bundle) for bundle in bundles]
 
     return MonitoringModelResponse(
-        generated_at=utc_now(),
+        generated_at=generated_at,
         vendor_id=model.vendor.id,
         vendor_key=model.vendor.key,
         vendor_name=model.vendor.name,

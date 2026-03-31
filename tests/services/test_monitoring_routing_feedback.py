@@ -138,6 +138,8 @@ class TestMonitoringRoutingFeedback:
         assert state_row.last_probe_status == "unhealthy"
         assert state_row.circuit_state == "open"
         assert state_row.last_probe_at == checked_at
+        assert state_row.last_live_failure_at is None
+        assert state_row.last_live_success_at is None
 
     @pytest.mark.asyncio
     async def test_record_probe_outcome_recovers_open_circuit_only_after_successful_probe_hysteresis(
@@ -251,3 +253,66 @@ class TestMonitoringRoutingFeedback:
         assert state_row.last_live_failure_at == observed_at
         assert state_row.live_p95_latency_ms is not None
         assert float(state_row.live_p95_latency_ms) == pytest.approx(245.0)
+
+    @pytest.mark.asyncio
+    async def test_successful_probe_does_not_clear_recent_passive_live_failure_evidence(
+        self,
+    ):
+        feedback_module = _load_module("app.services.monitoring.routing_feedback")
+        record_passive_request_outcome = getattr(
+            feedback_module,
+            "record_passive_request_outcome",
+            None,
+        )
+        record_probe_outcome = getattr(feedback_module, "record_probe_outcome", None)
+        assert record_passive_request_outcome is not None, (
+            "app.services.monitoring.routing_feedback.record_passive_request_outcome must exist"
+        )
+        assert record_probe_outcome is not None, (
+            "app.services.monitoring.routing_feedback.record_probe_outcome must exist"
+        )
+
+        fixture = await _seed_feedback_fixture()
+        failure_at = datetime(2026, 3, 29, 20, 0, tzinfo=timezone.utc)
+        probe_at = failure_at + timedelta(seconds=30)
+
+        await record_passive_request_outcome(
+            profile_id=fixture["profile_id"],
+            connection_id=fixture["connection_id"],
+            status_code=503,
+            response_time_ms=300,
+            success_flag=False,
+            observed_at=failure_at,
+        )
+        await record_probe_outcome(
+            profile_id=fixture["profile_id"],
+            vendor_id=fixture["vendor_id"],
+            model_config_id=fixture["model_config_id"],
+            connection_id=fixture["connection_id"],
+            endpoint_id=fixture["endpoint_id"],
+            endpoint_ping_status="healthy",
+            endpoint_ping_ms=80,
+            conversation_status="healthy",
+            conversation_delay_ms=140,
+            failure_kind=None,
+            detail="probe completed",
+            checked_at=probe_at,
+        )
+
+        async with AsyncSessionLocal() as session:
+            state_row = (
+                await session.execute(
+                    select(RoutingConnectionRuntimeState).where(
+                        RoutingConnectionRuntimeState.profile_id
+                        == fixture["profile_id"],
+                        RoutingConnectionRuntimeState.connection_id
+                        == fixture["connection_id"],
+                    )
+                )
+            ).scalar_one()
+
+        assert state_row.last_probe_status == "healthy"
+        assert state_row.last_probe_at == probe_at
+        assert state_row.last_live_failure_kind == "transient_http"
+        assert state_row.last_live_failure_at == failure_at
+        assert state_row.last_live_success_at is None

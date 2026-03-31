@@ -2,8 +2,10 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.crypto import encrypt_secret
 from app.models.models import Connection, Endpoint
 from app.schemas.schemas import ConnectionCreate, ConnectionUpdate
+from app.services.proxy_service import normalize_base_url, validate_base_url
 
 from ..crud_dependencies import ConnectionCrudDependencies
 
@@ -81,6 +83,59 @@ async def resolve_create_endpoint(
     )
 
 
+def build_preview_endpoint_from_inline(
+    *,
+    profile_id: int,
+    endpoint_name: str,
+    base_url: str,
+    api_key: str,
+) -> Endpoint:
+    clean_name = endpoint_name.strip()
+    if not clean_name:
+        raise HTTPException(
+            status_code=422, detail="endpoint_create.name must not be empty"
+        )
+
+    normalized_url = normalize_base_url(base_url)
+    url_warnings = validate_base_url(normalized_url)
+    if url_warnings:
+        raise HTTPException(status_code=422, detail="; ".join(url_warnings))
+
+    return Endpoint(
+        profile_id=profile_id,
+        name=clean_name,
+        base_url=normalized_url,
+        api_key=encrypt_secret(api_key),
+        position=0,
+    )
+
+
+async def resolve_preview_endpoint(
+    *,
+    body: ConnectionCreate,
+    db: AsyncSession,
+    profile_id: int,
+) -> Endpoint:
+    if body.endpoint_id is not None:
+        return await load_profile_endpoint_or_404(
+            db,
+            profile_id=profile_id,
+            endpoint_id=body.endpoint_id,
+        )
+    if body.endpoint_create is not None:
+        return build_preview_endpoint_from_inline(
+            profile_id=profile_id,
+            endpoint_name=body.endpoint_create.name,
+            base_url=body.endpoint_create.base_url,
+            api_key=body.endpoint_create.api_key,
+        )
+
+    raise HTTPException(
+        status_code=422,
+        detail="Exactly one of endpoint_id or endpoint_create is required",
+    )
+
+
 async def build_connection_update_data(
     *,
     body: ConnectionUpdate,
@@ -146,9 +201,11 @@ def should_clear_recovery_state(
 
 
 __all__ = [
+    "build_preview_endpoint_from_inline",
     "build_connection_update_data",
     "build_connection_limiter_data",
     "load_profile_endpoint_or_404",
     "resolve_create_endpoint",
+    "resolve_preview_endpoint",
     "should_clear_recovery_state",
 ]

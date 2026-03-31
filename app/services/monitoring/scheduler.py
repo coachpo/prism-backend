@@ -17,7 +17,6 @@ from app.models.models import (
     Connection,
     ModelConfig,
     RoutingConnectionRuntimeState,
-    UserSetting,
 )
 from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
 from app.services.monitoring.probe_runner import run_connection_probe
@@ -104,18 +103,6 @@ async def _load_due_probe_candidates(
     if not connections:
         return []
 
-    profile_ids = sorted({connection.profile_id for connection in connections})
-    user_settings_rows = list(
-        (
-            await session.execute(
-                select(UserSetting).where(UserSetting.profile_id.in_(profile_ids))
-            )
-        )
-        .scalars()
-        .all()
-    )
-    settings_by_profile = {row.profile_id: row for row in user_settings_rows}
-
     connection_ids = [connection.id for connection in connections]
     runtime_rows = list(
         (
@@ -140,11 +127,7 @@ async def _load_due_probe_candidates(
             continue
 
         interval_seconds = _resolve_interval_seconds(
-            getattr(
-                settings_by_profile.get(connection.profile_id),
-                "monitoring_probe_interval_seconds",
-                None,
-            )
+            getattr(connection, "monitoring_probe_interval_seconds", None)
         )
         state_row = runtime_state_by_connection.get(connection.id)
         if not _is_connection_due_for_probe(

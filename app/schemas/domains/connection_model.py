@@ -27,6 +27,11 @@ from .endpoint_pricing import (
 from .profile_vendor import VendorResponse
 
 
+DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS = 300
+MIN_MONITORING_PROBE_INTERVAL_SECONDS = 30
+MAX_MONITORING_PROBE_INTERVAL_SECONDS = 3_600
+
+
 class ConnectionBase(BaseModel):
     is_active: bool = True
     name: str | None = None
@@ -36,6 +41,11 @@ class ConnectionBase(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
+    monitoring_probe_interval_seconds: int = Field(
+        default=DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
+        ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
+        le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
+    )
     openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
         "responses"
     )
@@ -71,6 +81,11 @@ class ConnectionUpdate(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
+    monitoring_probe_interval_seconds: int | None = Field(
+        default=None,
+        ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
+        le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
+    )
     openai_probe_endpoint_variant: Literal["responses", "chat_completions"] | None = (
         None
     )
@@ -101,6 +116,7 @@ class ConnectionResponse(BaseModel):
     qps_limit: int | None = None
     max_in_flight_non_stream: int | None = None
     max_in_flight_stream: int | None = None
+    monitoring_probe_interval_seconds: int
     openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
         "responses"
     )
@@ -137,6 +153,13 @@ class ConnectionResponse(BaseModel):
 
 class HealthCheckResponse(BaseModel):
     connection_id: int
+    health_status: str
+    checked_at: datetime
+    detail: str
+    response_time_ms: int
+
+
+class ConnectionHealthCheckPreviewResponse(BaseModel):
     health_status: str
     checked_at: datetime
     detail: str

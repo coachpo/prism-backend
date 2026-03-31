@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
     ConnectionCreate,
+    ConnectionHealthCheckPreviewResponse,
     ModelConnectionsBatchItem,
     ModelConnectionsBatchRequest,
     ModelConnectionsBatchResponse,
@@ -52,6 +53,7 @@ from app.routers.connections_domains.route_handlers import (
     list_connections_for_models,
     move_connection_priority_for_model,
     perform_connection_health_check,
+    perform_connection_health_check_preview,
     set_connection_pricing_template_record,
     update_connection_record,
 )
@@ -144,6 +146,26 @@ async def create_connection(
         db=db,
         profile_id=profile_id,
         deps=_crud_deps(),
+    )
+
+
+@router.post(
+    "/api/models/{model_config_id}/connections/health-check-preview",
+    response_model=ConnectionHealthCheckPreviewResponse,
+)
+async def preview_connection_health_check(
+    model_config_id: int,
+    body: ConnectionCreate,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+):
+    return await perform_connection_health_check_preview(
+        model_config_id=model_config_id,
+        body=body,
+        request=request,
+        db=db,
+        profile_id=profile_id,
     )
 
 

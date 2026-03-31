@@ -123,6 +123,7 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
             is_active=True,
             priority=0,
             name=f"openai-connection-{suffix}",
+            monitoring_probe_interval_seconds=150,
         )
         anthropic_connection = Connection(
             profile=profile,
@@ -131,6 +132,7 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
             is_active=True,
             priority=0,
             name=f"anthropic-connection-{suffix}",
+            monitoring_probe_interval_seconds=210,
         )
         hidden_connection = Connection(
             profile=other_profile,
@@ -251,55 +253,53 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
 
 class TestMonitoringManualProbeAndQueryRoutes:
     @pytest.mark.asyncio
-    async def test_monitoring_query_routes_return_profile_scoped_vendor_model_and_connection_data(
+    async def test_monitoring_overview_route_returns_profile_scoped_vendor_model_connection_tree(
         self,
     ):
         fixture = await _seed_monitoring_route_fixture()
         transport = ASGITransport(app=app)
+        fixed_now = datetime(2026, 3, 29, 14, 0, tzinfo=timezone.utc)
 
-        async with AsyncClient(
-            transport=transport,
-            base_url="http://testserver",
-        ) as client:
-            overview_response = await client.get(
-                "/api/monitoring/overview",
-                headers={"X-Profile-Id": str(fixture["profile_id"])},
-            )
-            vendor_response = await client.get(
-                f"/api/monitoring/vendors/{fixture['openai_vendor_id']}",
-                headers={"X-Profile-Id": str(fixture["profile_id"])},
-            )
-            model_response = await client.get(
-                f"/api/monitoring/models/{fixture['openai_model_id']}",
-                headers={"X-Profile-Id": str(fixture["profile_id"])},
-            )
+        with patch("app.services.monitoring.queries.utc_now", return_value=fixed_now):
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                overview_response = await client.get(
+                    "/api/monitoring/overview",
+                    headers={"X-Profile-Id": str(fixture["profile_id"])},
+                )
 
         assert overview_response.status_code == 200
         overview_payload = cast(dict[str, object], overview_response.json())
-        vendor_keys = [
-            vendor_item["vendor_key"]
-            for vendor_item in cast(
-                list[dict[str, object]], overview_payload["vendors"]
-            )
-        ]
+        vendors = cast(list[dict[str, object]], overview_payload["vendors"])
+        vendor_keys = [vendor_item["vendor_key"] for vendor_item in vendors]
         assert len(vendor_keys) == 2
         assert all("hidden-route" not in str(vendor_key) for vendor_key in vendor_keys)
 
-        assert vendor_response.status_code == 200
-        vendor_payload = cast(dict[str, object], vendor_response.json())
-        assert vendor_payload["vendor_id"] == fixture["openai_vendor_id"]
-        assert len(cast(list[dict[str, object]], vendor_payload["models"])) == 1
-
-        assert model_response.status_code == 200
-        model_payload = cast(dict[str, object], model_response.json())
-        assert model_payload["model_config_id"] == fixture["openai_model_id"]
-        connections = cast(list[dict[str, object]], model_payload["connections"])
+        openai_vendor = next(
+            vendor
+            for vendor in vendors
+            if vendor["vendor_id"] == fixture["openai_vendor_id"]
+        )
+        assert openai_vendor["fused_status"] == "degraded"
+        models = cast(list[dict[str, object]], openai_vendor["models"])
+        assert len(models) == 1
+        assert models[0]["model_config_id"] == fixture["openai_model_id"]
+        connections = cast(list[dict[str, object]], models[0]["connections"])
         assert len(connections) == 1
         assert connections[0]["connection_id"] == fixture["openai_connection_id"]
+        assert connections[0]["connection_name"] is not None
+        assert connections[0]["monitoring_probe_interval_seconds"] == 150
+        assert connections[0]["last_probe_status"] == "degraded"
         assert connections[0]["endpoint_ping_status"] == "healthy"
         assert connections[0]["conversation_status"] == "unhealthy"
         assert connections[0]["fused_status"] == "degraded"
-        assert len(cast(list[dict[str, object]], connections[0]["recent_history"])) == 1
+        assert "availability_cells" not in connections[0]
+        recent_history = cast(list[dict[str, object]], connections[0]["recent_history"])
+        assert len(recent_history) == 1
+        assert recent_history[0]["endpoint_ping_status"] == "healthy"
+        assert recent_history[0]["conversation_status"] == "unhealthy"
 
     @pytest.mark.asyncio
     async def test_manual_probe_route_delegates_to_shared_probe_runner(self):

@@ -16,7 +16,6 @@ from app.models.models import (
     ModelConfig,
     Profile,
     RoutingConnectionRuntimeState,
-    UserSetting,
     Vendor,
 )
 from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
@@ -65,12 +64,6 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
             loadbalance_strategy=strategy,
             is_enabled=True,
         )
-        settings = UserSetting(
-            profile=profile,
-            report_currency_code="USD",
-            report_currency_symbol="$",
-            monitoring_probe_interval_seconds=120,
-        )
         due_connection = Connection(
             profile=profile,
             model_config_rel=model,
@@ -78,6 +71,7 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
             is_active=True,
             priority=0,
             name=f"due-{suffix}",
+            monitoring_probe_interval_seconds=45,
         )
         not_due_connection = Connection(
             profile=profile,
@@ -86,6 +80,7 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
             is_active=True,
             priority=1,
             name=f"not-due-{suffix}",
+            monitoring_probe_interval_seconds=240,
         )
         inactive_connection = Connection(
             profile=profile,
@@ -94,6 +89,7 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
             is_active=False,
             priority=2,
             name=f"inactive-{suffix}",
+            monitoring_probe_interval_seconds=60,
         )
         eligible_open_connection = Connection(
             profile=profile,
@@ -102,6 +98,7 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
             is_active=True,
             priority=3,
             name=f"eligible-open-{suffix}",
+            monitoring_probe_interval_seconds=180,
         )
         session.add_all(
             [
@@ -110,7 +107,6 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
                 endpoint,
                 strategy,
                 model,
-                settings,
                 due_connection,
                 not_due_connection,
                 inactive_connection,
@@ -125,21 +121,21 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
                     profile_id=profile.id,
                     connection_id=due_connection.id,
                     last_probe_status="healthy",
-                    last_probe_at=now_at - timedelta(seconds=121),
+                    last_probe_at=now_at - timedelta(seconds=46),
                     circuit_state="closed",
                 ),
                 RoutingConnectionRuntimeState(
                     profile_id=profile.id,
                     connection_id=not_due_connection.id,
                     last_probe_status="healthy",
-                    last_probe_at=now_at - timedelta(seconds=30),
+                    last_probe_at=now_at - timedelta(seconds=60),
                     circuit_state="closed",
                 ),
                 RoutingConnectionRuntimeState(
                     profile_id=profile.id,
                     connection_id=inactive_connection.id,
                     last_probe_status="healthy",
-                    last_probe_at=now_at - timedelta(seconds=121),
+                    last_probe_at=now_at - timedelta(seconds=61),
                     circuit_state="closed",
                 ),
                 RoutingConnectionRuntimeState(
@@ -165,7 +161,7 @@ async def _seed_scheduler_fixture(*, now_at: datetime) -> dict[str, int]:
 
 class TestMonitoringScheduler:
     @pytest.mark.asyncio
-    async def test_run_monitoring_cycle_uses_persisted_cadence_and_probes_only_due_or_probe_eligible_connections(
+    async def test_run_monitoring_cycle_uses_connection_probe_intervals_and_probes_only_due_or_probe_eligible_connections(
         self,
     ):
         scheduler_module = _load_module("app.services.monitoring.scheduler")
@@ -178,7 +174,7 @@ class TestMonitoringScheduler:
         fixture = await _seed_scheduler_fixture(now_at=now_at)
         probe_mock = AsyncMock()
 
-        await run_monitoring_cycle(
+        next_sleep_seconds = await run_monitoring_cycle(
             http_client=AsyncMock(),
             now_at=now_at,
             run_connection_probe_fn=probe_mock,
@@ -193,6 +189,7 @@ class TestMonitoringScheduler:
             fixture["due_connection_id"],
             fixture["eligible_open_connection_id"],
         ]
+        assert next_sleep_seconds == pytest.approx(45.0)
 
     @pytest.mark.asyncio
     async def test_monitoring_scheduler_start_and_stop_manage_loop_lifecycle(self):

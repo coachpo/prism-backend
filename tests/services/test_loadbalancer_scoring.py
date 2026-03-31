@@ -212,6 +212,42 @@ class TestLoadbalancerScoring:
 
         assert [candidate.connection.id for candidate in ranked] == [41, 42]
 
+    def test_rank_candidates_prioritizes_fresh_live_signals_over_conflicting_probe_signals(
+        self,
+    ):
+        from app.services.loadbalancer.scoring import rank_candidates
+
+        now_at = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+        policy = _make_policy(endpoint_ping_weight=1.0, conversation_delay_weight=1.0)
+        better_live = _make_candidate_input(
+            43,
+            priority=1,
+            live_p95_latency_ms=90.0,
+            last_live_success_at=now_at - timedelta(seconds=5),
+            last_probe_status="unhealthy",
+            last_probe_at=now_at - timedelta(seconds=5),
+            endpoint_ping_ewma_ms=320.0,
+            conversation_delay_ewma_ms=700.0,
+        )
+        better_probe_only = _make_candidate_input(
+            44,
+            priority=0,
+            live_p95_latency_ms=150.0,
+            last_live_success_at=now_at - timedelta(seconds=5),
+            last_probe_status="healthy",
+            last_probe_at=now_at - timedelta(seconds=5),
+            endpoint_ping_ewma_ms=25.0,
+            conversation_delay_ewma_ms=35.0,
+        )
+
+        ranked = rank_candidates(
+            policy=policy,
+            candidate_inputs=[better_probe_only, better_live],
+            now_at=now_at,
+        )
+
+        assert [candidate.connection.id for candidate in ranked] == [43, 44]
+
     def test_candidate_sort_key_uses_priority_then_id_as_stable_tie_breaker(self):
         from app.services.loadbalancer.scoring import (
             candidate_sort_key,

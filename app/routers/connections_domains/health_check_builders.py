@@ -3,6 +3,11 @@ import logging
 import httpx
 
 from app.models.models import Connection, Endpoint
+from app.services.monitoring.probe_runner import (
+    _execute_monitoring_probe_checks,
+    _build_monitoring_conversation_request,
+    _build_monitoring_endpoint_ping_request,
+)
 from app.services.proxy_service import build_upstream_url
 
 from .health_check_request_helpers import _execute_health_check_request
@@ -16,54 +21,31 @@ def _build_health_check_request(
     *,
     openai_variant: str = "responses",
 ) -> tuple[str, dict[str, object]]:
-    if api_family == "openai":
-        if openai_variant == "chat_completions":
-            return _build_openai_chat_completions_health_check_request(model_id)
-
-        return "/v1/responses", {
-            "model": model_id,
-            "input": ".",
-            "max_output_tokens": 1,
-            "store": False,
-        }
-    if api_family == "anthropic":
-        return "/v1/messages", {
-            "model": model_id,
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "."}],
-        }
-    if api_family == "gemini":
-        return f"/v1beta/models/{model_id}:generateContent", {
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": "."}],
-                }
-            ],
-            "generationConfig": {"maxOutputTokens": 1},
-        }
-    raise ValueError(f"Unsupported api_family '{api_family}' for health check")
+    return _build_monitoring_conversation_request(
+        api_family,
+        model_id,
+        openai_variant=openai_variant,
+    )
 
 
 def _build_openai_chat_completions_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    return "/v1/chat/completions", {
-        "model": model_id,
-        "messages": [{"role": "user", "content": "."}],
-        "max_tokens": 1,
-    }
+    return _build_monitoring_conversation_request(
+        "openai",
+        model_id,
+        openai_variant="chat_completions",
+    )
 
 
 def _build_openai_responses_basic_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    return "/v1/responses", {
-        "model": model_id,
-        "input": ".",
-        "max_output_tokens": 1,
-        "store": False,
-    }
+    return _build_monitoring_conversation_request(
+        "openai",
+        model_id,
+        openai_variant="responses",
+    )
 
 
 def _build_endpoint_ping_request(
@@ -72,9 +54,7 @@ def _build_endpoint_ping_request(
     *,
     openai_variant: str = "responses",
 ) -> tuple[str, dict[str, object]]:
-    if api_family == "openai" and openai_variant == "responses":
-        return _build_openai_responses_basic_health_check_request(model_id)
-    return _build_health_check_request(
+    return _build_monitoring_endpoint_ping_request(
         api_family,
         model_id,
         openai_variant=openai_variant,
@@ -89,49 +69,25 @@ async def _probe_connection_health(
     api_family: str,
     model_id: str,
     headers: dict[str, str],
+    openai_variant: str = "responses",
     execute_health_check_request_fn=_execute_health_check_request,
 ) -> tuple[str, str, int, str]:
-    request_path, body = _build_health_check_request(api_family, model_id)
-    upstream_url = build_upstream_url(connection, request_path, endpoint=endpoint)
-    health_status, detail, response_time_ms = await execute_health_check_request_fn(
-        client,
-        upstream_url=upstream_url,
+    result = await _execute_monitoring_probe_checks(
+        client=client,
+        connection=connection,
+        endpoint=endpoint,
+        api_family=api_family,
+        model_id=model_id,
         headers=headers,
-        body=body,
+        openai_variant=openai_variant,
+        execute_probe_request_fn=execute_health_check_request_fn,
     )
-    log_url = upstream_url
-
-    if api_family == "openai" and health_status != "healthy":
-        fallback_path, fallback_body = (
-            _build_openai_chat_completions_health_check_request(model_id)
-        )
-        fallback_url = build_upstream_url(connection, fallback_path, endpoint=endpoint)
-        (
-            fallback_status,
-            fallback_detail,
-            fallback_response_time_ms,
-        ) = await execute_health_check_request_fn(
-            client,
-            upstream_url=fallback_url,
-            headers=headers,
-            body=fallback_body,
-        )
-        if fallback_status == "healthy":
-            return (
-                "healthy",
-                f"{fallback_detail} (fallback /v1/chat/completions)",
-                fallback_response_time_ms,
-                fallback_url,
-            )
-        detail_parts = [
-            detail,
-            f"fallback /v1/chat/completions failed: {fallback_detail}",
-        ]
-        detail = "; ".join(part for part in detail_parts if part)
-        response_time_ms = fallback_response_time_ms or response_time_ms
-        log_url = f"{upstream_url} -> {fallback_url}"
-
-    return health_status, detail, response_time_ms, log_url
+    return (
+        result.health_status,
+        result.detail,
+        result.conversation_delay_ms or result.endpoint_ping_ms or 0,
+        result.log_url,
+    )
 
 
 __all__ = [

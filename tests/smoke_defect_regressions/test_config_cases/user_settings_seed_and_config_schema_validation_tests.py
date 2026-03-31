@@ -205,6 +205,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
 
         fields = set(ConnectionResponse.model_fields.keys())
         expected = {
+            "monitoring_probe_interval_seconds",
             "qps_limit",
             "max_in_flight_non_stream",
             "max_in_flight_stream",

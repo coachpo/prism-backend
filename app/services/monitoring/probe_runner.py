@@ -4,17 +4,13 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
-from fastapi import HTTPException
-from sqlalchemy import or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from fastapi import HTTPException  # pyright: ignore[reportMissingImports]
+from sqlalchemy import or_, select  # pyright: ignore[reportMissingImports]
+from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
+from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, HeaderBlocklistRule, ModelConfig
-from app.routers.connections_domains.health_check_builders import (
-    _build_endpoint_ping_request,
-    _build_health_check_request,
-)
 from app.routers.connections_domains.health_check_request_helpers import (
     _execute_health_check_request,
 )
@@ -26,7 +22,7 @@ from app.services.monitoring.routing_feedback import record_probe_outcome
 from app.services.proxy_service import build_upstream_headers, build_upstream_url
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ProbeExecutionResult:
     connection_id: int
     checked_at: datetime
@@ -41,6 +37,80 @@ class ProbeExecutionResult:
     @property
     def health_status(self) -> str:
         return "healthy" if self.fused_status == "healthy" else "unhealthy"
+
+
+@dataclass(frozen=True)
+class ProbeCheckOutcome:
+    endpoint_ping_status: str
+    endpoint_ping_ms: int | None
+    conversation_status: str
+    conversation_delay_ms: int | None
+    fused_status: str
+    failure_kind: str | None
+    detail: str
+    log_url: str
+
+    @property
+    def health_status(self) -> str:
+        return "healthy" if self.fused_status == "healthy" else "unhealthy"
+
+
+def _build_monitoring_conversation_request(
+    api_family: str,
+    model_id: str,
+    *,
+    openai_variant: str = "responses",
+) -> tuple[str, dict[str, object]]:
+    if api_family == "openai":
+        if openai_variant == "chat_completions":
+            return "/v1/chat/completions", {
+                "model": model_id,
+                "messages": [{"role": "user", "content": "."}],
+                "max_tokens": 1,
+            }
+
+        return "/v1/responses", {
+            "model": model_id,
+            "input": ".",
+            "max_output_tokens": 1,
+            "store": False,
+        }
+    if api_family == "anthropic":
+        return "/v1/messages", {
+            "model": model_id,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "."}],
+        }
+    if api_family == "gemini":
+        return f"/v1beta/models/{model_id}:generateContent", {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": "."}],
+                }
+            ],
+            "generationConfig": {"maxOutputTokens": 1},
+        }
+    raise ValueError(f"Unsupported api_family '{api_family}' for health check")
+
+
+def _build_monitoring_endpoint_ping_request(
+    api_family: str,
+    model_id: str,
+    *,
+    openai_variant: str = "responses",
+) -> tuple[str, dict[str, object]]:
+    if api_family == "openai" and openai_variant == "responses":
+        return _build_monitoring_conversation_request(
+            api_family,
+            model_id,
+            openai_variant="responses",
+        )
+    return _build_monitoring_conversation_request(
+        api_family,
+        model_id,
+        openai_variant=openai_variant,
+    )
 
 
 async def _load_connection_or_404(
@@ -117,6 +187,128 @@ def _resolve_fused_status(endpoint_ping_status: str, conversation_status: str) -
     return "unhealthy"
 
 
+async def _execute_monitoring_probe_checks(
+    *,
+    client: httpx.AsyncClient,
+    connection: Connection,
+    endpoint,
+    api_family: str,
+    model_id: str,
+    headers: dict[str, str],
+    openai_variant: str = "responses",
+    execute_probe_request_fn=_execute_health_check_request,
+) -> ProbeCheckOutcome:
+    endpoint_ping_path, endpoint_ping_body = _build_monitoring_endpoint_ping_request(
+        api_family,
+        model_id,
+        openai_variant=openai_variant,
+    )
+    endpoint_ping_url = build_upstream_url(
+        connection,
+        endpoint_ping_path,
+        endpoint=endpoint,
+    )
+    (
+        endpoint_ping_status,
+        endpoint_ping_detail,
+        endpoint_ping_ms,
+    ) = await execute_probe_request_fn(
+        client,
+        upstream_url=endpoint_ping_url,
+        headers=headers,
+        body=endpoint_ping_body,
+    )
+
+    conversation_status = endpoint_ping_status
+    conversation_detail = endpoint_ping_detail
+    conversation_delay_ms: int | None = None
+    log_url = endpoint_ping_url
+    if endpoint_ping_status == "healthy":
+        conversation_path, conversation_body = _build_monitoring_conversation_request(
+            api_family,
+            model_id,
+            openai_variant=openai_variant,
+        )
+        conversation_url = build_upstream_url(
+            connection,
+            conversation_path,
+            endpoint=endpoint,
+        )
+        (
+            conversation_status,
+            conversation_detail,
+            conversation_delay_ms,
+        ) = await execute_probe_request_fn(
+            client,
+            upstream_url=conversation_url,
+            headers=headers,
+            body=conversation_body,
+        )
+        log_url = conversation_url
+
+    fused_status = _resolve_fused_status(
+        endpoint_ping_status,
+        conversation_status,
+    )
+    detail = (
+        conversation_detail
+        if endpoint_ping_status == "healthy"
+        else endpoint_ping_detail
+    )
+    failure_kind = (
+        None if fused_status == "healthy" else _classify_probe_failure_kind(detail)
+    )
+    return ProbeCheckOutcome(
+        endpoint_ping_status=endpoint_ping_status,
+        endpoint_ping_ms=endpoint_ping_ms,
+        conversation_status=conversation_status,
+        conversation_delay_ms=conversation_delay_ms,
+        fused_status=fused_status,
+        failure_kind=failure_kind,
+        detail=detail,
+        log_url=log_url,
+    )
+
+
+async def probe_connection_health(
+    *,
+    db: AsyncSession,
+    client: httpx.AsyncClient,
+    profile_id: int,
+    connection: Connection,
+    endpoint,
+    api_family: str,
+    model_id: str,
+    openai_variant: str = "responses",
+    load_blocklist_rules_fn=_load_enabled_blocklist_rules,
+    build_upstream_headers_fn=build_upstream_headers,
+    execute_probe_request_fn=_execute_health_check_request,
+) -> tuple[str, str, int, str]:
+    blocklist_rules = await load_blocklist_rules_fn(db, profile_id=profile_id)
+    headers = build_upstream_headers_fn(
+        connection,
+        api_family,
+        blocklist_rules=blocklist_rules,
+        endpoint=endpoint,
+    )
+    result = await _execute_monitoring_probe_checks(
+        client=client,
+        connection=connection,
+        endpoint=endpoint,
+        api_family=api_family,
+        model_id=model_id,
+        headers=headers,
+        openai_variant=openai_variant,
+        execute_probe_request_fn=execute_probe_request_fn,
+    )
+    return (
+        result.health_status,
+        result.detail,
+        result.conversation_delay_ms or result.endpoint_ping_ms or 0,
+        result.log_url,
+    )
+
+
 async def run_connection_probe(
     *,
     db: AsyncSession,
@@ -179,63 +371,15 @@ async def run_connection_probe(
         lease_token = lease_result.lease_token
 
     try:
-        endpoint_ping_path, endpoint_ping_body = _build_endpoint_ping_request(
-            api_family,
-            model_id,
-            openai_variant=openai_variant,
-        )
-        endpoint_ping_url = build_upstream_url(
-            connection,
-            endpoint_ping_path,
+        result = await _execute_monitoring_probe_checks(
+            client=client,
+            connection=connection,
             endpoint=endpoint,
-        )
-        (
-            endpoint_ping_status,
-            endpoint_ping_detail,
-            endpoint_ping_ms,
-        ) = await execute_probe_request_fn(
-            client,
-            upstream_url=endpoint_ping_url,
+            api_family=api_family,
+            model_id=model_id,
             headers=headers,
-            body=endpoint_ping_body,
-        )
-
-        conversation_status = endpoint_ping_status
-        conversation_detail = endpoint_ping_detail
-        conversation_delay_ms: int | None = None
-        if endpoint_ping_status == "healthy":
-            conversation_path, conversation_body = _build_health_check_request(
-                api_family,
-                model_id,
-                openai_variant=openai_variant,
-            )
-            conversation_url = build_upstream_url(
-                connection,
-                conversation_path,
-                endpoint=endpoint,
-            )
-            (
-                conversation_status,
-                conversation_detail,
-                conversation_delay_ms,
-            ) = await execute_probe_request_fn(
-                client,
-                upstream_url=conversation_url,
-                headers=headers,
-                body=conversation_body,
-            )
-
-        fused_status = _resolve_fused_status(
-            endpoint_ping_status,
-            conversation_status,
-        )
-        detail = (
-            conversation_detail
-            if endpoint_ping_status == "healthy"
-            else endpoint_ping_detail
-        )
-        failure_kind = (
-            None if fused_status == "healthy" else _classify_probe_failure_kind(detail)
+            openai_variant=openai_variant,
+            execute_probe_request_fn=execute_probe_request_fn,
         )
 
         await record_probe_outcome_fn(
@@ -244,33 +388,33 @@ async def run_connection_probe(
             model_config_id=connection.model_config_rel.id,
             connection_id=connection.id,
             endpoint_id=endpoint.id,
-            endpoint_ping_status=endpoint_ping_status,
-            endpoint_ping_ms=endpoint_ping_ms,
-            conversation_status=conversation_status,
-            conversation_delay_ms=conversation_delay_ms,
-            failure_kind=failure_kind,
-            detail=detail,
+            endpoint_ping_status=result.endpoint_ping_status,
+            endpoint_ping_ms=result.endpoint_ping_ms,
+            conversation_status=result.conversation_status,
+            conversation_delay_ms=result.conversation_delay_ms,
+            failure_kind=result.failure_kind,
+            detail=result.detail,
             checked_at=normalized_checked_at,
             session=db,
         )
 
         connection.health_status = (
-            "healthy" if fused_status == "healthy" else "unhealthy"
+            "healthy" if result.fused_status == "healthy" else "unhealthy"
         )
-        connection.health_detail = detail
+        connection.health_detail = result.detail
         connection.last_health_check = normalized_checked_at
         await db.flush()
 
         return ProbeExecutionResult(
             connection_id=connection.id,
             checked_at=normalized_checked_at,
-            endpoint_ping_status=endpoint_ping_status,
-            endpoint_ping_ms=endpoint_ping_ms,
-            conversation_status=conversation_status,
-            conversation_delay_ms=conversation_delay_ms,
-            fused_status=fused_status,
-            failure_kind=failure_kind,
-            detail=detail,
+            endpoint_ping_status=result.endpoint_ping_status,
+            endpoint_ping_ms=result.endpoint_ping_ms,
+            conversation_status=result.conversation_status,
+            conversation_delay_ms=result.conversation_delay_ms,
+            fused_status=result.fused_status,
+            failure_kind=result.failure_kind,
+            detail=result.detail,
         )
     finally:
         if lease_token is not None:
@@ -282,4 +426,8 @@ async def run_connection_probe(
             )
 
 
-__all__ = ["ProbeExecutionResult", "run_connection_probe"]
+__all__ = [
+    "ProbeExecutionResult",
+    "probe_connection_health",
+    "run_connection_probe",
+]
