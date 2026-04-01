@@ -36,6 +36,12 @@ class _IdAllocator:
         return allocated_id
 
 
+@dataclass(frozen=True)
+class ExecuteImportPayloadResult:
+    response: ConfigImportResponse
+    imported_connection_ids: tuple[int, ...]
+
+
 async def _lock_import_target_tables(db: AsyncSession) -> None:
     await db.execute(
         text(
@@ -211,7 +217,7 @@ def _resolve_pricing_template_id(
 
 async def execute_import_payload(
     db: AsyncSession, *, profile_id: int, data: ConfigImportRequest
-) -> ConfigImportResponse:
+) -> ExecuteImportPayloadResult:
     await lock_profile_row(db, profile_id=profile_id)
     await _lock_import_target_tables(db)
     vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendors}
@@ -350,6 +356,7 @@ async def execute_import_payload(
         strategies_count += 1
 
     connections_count = 0
+    imported_connection_ids: list[int] = []
     imported_connection_pairs: set[tuple[str, str]] = set()
     proxy_target_specs: list[tuple[int, list[Any]]] = []
     model_id_to_config_id: dict[str, int] = {}
@@ -417,6 +424,7 @@ async def execute_import_payload(
             )
             db.add(connection)
             connections_count += 1
+            imported_connection_ids.append(connection.id)
             imported_connection_pairs.add((model.model_id, resolved_endpoint_name))
 
     for source_model_config_id, proxy_targets in proxy_target_specs:
@@ -507,13 +515,16 @@ async def execute_import_payload(
     ):
         await _sync_id_sequence_if_present(db, model)
 
-    return ConfigImportResponse(
-        endpoints_imported=endpoints_count,
-        models_imported=len(data.models),
-        pricing_templates_imported=templates_count,
-        strategies_imported=strategies_count,
-        connections_imported=connections_count,
+    return ExecuteImportPayloadResult(
+        response=ConfigImportResponse(
+            endpoints_imported=endpoints_count,
+            models_imported=len(data.models),
+            pricing_templates_imported=templates_count,
+            strategies_imported=strategies_count,
+            connections_imported=connections_count,
+        ),
+        imported_connection_ids=tuple(imported_connection_ids),
     )
 
 
-__all__ = ["execute_import_payload"]
+__all__ = ["ExecuteImportPayloadResult", "execute_import_payload"]

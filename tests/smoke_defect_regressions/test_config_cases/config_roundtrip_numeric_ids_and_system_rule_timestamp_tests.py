@@ -5,17 +5,288 @@ from typing import AsyncGenerator, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from fastapi import HTTPException
 
-from tests.loadbalance_strategy_helpers import make_auto_recovery_disabled
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_disabled,
+    make_routing_policy_adaptive,
+)
 from app.services.proxy_service import (
     extract_model_from_body,
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
+from app.main import app, lifespan
 
 
 class TestDEF024_ConfigImportExportRefRoundtrip:
+    @pytest.mark.asyncio
+    async def test_create_connection_endpoint_starts_immediate_probe_after_commit(
+        self,
+    ):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import Connection, Endpoint, ModelConfig, Profile, Vendor
+        from app.services.monitoring.probe_runner import ProbeCheckOutcome
+        from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        endpoint_name = f"def024-create-endpoint-{suffix}"
+        model_id = f"def024-create-model-{suffix}"
+        connection_name = f"def024-create-connection-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF024 Create Probe Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+
+            vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if vendor is None:
+                vendor = Vendor(
+                    key="openai",
+                    name=f"DEF024 Create Probe OpenAI {suffix}",
+                )
+                db.add(vendor)
+                await db.flush()
+
+            endpoint = Endpoint(
+                profile_id=profile.id,
+                name=endpoint_name,
+                base_url="https://api.openai.com",
+                api_key="sk-create-probe-test",
+                position=0,
+            )
+            model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id=model_id,
+                model_type="native",
+                loadbalance_strategy=make_loadbalance_strategy(
+                    profile_id=profile.id,
+                    strategy_type="single",
+                ),
+                is_enabled=True,
+            )
+            db.add_all([endpoint, model])
+            await db.commit()
+            profile_id = profile.id
+            endpoint_id = endpoint.id
+            model_config_id = model.id
+
+        probe_mock = AsyncMock(
+            return_value=ProbeCheckOutcome(
+                endpoint_ping_status="healthy",
+                endpoint_ping_ms=12,
+                conversation_status="healthy",
+                conversation_delay_ms=18,
+                fused_status="healthy",
+                failure_kind=None,
+                detail="probe ok",
+                log_url="https://api.openai.com/v1/responses",
+            )
+        )
+
+        with patch(
+            "app.services.monitoring.probe_runner._execute_monitoring_probe_checks",
+            probe_mock,
+        ):
+            async with lifespan(app):
+                transport = ASGITransport(app=app)
+                async with AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    response = await client.post(
+                        f"/api/models/{model_config_id}/connections",
+                        headers={"X-Profile-Id": str(profile_id)},
+                        json={
+                            "endpoint_id": endpoint_id,
+                            "name": connection_name,
+                        },
+                    )
+
+                    assert response.status_code == 201
+                    await app.state.background_task_manager.wait_for_idle()
+
+        async with AsyncSessionLocal() as db:
+            connection = (
+                await db.execute(
+                    select(Connection).where(
+                        Connection.profile_id == profile_id,
+                        Connection.name == connection_name,
+                    )
+                )
+            ).scalar_one()
+
+        assert probe_mock.await_count == 1
+        assert connection.health_status == "healthy"
+        assert connection.health_detail == "probe ok"
+        assert connection.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_import_config_endpoint_starts_one_immediate_probe_per_imported_connection(
+        self,
+    ):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import Connection, Profile
+        from app.services.monitoring.probe_runner import ProbeCheckOutcome
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def024-import-openai-{suffix}"
+        endpoint_name = f"def024-import-endpoint-{suffix}"
+        first_model_id = f"def024-import-model-a-{suffix}"
+        second_model_id = f"def024-import-model-b-{suffix}"
+        first_connection_name = f"def024-import-connection-a-{suffix}"
+        second_connection_name = f"def024-import-connection-b-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF024 Import Probe Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.commit()
+            profile_id = profile.id
+
+        payload = {
+            "version": 1,
+            "vendors": [
+                {
+                    "key": vendor_key,
+                    "name": f"DEF024 Import OpenAI {suffix}",
+                    "description": None,
+                    "icon_key": None,
+                    "audit_enabled": False,
+                    "audit_capture_bodies": True,
+                }
+            ],
+            "endpoints": [
+                {
+                    "name": endpoint_name,
+                    "base_url": "https://api.openai.com",
+                    "api_key": "sk-import-probe-test",
+                }
+            ],
+            "pricing_templates": [],
+            "loadbalance_strategies": [
+                {
+                    "name": "single-primary",
+                    "routing_policy": make_routing_policy_adaptive(),
+                }
+            ],
+            "models": [
+                {
+                    "vendor_key": vendor_key,
+                    "api_family": "openai",
+                    "model_id": first_model_id,
+                    "model_type": "native",
+                    "loadbalance_strategy_name": "single-primary",
+                    "connections": [
+                        {
+                            "endpoint_name": endpoint_name,
+                            "name": first_connection_name,
+                        }
+                    ],
+                },
+                {
+                    "vendor_key": vendor_key,
+                    "api_family": "openai",
+                    "model_id": second_model_id,
+                    "model_type": "native",
+                    "loadbalance_strategy_name": "single-primary",
+                    "connections": [
+                        {
+                            "endpoint_name": endpoint_name,
+                            "name": second_connection_name,
+                        }
+                    ],
+                },
+            ],
+            "header_blocklist_rules": [],
+        }
+
+        probe_mock = AsyncMock(
+            return_value=ProbeCheckOutcome(
+                endpoint_ping_status="healthy",
+                endpoint_ping_ms=9,
+                conversation_status="healthy",
+                conversation_delay_ms=15,
+                fused_status="healthy",
+                failure_kind=None,
+                detail="import probe ok",
+                log_url="https://api.openai.com/v1/responses",
+            )
+        )
+
+        with patch(
+            "app.services.monitoring.probe_runner._execute_monitoring_probe_checks",
+            probe_mock,
+        ):
+            async with lifespan(app):
+                transport = ASGITransport(app=app)
+                async with AsyncClient(
+                    transport=transport,
+                    base_url="http://testserver",
+                ) as client:
+                    response = await client.post(
+                        "/api/config/import",
+                        headers={"X-Profile-Id": str(profile_id)},
+                        json=payload,
+                    )
+
+                    assert response.status_code == 200
+                    await app.state.background_task_manager.wait_for_idle()
+
+        async with AsyncSessionLocal() as db:
+            imported_connections = list(
+                (
+                    await db.execute(
+                        select(Connection).where(Connection.profile_id == profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert len(imported_connections) == 2
+        assert probe_mock.await_count == 2
+        assert all(
+            connection.health_status == "healthy" for connection in imported_connections
+        )
+        assert all(
+            connection.health_detail == "import probe ok"
+            for connection in imported_connections
+        )
+        assert all(
+            connection.last_health_check is not None
+            for connection in imported_connections
+        )
+
     @pytest.mark.asyncio
     async def test_create_and_update_connection_preserve_limiter_fields_and_probe_interval(
         self,

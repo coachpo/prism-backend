@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Annotated, AsyncGenerator
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -11,6 +12,9 @@ from app.models.models import Profile
 from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
+_AFTER_COMMIT_ACTIONS_KEY = "after_commit_actions"
+
+AfterCommitAction = Callable[[], None]
 
 
 PROFILE_ID_HEADER = "X-Profile-Id"
@@ -23,15 +27,39 @@ async def _rollback_session_quietly(session: AsyncSession, *, reason: str) -> No
         logger.exception("Database session rollback failed during %s", reason)
 
 
+def register_after_commit_action(
+    session: AsyncSession,
+    action: AfterCommitAction,
+) -> None:
+    actions = session.info.setdefault(_AFTER_COMMIT_ACTIONS_KEY, [])
+    actions.append(action)
+
+
+def _clear_after_commit_actions(session: AsyncSession) -> None:
+    session.info.pop(_AFTER_COMMIT_ACTIONS_KEY, None)
+
+
+def _run_after_commit_actions(session: AsyncSession) -> None:
+    actions = session.info.pop(_AFTER_COMMIT_ACTIONS_KEY, [])
+    for action in actions:
+        try:
+            action()
+        except Exception:
+            logger.exception("Post-commit action failed")
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
             await session.commit()
+            _run_after_commit_actions(session)
         except asyncio.CancelledError:
+            _clear_after_commit_actions(session)
             await _rollback_session_quietly(session, reason="request cancellation")
             raise
         except Exception:
+            _clear_after_commit_actions(session)
             await _rollback_session_quietly(session, reason="request exception")
             raise
 
