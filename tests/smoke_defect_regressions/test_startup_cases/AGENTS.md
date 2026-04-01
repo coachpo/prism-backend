@@ -9,7 +9,7 @@ test_startup_cases/
 ├── auth_management_flows_tests.py                    # Operator auth enablement, login, logout, password reset, email delivery failures
 ├── auth_proxy_key_generation_tests.py                # Proxy API key generation and metadata-management regressions
 ├── cors_preflight_auth_middleware_tests.py           # CORS preflight bypass behavior for auth middleware
-├── health_contract_tests.py                          # `/health` status and version contract
+├── health_contract_tests.py                          # `/health` status and backend-version response contract
 ├── loadbalance_delete_contract_tests.py              # Loadbalance event batch-delete contract
 ├── loadbalance_profile_primary_key_tests.py          # Profile/vendor primary-key contract regression
 ├── loadbalance_strategy_preset_seed_tests.py         # Default adaptive routing preset seeding at startup

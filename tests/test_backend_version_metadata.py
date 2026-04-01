@@ -4,16 +4,19 @@ import importlib
 from importlib import metadata as importlib_metadata
 from pathlib import Path
 import sys
+from typing import Any, cast
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 
 
+pytest = cast(Any, importlib.import_module("pytest"))
+
+
 def _reload_main_module(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
     *,
     installed_version: str | None = None,
-    pyproject_version: str | None = None,
+    backend_version: str | None = None,
 ):
     if installed_version is None:
 
@@ -24,16 +27,12 @@ def _reload_main_module(
     else:
         monkeypatch.setattr(importlib_metadata, "version", lambda _: installed_version)
 
-    if pyproject_version is not None:
+    if backend_version is not None:
         original_read_text = Path.read_text
 
         def fake_read_text(self: Path, *args, **kwargs) -> str:
-            if self.name == "pyproject.toml" and self.parent.name == "backend":
-                return (
-                    "[project]\n"
-                    'name = "prism-backend"\n'
-                    f'version = "{pyproject_version}"\n'
-                )
+            if self.name == "VERSION" and self.parent.name == "backend":
+                return f"{backend_version}\n"
             return original_read_text(self, *args, **kwargs)
 
         monkeypatch.setattr(Path, "read_text", fake_read_text)
@@ -44,7 +43,7 @@ def _reload_main_module(
 
 
 def test_fastapi_metadata_version_uses_backend_version_source(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
 ):
     main_module = _reload_main_module(monkeypatch, installed_version="9.8.7")
 
@@ -53,12 +52,12 @@ def test_fastapi_metadata_version_uses_backend_version_source(
 
 @pytest.mark.asyncio
 async def test_health_reports_same_backend_version_when_package_metadata_is_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: Any,
 ):
     main_module = _reload_main_module(
         monkeypatch,
         installed_version=None,
-        pyproject_version="7.6.5",
+        backend_version="7.6.5",
     )
 
     async with AsyncClient(

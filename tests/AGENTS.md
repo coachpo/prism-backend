@@ -42,7 +42,7 @@ tests/
 ## TEST FACTS
 - `test_smoke_defect_regressions.py` is the top-level DEF aggregator and now includes grouped config, costing, startup, and proxy leaves.
 - `test_multi_profile_isolation.py` is the top-level aggregator for lifecycle, scoping, runtime, observability, and config export or import isolation.
-- `test_backend_version_metadata.py` covers the root/backend version contract outside the smoke and isolation hierarchies.
+- `test_backend_version_metadata.py` covers the backend-local version metadata contract outside the smoke and isolation hierarchies.
 - `services/` holds focused backend tests that do not fit the smoke or isolation hierarchies.
 - These tests are grounded in PostgreSQL semantics through the shared testcontainer bootstrap in `conftest.py`.
 
