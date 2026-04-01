@@ -16,16 +16,23 @@ logger = logging.getLogger(__name__)
 PROFILE_ID_HEADER = "X-Profile-Id"
 
 
+async def _rollback_session_quietly(session: AsyncSession, *, reason: str) -> None:
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("Database session rollback failed during %s", reason)
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
             yield session
             await session.commit()
         except asyncio.CancelledError:
-            await session.rollback()
+            await _rollback_session_quietly(session, reason="request cancellation")
             raise
         except Exception:
-            await session.rollback()
+            await _rollback_session_quietly(session, reason="request exception")
             raise
 
 
