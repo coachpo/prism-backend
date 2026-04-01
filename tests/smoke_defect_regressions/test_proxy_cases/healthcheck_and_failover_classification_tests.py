@@ -20,6 +20,28 @@ from app.services.proxy_service import (
 from app.services.stats_service import log_request
 
 
+def _expected_openai_responses_probe_body(model_id: str) -> dict[str, object]:
+    return {
+        "model": model_id,
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": ".",
+                    }
+                ],
+            }
+        ],
+        "max_output_tokens": 1,
+        "reasoning": {"effort": "none"},
+        "store": False,
+        "stream": True,
+    }
+
+
 class TestDEF059_HealthCheckRequestBuilder:
     """DEF-059 (P0): health checks must use api-family-native paths and payloads."""
 
@@ -58,12 +80,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         path, body = _build_health_check_request("openai", "gpt-4o-mini")
 
         assert path == "/v1/responses"
-        assert body == {
-            "model": "gpt-4o-mini",
-            "input": ".",
-            "max_output_tokens": 1,
-            "store": False,
-        }
+        assert body == _expected_openai_responses_probe_body("gpt-4o-mini")
 
     def test_openai_health_check_keeps_gpt5_responses_probe_minimal(self):
         from app.routers.connections import _build_health_check_request
@@ -71,12 +88,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         path, body = _build_health_check_request("openai", "gpt-5.4-mini")
 
         assert path == "/v1/responses"
-        assert body == {
-            "model": "gpt-5.4-mini",
-            "input": ".",
-            "max_output_tokens": 1,
-            "store": False,
-        }
+        assert body == _expected_openai_responses_probe_body("gpt-5.4-mini")
 
     def test_openai_chat_completions_health_check_uses_chat_completions_endpoint(self):
         from app.routers.connections import (
@@ -90,6 +102,7 @@ class TestDEF059_HealthCheckRequestBuilder:
             "model": "gpt-4o-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
 
     def test_openai_chat_completions_health_check_keeps_gpt5_probe_minimal(self):
@@ -104,6 +117,7 @@ class TestDEF059_HealthCheckRequestBuilder:
             "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
 
     def test_openai_responses_fallback_uses_minimal_generation_request(self):
@@ -114,12 +128,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         path, body = _build_openai_responses_basic_health_check_request("gpt-4o-mini")
 
         assert path == "/v1/responses"
-        assert body == {
-            "model": "gpt-4o-mini",
-            "input": ".",
-            "max_output_tokens": 1,
-            "store": False,
-        }
+        assert body == _expected_openai_responses_probe_body("gpt-4o-mini")
 
     def test_gemini_health_check_uses_generate_content_endpoint(self):
         from app.routers.connections import _build_health_check_request
@@ -283,11 +292,13 @@ class TestDEF059_HealthCheckRequestBuilder:
             "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
         assert execute_probe_request_fn.await_args_list[1].kwargs["body"] == {
             "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
 
 
@@ -713,6 +724,12 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
             .kwargs["upstream_url"]
             .endswith("/v1/responses")
         )
+        assert execute_mock.await_args_list[0].kwargs["body"] == (
+            _expected_openai_responses_probe_body("gpt-4o-mini")
+        )
+        assert execute_mock.await_args_list[1].kwargs["body"] == (
+            _expected_openai_responses_probe_body("gpt-4o-mini")
+        )
 
     @pytest.mark.asyncio
     async def test_openai_health_check_supports_explicit_chat_completions_variant(
@@ -754,11 +771,13 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
             "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
         assert execute_mock.await_args_list[1].kwargs["body"] == {
             "model": "gpt-5.4-mini",
             "messages": [{"role": "user", "content": "."}],
             "max_tokens": 1,
+            "reasoning_effort": "none",
         }
 
     @pytest.mark.asyncio
@@ -800,9 +819,9 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
             .kwargs["upstream_url"]
             .endswith("/v1/responses")
         )
-        assert execute_mock.await_args_list[0].kwargs["body"]["input"] == "."
-        assert execute_mock.await_args_list[0].kwargs["body"]["max_output_tokens"] == 1
-        assert execute_mock.await_args_list[0].kwargs["body"]["store"] is False
+        assert execute_mock.await_args_list[0].kwargs["body"] == (
+            _expected_openai_responses_probe_body("gpt-4o-mini")
+        )
 
     @pytest.mark.asyncio
     async def test_openai_health_check_uses_single_request_when_primary_probe_is_unhealthy(

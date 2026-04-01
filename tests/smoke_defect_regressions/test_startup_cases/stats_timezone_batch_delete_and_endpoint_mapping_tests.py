@@ -255,10 +255,14 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         }
         removed_route_path = "/api/stats/requests/" + "operations"
         removed_handler_name = "list_" + "operations_request_logs"
+        removed_connection_metrics_path = "/api/stats/models/connections/" + "metrics"
+        removed_connection_metrics_handler_name = "connection_" + "metrics_batch"
 
         assert removed_route_path not in registered_paths
         assert "/api/stats/requests/{request_id}" in registered_paths
         assert not hasattr(stats_router, removed_handler_name)
+        assert removed_connection_metrics_path not in registered_paths
+        assert not hasattr(stats_router, removed_connection_metrics_handler_name)
 
     @pytest.mark.asyncio
     async def test_summary_route_normalizes_aware_datetimes_before_service_call(self):
@@ -423,47 +427,6 @@ class TestDEF058_StatsTimezoneFilterNormalization:
         assert call_kwargs["model_ids"] == ["gpt-5.4"]
         assert call_kwargs["summary_window_hours"] == 24
         assert call_kwargs["spending_preset"] == "last_30_days"
-
-    @pytest.mark.asyncio
-    async def test_connection_metrics_batch_route_passes_filters_to_service(self):
-        from app.routers.stats import connection_metrics_batch
-        from app.schemas.schemas import ConnectionMetricsBatchRequest
-
-        mock_db = AsyncMock()
-
-        with patch(
-            "app.routers.stats.get_connection_metrics_batch", new_callable=AsyncMock
-        ) as mock_get_connection_metrics_batch:
-            mock_get_connection_metrics_batch.return_value = {
-                11: {
-                    "success_rate_24h": 99.5,
-                    "request_count_24h": 12,
-                    "p95_latency_ms": 880,
-                    "five_xx_rate": 0.0,
-                    "heuristic_failover_events": 0,
-                    "last_failover_like_at": None,
-                }
-            }
-            response = await connection_metrics_batch(
-                body=ConnectionMetricsBatchRequest(
-                    model_id="gpt-5.4",
-                    connection_ids=[11],
-                    summary_window_hours=24,
-                ),
-                db=mock_db,
-                profile_id=7,
-            )
-
-        assert len(response.items) == 1
-        assert response.items[0].connection_id == 11
-        _, call_kwargs = cast(
-            tuple[tuple[object, ...], dict[str, object]],
-            mock_get_connection_metrics_batch.await_args_list[0],
-        )
-        assert call_kwargs["profile_id"] == 7
-        assert call_kwargs["model_id"] == "gpt-5.4"
-        assert call_kwargs["connection_ids"] == [11]
-        assert call_kwargs["summary_window_hours"] == 24
 
     @pytest.mark.asyncio
     async def test_get_timezone_preference_route_returns_lightweight_payload(self):
@@ -938,6 +901,7 @@ class TestDEF061_ConnectionResponseEndpointMapping:
             health_status="unknown",
             health_detail=None,
             last_health_check=None,
+            monitoring_probe_interval_seconds=300,
             created_at=now,
             updated_at=now,
         )

@@ -29,7 +29,7 @@ from app.schemas.schemas import (
     MonitoringVendorResponse,
 )
 
-_HISTORY_LIMIT = 5
+_HISTORY_LIMIT = 60
 _OVERVIEW_HISTORY_LIMIT = 60
 _KNOWN_FUSED_STATUSES = {"healthy", "degraded", "unhealthy"}
 
@@ -538,6 +538,7 @@ async def query_monitoring_model(
         db,
         profile_id=profile_id,
         connections=connections,
+        history_limit=_OVERVIEW_HISTORY_LIMIT,
     )
     connection_rows = [_build_connection_row(bundle) for bundle in bundles]
 

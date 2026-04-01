@@ -67,13 +67,27 @@ def _build_monitoring_conversation_request(
                 "model": model_id,
                 "messages": [{"role": "user", "content": "."}],
                 "max_tokens": 1,
+                "reasoning_effort": "none",
             }
 
         return "/v1/responses", {
             "model": model_id,
-            "input": ".",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": ".",
+                        }
+                    ],
+                }
+            ],
             "max_output_tokens": 1,
+            "reasoning": {"effort": "none"},
             "store": False,
+            "stream": True,
         }
     if api_family == "anthropic":
         return "/v1/messages", {

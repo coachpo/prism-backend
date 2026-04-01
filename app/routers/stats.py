@@ -9,8 +9,6 @@ from app.routers.stats_domains import request_logs_route_handlers as _request_lo
 from app.dependencies import get_db, get_effective_profile_id
 from app.schemas.schemas import (
     BatchDeleteResponse,
-    ConnectionMetricsBatchRequest,
-    ConnectionMetricsBatchResponse,
     ConnectionSuccessRateResponse,
     ModelMetricsBatchRequest,
     ModelMetricsBatchResponse,
@@ -24,7 +22,6 @@ from app.schemas.schemas import (
 from app.services.background_cleanup import delete_request_logs_in_background
 from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import (
-    get_connection_metrics_batch,
     get_connection_success_rates,
     get_model_metrics_batch,
     get_request_logs,
@@ -126,22 +123,6 @@ async def model_metrics_batch(
         db,
         profile_id,
         get_model_metrics_batch_fn=get_model_metrics_batch,
-    )
-
-
-@router.post(
-    "/models/connections/metrics", response_model=ConnectionMetricsBatchResponse
-)
-async def connection_metrics_batch(
-    body: ConnectionMetricsBatchRequest,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    profile_id: Annotated[int, Depends(get_effective_profile_id)],
-):
-    return await _stats_impl.connection_metrics_batch(
-        body,
-        db,
-        profile_id,
-        get_connection_metrics_batch_fn=get_connection_metrics_batch,
     )
 
 
@@ -255,7 +236,6 @@ async def usage_snapshot(
 
 
 __all__ = [
-    "connection_metrics_batch",
     "connection_success_rates",
     "delete_request_logs",
     "get_throughput",

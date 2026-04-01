@@ -212,6 +212,20 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
                 ),
                 MonitoringConnectionProbeResult(
                     profile_id=profile.id,
+                    vendor_id=openai_vendor.id,
+                    model_config_id=openai_model.id,
+                    connection_id=openai_connection.id,
+                    endpoint_id=endpoints[0].id,
+                    endpoint_ping_status="healthy",
+                    endpoint_ping_ms=97,
+                    conversation_status="healthy",
+                    conversation_delay_ms=188,
+                    failure_kind=None,
+                    detail="previous healthy probe",
+                    checked_at=checked_at - timedelta(minutes=5),
+                ),
+                MonitoringConnectionProbeResult(
+                    profile_id=profile.id,
                     vendor_id=anthropic_vendor.id,
                     model_config_id=anthropic_model.id,
                     connection_id=anthropic_connection.id,
@@ -247,6 +261,7 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
             "openai_vendor_id": openai_vendor.id,
             "openai_model_id": openai_model.id,
             "openai_connection_id": openai_connection.id,
+            "openai_endpoint_id": endpoints[0].id,
             "anthropic_vendor_id": anthropic_vendor.id,
         }
 
@@ -297,9 +312,185 @@ class TestMonitoringManualProbeAndQueryRoutes:
         assert connections[0]["fused_status"] == "degraded"
         assert "availability_cells" not in connections[0]
         recent_history = cast(list[dict[str, object]], connections[0]["recent_history"])
-        assert len(recent_history) == 1
+        assert len(recent_history) == 2
+        checked_at_values = [
+            datetime.fromisoformat(cast(str, item["checked_at"]).replace("Z", "+00:00"))
+            for item in recent_history
+        ]
+        assert checked_at_values == sorted(checked_at_values, reverse=True)
+        assert [item["conversation_status"] for item in recent_history] == [
+            "unhealthy",
+            "healthy",
+        ]
         assert recent_history[0]["endpoint_ping_status"] == "healthy"
         assert recent_history[0]["conversation_status"] == "unhealthy"
+
+    @pytest.mark.asyncio
+    async def test_monitoring_model_route_pins_model_detail_contract_fields_and_ordering(
+        self,
+    ):
+        fixture = await _seed_monitoring_route_fixture()
+        transport = ASGITransport(app=app)
+        fixed_now = datetime(2026, 3, 29, 14, 0, tzinfo=timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            session.add_all(
+                [
+                    MonitoringConnectionProbeResult(
+                        profile_id=fixture["profile_id"],
+                        vendor_id=fixture["openai_vendor_id"],
+                        model_config_id=fixture["openai_model_id"],
+                        connection_id=fixture["openai_connection_id"],
+                        endpoint_id=fixture["openai_endpoint_id"],
+                        endpoint_ping_status="healthy",
+                        endpoint_ping_ms=100 + minute_offset,
+                        conversation_status="healthy",
+                        conversation_delay_ms=200 + minute_offset,
+                        failure_kind=None,
+                        detail=f"older route probe {minute_offset}",
+                        checked_at=fixed_now - timedelta(minutes=minute_offset),
+                    )
+                    for minute_offset in range(2, 62)
+                    if minute_offset != 5
+                ]
+            )
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            extra_endpoint = Endpoint(
+                profile_id=fixture["profile_id"],
+                name=f"route-endpoint-extra-{uuid4().hex[:6]}",
+                base_url=f"https://route-extra-{uuid4().hex[:6]}.example.com/v1",
+                api_key=f"sk-route-extra-{uuid4().hex[:6]}",
+                position=9,
+            )
+            session.add(extra_endpoint)
+            await session.flush()
+
+            extra_connection = Connection(
+                profile_id=fixture["profile_id"],
+                model_config_id=fixture["openai_model_id"],
+                endpoint_id=extra_endpoint.id,
+                is_active=True,
+                priority=1,
+                name=f"openai-connection-secondary-{uuid4().hex[:6]}",
+                monitoring_probe_interval_seconds=240,
+            )
+            session.add(extra_connection)
+            await session.flush()
+
+            session.add(
+                RoutingConnectionRuntimeState(
+                    profile_id=fixture["profile_id"],
+                    connection_id=extra_connection.id,
+                    circuit_state="closed",
+                    last_probe_status="healthy",
+                    last_probe_at=fixed_now - timedelta(minutes=3),
+                    endpoint_ping_ewma_ms=91.0,
+                    conversation_delay_ewma_ms=171.0,
+                )
+            )
+            session.add_all(
+                [
+                    MonitoringConnectionProbeResult(
+                        profile_id=fixture["profile_id"],
+                        vendor_id=fixture["openai_vendor_id"],
+                        model_config_id=fixture["openai_model_id"],
+                        connection_id=extra_connection.id,
+                        endpoint_id=extra_endpoint.id,
+                        endpoint_ping_status="healthy",
+                        endpoint_ping_ms=91,
+                        conversation_status="healthy",
+                        conversation_delay_ms=171,
+                        failure_kind=None,
+                        detail="secondary probe completed",
+                        checked_at=fixed_now - timedelta(minutes=3),
+                    ),
+                    MonitoringConnectionProbeResult(
+                        profile_id=fixture["profile_id"],
+                        vendor_id=fixture["openai_vendor_id"],
+                        model_config_id=fixture["openai_model_id"],
+                        connection_id=extra_connection.id,
+                        endpoint_id=extra_endpoint.id,
+                        endpoint_ping_status="healthy",
+                        endpoint_ping_ms=95,
+                        conversation_status="healthy",
+                        conversation_delay_ms=180,
+                        failure_kind=None,
+                        detail="older secondary probe",
+                        checked_at=fixed_now - timedelta(minutes=8),
+                    ),
+                ]
+            )
+            await session.commit()
+            extra_connection_id = extra_connection.id
+
+        with patch("app.services.monitoring.queries.utc_now", return_value=fixed_now):
+            async with AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                model_response = await client.get(
+                    f"/api/monitoring/models/{fixture['openai_model_id']}",
+                    headers={"X-Profile-Id": str(fixture["profile_id"])},
+                )
+
+        assert model_response.status_code == 200
+        model_payload = cast(dict[str, object], model_response.json())
+        assert model_payload["model_config_id"] == fixture["openai_model_id"]
+
+        connections = cast(list[dict[str, object]], model_payload["connections"])
+        assert [item["connection_id"] for item in connections] == [
+            fixture["openai_connection_id"],
+            extra_connection_id,
+        ]
+
+        required_model_detail_fields = {
+            "last_probe_status",
+            "last_probe_at",
+            "endpoint_ping_status",
+            "conversation_status",
+            "fused_status",
+            "recent_history",
+        }
+        for item in connections:
+            assert required_model_detail_fields.issubset(item)
+            assert "availability_cells" not in item
+            recent_history = cast(list[dict[str, object]], item["recent_history"])
+            checked_at_values = [
+                datetime.fromisoformat(
+                    cast(str, history_item["checked_at"]).replace("Z", "+00:00")
+                )
+                for history_item in recent_history
+            ]
+            assert checked_at_values == sorted(checked_at_values, reverse=True)
+
+        primary_connection = connections[0]
+        assert primary_connection["last_probe_status"] == "degraded"
+        assert primary_connection["last_probe_at"] is not None
+        assert primary_connection["endpoint_ping_status"] == "healthy"
+        assert primary_connection["conversation_status"] == "unhealthy"
+        assert primary_connection["fused_status"] == "degraded"
+        primary_recent_history = cast(
+            list[dict[str, object]], primary_connection["recent_history"]
+        )
+        assert len(primary_recent_history) == 60
+        assert datetime.fromisoformat(
+            cast(str, primary_recent_history[0]["checked_at"]).replace("Z", "+00:00")
+        ) == fixed_now - timedelta(minutes=1)
+        assert datetime.fromisoformat(
+            cast(str, primary_recent_history[-1]["checked_at"]).replace("Z", "+00:00")
+        ) == fixed_now - timedelta(minutes=60)
+        assert primary_recent_history[0]["endpoint_ping_ms"] == 88
+        assert primary_recent_history[-1]["endpoint_ping_ms"] == 160
+        assert primary_recent_history[0]["conversation_status"] == "unhealthy"
+
+        secondary_connection = connections[1]
+        assert secondary_connection["last_probe_status"] == "healthy"
+        assert secondary_connection["last_probe_at"] is not None
+        assert secondary_connection["endpoint_ping_status"] == "healthy"
+        assert secondary_connection["conversation_status"] == "healthy"
+        assert secondary_connection["fused_status"] == "healthy"
 
     @pytest.mark.asyncio
     async def test_manual_probe_route_delegates_to_shared_probe_runner(self):

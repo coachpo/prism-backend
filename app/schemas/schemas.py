@@ -117,9 +117,6 @@ from app.schemas.domains.core import (
     VendorUpdate,
 )
 from app.schemas.domains.stats import (
-    ConnectionMetricsBatchItem,
-    ConnectionMetricsBatchRequest,
-    ConnectionMetricsBatchResponse,
     CostingSettingsResponse,
     CostingSettingsUpdate,
     EndpointFxMapping,
@@ -184,9 +181,6 @@ __all__ = [
     "ConfigUserSettingsExport",
     "ConfigVendorExport",
     "ConnectionBase",
-    "ConnectionMetricsBatchItem",
-    "ConnectionMetricsBatchRequest",
-    "ConnectionMetricsBatchResponse",
     "ConnectionCreate",
     "ConnectionHealthCheckPreviewResponse",
     "ConnectionDropdownItem",

@@ -723,6 +723,29 @@ class TestMonitoringQueryBehavior:
             "query_monitoring_model",
         )
         fixture = await _seed_monitoring_query_fixture()
+        fixed_now = datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            session.add_all(
+                [
+                    MonitoringConnectionProbeResult(
+                        profile_id=fixture["profile_id"],
+                        vendor_id=fixture["openai_vendor_id"],
+                        model_config_id=fixture["openai_primary_model_id"],
+                        connection_id=fixture["primary_degraded_connection_id"],
+                        endpoint_id=fixture["primary_degraded_endpoint_id"],
+                        endpoint_ping_status="healthy",
+                        endpoint_ping_ms=100 + minute_offset,
+                        conversation_status="healthy",
+                        conversation_delay_ms=200 + minute_offset,
+                        failure_kind=None,
+                        detail=f"older model-detail probe {minute_offset}",
+                        checked_at=fixed_now - timedelta(minutes=minute_offset),
+                    )
+                    for minute_offset in range(3, 63)
+                ]
+            )
+            await session.commit()
 
         async with AsyncSessionLocal() as session:
             response = await query_monitoring_model(
@@ -737,8 +760,26 @@ class TestMonitoringQueryBehavior:
             fixture["primary_healthy_connection_id"],
             fixture["primary_degraded_connection_id"],
         ]
+        required_model_detail_fields = {
+            "last_probe_status",
+            "last_probe_at",
+            "endpoint_ping_status",
+            "conversation_status",
+            "fused_status",
+            "recent_history",
+        }
+        for row in response.connections:
+            row_payload = row.model_dump()
+            assert required_model_detail_fields.issubset(row_payload)
+            assert "availability_cells" not in row_payload
+            assert row.last_probe_status in {"healthy", "degraded", "unhealthy"}
+            assert row.last_probe_at is not None
 
         healthy_row = response.connections[0]
+        assert healthy_row.last_probe_status == "healthy"
+        assert healthy_row.last_probe_at == datetime(
+            2026, 3, 29, 11, 59, tzinfo=timezone.utc
+        )
         assert healthy_row.endpoint_ping_status == "healthy"
         assert healthy_row.monitoring_probe_interval_seconds == 180
         assert healthy_row.endpoint_ping_ms == 82
@@ -749,12 +790,35 @@ class TestMonitoringQueryBehavior:
             82,
             84,
         ]
+        assert [item.checked_at for item in healthy_row.recent_history] == sorted(
+            [item.checked_at for item in healthy_row.recent_history],
+            reverse=True,
+        )
 
         degraded_row = response.connections[1]
+        assert degraded_row.last_probe_status == "degraded"
+        assert degraded_row.last_probe_at == datetime(
+            2026, 3, 29, 11, 58, tzinfo=timezone.utc
+        )
         assert degraded_row.endpoint_ping_status == "healthy"
         assert degraded_row.monitoring_probe_interval_seconds == 240
         assert degraded_row.endpoint_ping_ms == 115
         assert degraded_row.conversation_status == "unhealthy"
         assert degraded_row.conversation_delay_ms is None
         assert degraded_row.fused_status == "degraded"
-        assert len(degraded_row.recent_history) == 1
+        assert len(degraded_row.recent_history) == 60
+        assert [item.checked_at for item in degraded_row.recent_history] == sorted(
+            [item.checked_at for item in degraded_row.recent_history],
+            reverse=True,
+        )
+        assert degraded_row.recent_history[0].checked_at == fixed_now - timedelta(
+            minutes=2
+        )
+        assert degraded_row.recent_history[-1].checked_at == fixed_now - timedelta(
+            minutes=61
+        )
+        assert degraded_row.recent_history[0].endpoint_ping_ms == 115
+        assert degraded_row.recent_history[-1].endpoint_ping_ms == 161
+        assert degraded_row.recent_history[0].conversation_status == "unhealthy"
+        assert degraded_row.recent_history[0].conversation_delay_ms is None
+        assert degraded_row.recent_history[0].failure_kind == "timeout"
