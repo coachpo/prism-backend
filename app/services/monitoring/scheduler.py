@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Awaitable, Callable
 
 import httpx
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -19,22 +20,14 @@ from app.models.models import (
     RoutingConnectionRuntimeState,
 )
 from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
-from app.services.monitoring.probe_runner import run_connection_probe
+from app.services.monitoring.probe_runner import (
+    DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
+    is_connection_due_for_probe,
+    resolve_monitoring_probe_interval_seconds,
+    run_connection_probe,
+)
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS = 300
-MIN_MONITORING_PROBE_INTERVAL_SECONDS = 30
-MAX_MONITORING_PROBE_INTERVAL_SECONDS = 3_600
-
-
-def _resolve_interval_seconds(value: int | None) -> int:
-    if value is None:
-        return DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
-    return max(
-        MIN_MONITORING_PROBE_INTERVAL_SECONDS,
-        min(MAX_MONITORING_PROBE_INTERVAL_SECONDS, int(value)),
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,31 +35,6 @@ class ScheduledProbeCandidate:
     profile_id: int
     connection_id: int
     interval_seconds: int
-
-
-def _is_connection_due_for_probe(
-    state_row: RoutingConnectionRuntimeState | None,
-    *,
-    interval_seconds: int,
-    now_at: datetime,
-) -> bool:
-    if state_row is None:
-        return True
-
-    if state_row.circuit_state == "open":
-        probe_available_at = ensure_utc_datetime(state_row.probe_available_at)
-        blocked_until_at = ensure_utc_datetime(state_row.blocked_until_at)
-        if probe_available_at is None:
-            probe_available_at = blocked_until_at
-        return probe_available_at is not None and probe_available_at <= now_at
-
-    if state_row.circuit_state == "half_open":
-        return False
-
-    last_probe_at = ensure_utc_datetime(state_row.last_probe_at)
-    if last_probe_at is None:
-        return True
-    return last_probe_at + timedelta(seconds=interval_seconds) <= now_at
 
 
 async def _load_due_probe_candidates(
@@ -126,11 +94,11 @@ async def _load_due_probe_candidates(
         if not policy.monitoring_enabled:
             continue
 
-        interval_seconds = _resolve_interval_seconds(
+        interval_seconds = resolve_monitoring_probe_interval_seconds(
             getattr(connection, "monitoring_probe_interval_seconds", None)
         )
         state_row = runtime_state_by_connection.get(connection.id)
-        if not _is_connection_due_for_probe(
+        if not is_connection_due_for_probe(
             state_row,
             interval_seconds=interval_seconds,
             now_at=now_at,
@@ -170,6 +138,20 @@ async def run_monitoring_cycle(
                     acquire_probe_lease=True,
                 )
                 await probe_session.commit()
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                logger.debug(
+                    "Skipping monitoring probe candidate: profile_id=%d connection_id=%d detail=%s",
+                    candidate.profile_id,
+                    candidate.connection_id,
+                    exc.detail,
+                )
+                continue
+            logger.exception(
+                "Monitoring probe failed: profile_id=%d connection_id=%d",
+                candidate.profile_id,
+                candidate.connection_id,
+            )
         except Exception:
             logger.exception(
                 "Monitoring probe failed: profile_id=%d connection_id=%d",

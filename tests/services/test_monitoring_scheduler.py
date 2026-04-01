@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import importlib
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import select
 from uuid import uuid4
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.core.time import utc_now
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
     Connection,
@@ -170,7 +172,7 @@ class TestMonitoringScheduler:
             "app.services.monitoring.scheduler.run_monitoring_cycle must exist"
         )
 
-        now_at = datetime(2026, 3, 29, 16, 0, tzinfo=timezone.utc)
+        now_at = utc_now()
         fixture = await _seed_scheduler_fixture(now_at=now_at)
         probe_mock = AsyncMock()
 
@@ -231,3 +233,95 @@ class TestMonitoringScheduler:
 
         assert cycle_calls == [1]
         assert getattr(scheduler, "started", False) is False
+
+    @pytest.mark.asyncio
+    async def test_run_monitoring_cycle_skips_stale_candidate_if_connection_was_just_probed(
+        self,
+    ):
+        scheduler_module = _load_module("app.services.monitoring.scheduler")
+        probe_runner_module = _load_module("app.services.monitoring.probe_runner")
+        run_monitoring_cycle = getattr(scheduler_module, "run_monitoring_cycle", None)
+        ScheduledProbeCandidate = getattr(
+            scheduler_module,
+            "ScheduledProbeCandidate",
+            None,
+        )
+        ProbeCheckOutcome = getattr(
+            probe_runner_module,
+            "ProbeCheckOutcome",
+            None,
+        )
+        real_run_connection_probe = getattr(
+            probe_runner_module,
+            "run_connection_probe",
+            None,
+        )
+        assert run_monitoring_cycle is not None
+        assert ScheduledProbeCandidate is not None
+        assert ProbeCheckOutcome is not None
+        assert real_run_connection_probe is not None
+
+        now_at = utc_now()
+        fixture = await _seed_scheduler_fixture(now_at=now_at)
+
+        async with AsyncSessionLocal() as session:
+            state_row = (
+                await session.execute(
+                    select(RoutingConnectionRuntimeState).where(
+                        RoutingConnectionRuntimeState.profile_id
+                        == fixture["profile_id"],
+                        RoutingConnectionRuntimeState.connection_id
+                        == fixture["due_connection_id"],
+                    )
+                )
+            ).scalar_one()
+            state_row.last_probe_at = now_at
+            state_row.last_probe_status = "healthy"
+            await session.commit()
+
+        stale_candidates = [
+            ScheduledProbeCandidate(
+                profile_id=fixture["profile_id"],
+                connection_id=fixture["due_connection_id"],
+                interval_seconds=45,
+            )
+        ]
+        probe_checks_mock = AsyncMock(
+            return_value=ProbeCheckOutcome(
+                endpoint_ping_status="healthy",
+                endpoint_ping_ms=7,
+                conversation_status="healthy",
+                conversation_delay_ms=11,
+                fused_status="healthy",
+                failure_kind=None,
+                detail="stale candidate should skip",
+                log_url="https://api.example.com/v1/responses",
+            )
+        )
+
+        async def run_probe_without_jitter(**kwargs):
+            return await real_run_connection_probe(
+                **kwargs,
+                resolve_probe_jitter_seconds_fn=lambda: 0.0,
+            )
+
+        with (
+            patch.object(
+                scheduler_module,
+                "_load_due_probe_candidates",
+                AsyncMock(return_value=stale_candidates),
+            ),
+            patch.object(
+                probe_runner_module,
+                "_execute_monitoring_probe_checks",
+                probe_checks_mock,
+            ),
+        ):
+            next_sleep_seconds = await run_monitoring_cycle(
+                http_client=AsyncMock(),
+                now_at=now_at,
+                run_connection_probe_fn=run_probe_without_jitter,
+            )
+
+        assert next_sleep_seconds == pytest.approx(45.0)
+        assert probe_checks_mock.await_count == 0
