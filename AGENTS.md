@@ -8,7 +8,7 @@ Prism's backend owns the management API on `/api/*` and the runtime proxy API on
 backend/
 ├── app/AGENTS.md                                                # Live runtime map
 ├── app/alembic/AGENTS.md                                        # Packaged Alembic env + revisions; schema source of truth
-├── app/bootstrap/AGENTS.md                                      # Startup sequence and auth split
+├── app/bootstrap/AGENTS.md                                      # Startup sequence, connection-limit reconciliation, and auth split
 ├── app/core/AGENTS.md                                           # Settings, database, auth helpers, crypto, migrations
 ├── app/models/AGENTS.md                                         # ORM domain ownership and `models.py` boundary
 ├── app/routers/AGENTS.md                                        # Router map, standalone routers, and leaf handoff
@@ -52,7 +52,7 @@ backend/
 
 - `pyproject.toml` exposes `prism-backend = "app.main:main"` as the CLI entrypoint.
 - `app/main.py` builds the FastAPI app, installs CORS and auth middleware, mounts routers including `/api/monitoring`, and exposes `/health`.
-- FastAPI lifespan runs `bootstrap.run_startup_sequence()`, builds one shared `httpx.AsyncClient`, configures the shared `BackgroundTaskManager`, starts the backend-owned `MonitoringScheduler`, then shuts those resources down in reverse order while also stopping dashboard-update lifecycle helpers.
+- FastAPI lifespan runs `bootstrap.run_startup_sequence()`, then `reconcile_all_connection_limits()`, then builds one shared `httpx.AsyncClient`, configures the shared `BackgroundTaskManager`, starts the backend-owned `MonitoringScheduler`, and shuts those resources down in reverse order while also stopping dashboard-update lifecycle helpers.
 - Multi-worker CLI startup pre-runs `run_startup_sequence()` and sets `PRISM_SKIP_STARTUP_SEQUENCE=1` before worker imports `app.main:app`.
 - Management requests use effective profile scope. Runtime proxy traffic uses the active profile only.
 - When auth is enabled, `/api/*` uses operator session cookies while `/v1/*` and `/v1beta/*` use proxy API keys.
