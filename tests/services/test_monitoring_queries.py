@@ -534,7 +534,6 @@ class TestMonitoringQueryContracts:
                         "connection_id": 31,
                         "endpoint_id": 41,
                         "endpoint_name": "primary-openai",
-                        "monitoring_probe_interval_seconds": 180,
                         "endpoint_ping_status": "healthy",
                         "endpoint_ping_ms": 82,
                         "conversation_status": "healthy",
@@ -560,7 +559,8 @@ class TestMonitoringQueryContracts:
         assert payload.model_config_id == 21
         assert len(payload.connections) == 1
         assert payload.connections[0].connection_id == 31
-        assert payload.connections[0].monitoring_probe_interval_seconds == 180
+        assert not hasattr(payload.connections[0], "monitoring_probe_interval_seconds")
+        assert not hasattr(payload.connections[0], "last_probe_at")
         assert payload.connections[0].endpoint_ping_ms == 82
         assert payload.connections[0].conversation_delay_ms == 145
         assert payload.connections[0].fused_status == "healthy"
@@ -768,7 +768,6 @@ class TestMonitoringQueryBehavior:
         ]
         required_model_detail_fields = {
             "last_probe_status",
-            "last_probe_at",
             "endpoint_ping_status",
             "conversation_status",
             "fused_status",
@@ -778,16 +777,13 @@ class TestMonitoringQueryBehavior:
             row_payload = row.model_dump()
             assert required_model_detail_fields.issubset(row_payload)
             assert "availability_cells" not in row_payload
+            assert "last_probe_at" not in row_payload
+            assert "monitoring_probe_interval_seconds" not in row_payload
             assert row.last_probe_status in {"healthy", "degraded", "unhealthy"}
-            assert row.last_probe_at is not None
 
         healthy_row = response.connections[0]
         assert healthy_row.last_probe_status == "healthy"
-        assert healthy_row.last_probe_at == datetime(
-            2026, 3, 29, 11, 59, tzinfo=timezone.utc
-        )
         assert healthy_row.endpoint_ping_status == "healthy"
-        assert healthy_row.monitoring_probe_interval_seconds == 180
         assert healthy_row.endpoint_ping_ms == 82
         assert healthy_row.conversation_status == "healthy"
         assert healthy_row.conversation_delay_ms == 145
@@ -803,11 +799,7 @@ class TestMonitoringQueryBehavior:
 
         degraded_row = response.connections[1]
         assert degraded_row.last_probe_status == "degraded"
-        assert degraded_row.last_probe_at == datetime(
-            2026, 3, 29, 11, 58, tzinfo=timezone.utc
-        )
         assert degraded_row.endpoint_ping_status == "healthy"
-        assert degraded_row.monitoring_probe_interval_seconds == 240
         assert degraded_row.endpoint_ping_ms == 115
         assert degraded_row.conversation_status == "unhealthy"
         assert degraded_row.conversation_delay_ms is None

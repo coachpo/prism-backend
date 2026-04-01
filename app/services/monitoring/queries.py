@@ -20,8 +20,9 @@ from app.models.models import (
 )
 from app.schemas.schemas import (
     MonitoringConnectionHistoryItem,
-    MonitoringConnectionRow,
+    MonitoringModelConnectionRow,
     MonitoringModelResponse,
+    MonitoringOverviewConnectionRow,
     MonitoringOverviewModelItem,
     MonitoringOverviewResponse,
     MonitoringOverviewVendorItem,
@@ -113,11 +114,11 @@ def _roll_up_group_status(statuses: list[str]) -> str:
     return "unknown"
 
 
-def _build_connection_row(
+def _build_connection_payload(
     bundle: _MonitoringConnectionBundle,
     *,
     history_oldest_first: bool = False,
-) -> MonitoringConnectionRow:
+) -> tuple[dict[str, object], datetime | None]:
     history_rows = (
         list(reversed(bundle.recent_history))
         if history_oldest_first
@@ -168,37 +169,33 @@ def _build_connection_row(
         )
     )
 
-    return MonitoringConnectionRow(
-        connection_id=bundle.connection.id,
-        connection_name=bundle.connection.name,
-        endpoint_id=bundle.connection.endpoint_rel.id,
-        endpoint_name=bundle.connection.endpoint_rel.name,
-        monitoring_probe_interval_seconds=(
-            bundle.connection.monitoring_probe_interval_seconds
-        ),
-        last_probe_status=last_probe_status,
-        last_probe_at=last_probe_at,
-        circuit_state=(
+    payload = {
+        "connection_id": bundle.connection.id,
+        "connection_name": bundle.connection.name,
+        "endpoint_id": bundle.connection.endpoint_rel.id,
+        "endpoint_name": bundle.connection.endpoint_rel.name,
+        "last_probe_status": last_probe_status,
+        "circuit_state": (
             runtime_state.circuit_state if runtime_state is not None else None
         ),
-        live_p95_latency_ms=_round_metric(
+        "live_p95_latency_ms": _round_metric(
             runtime_state.live_p95_latency_ms if runtime_state is not None else None
         ),
-        last_live_failure_kind=(
+        "last_live_failure_kind": (
             runtime_state.last_live_failure_kind if runtime_state is not None else None
         ),
-        last_live_failure_at=(
+        "last_live_failure_at": (
             runtime_state.last_live_failure_at if runtime_state is not None else None
         ),
-        last_live_success_at=(
+        "last_live_success_at": (
             runtime_state.last_live_success_at if runtime_state is not None else None
         ),
-        endpoint_ping_status=endpoint_ping_status,
-        endpoint_ping_ms=endpoint_ping_ms,
-        conversation_status=conversation_status,
-        conversation_delay_ms=conversation_delay_ms,
-        fused_status=fused_status,
-        recent_history=[
+        "endpoint_ping_status": endpoint_ping_status,
+        "endpoint_ping_ms": endpoint_ping_ms,
+        "conversation_status": conversation_status,
+        "conversation_delay_ms": conversation_delay_ms,
+        "fused_status": fused_status,
+        "recent_history": [
             MonitoringConnectionHistoryItem(
                 checked_at=row.checked_at,
                 endpoint_ping_status=row.endpoint_ping_status,
@@ -209,14 +206,46 @@ def _build_connection_row(
             )
             for row in history_rows
         ],
+    }
+
+    return payload, last_probe_at
+
+
+def _build_overview_connection_row(
+    bundle: _MonitoringConnectionBundle,
+    *,
+    history_oldest_first: bool = False,
+) -> MonitoringOverviewConnectionRow:
+    payload, last_probe_at = _build_connection_payload(
+        bundle,
+        history_oldest_first=history_oldest_first,
     )
+
+    return MonitoringOverviewConnectionRow(
+        **payload,
+        monitoring_probe_interval_seconds=bundle.connection.monitoring_probe_interval_seconds,
+        last_probe_at=last_probe_at,
+    )
+
+
+def _build_model_connection_row(
+    bundle: _MonitoringConnectionBundle,
+    *,
+    history_oldest_first: bool = False,
+) -> MonitoringModelConnectionRow:
+    payload, _ = _build_connection_payload(
+        bundle,
+        history_oldest_first=history_oldest_first,
+    )
+
+    return MonitoringModelConnectionRow(**payload)
 
 
 def _build_overview_model_item(
     bundles: list[_MonitoringConnectionBundle],
 ) -> MonitoringOverviewModelItem:
     model = bundles[0].connection.model_config_rel
-    connection_rows = [_build_connection_row(bundle) for bundle in bundles]
+    connection_rows = [_build_overview_connection_row(bundle) for bundle in bundles]
     return MonitoringOverviewModelItem(
         model_config_id=model.id,
         model_id=model.model_id,
@@ -541,7 +570,7 @@ async def query_monitoring_model(
         connections=connections,
         history_limit=_OVERVIEW_HISTORY_LIMIT,
     )
-    connection_rows = [_build_connection_row(bundle) for bundle in bundles]
+    connection_rows = [_build_model_connection_row(bundle) for bundle in bundles]
 
     return MonitoringModelResponse(
         generated_at=generated_at,

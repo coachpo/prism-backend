@@ -12,16 +12,14 @@ class MonitoringConnectionHistoryItem(BaseModel):
     failure_kind: str | None = None
 
 
-class MonitoringConnectionRow(BaseModel):
+class MonitoringConnectionBaseRow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     connection_id: int
     connection_name: str | None = None
     endpoint_id: int
     endpoint_name: str
-    monitoring_probe_interval_seconds: int
     last_probe_status: str | None = None
-    last_probe_at: datetime | None = None
     circuit_state: str | None = None
     live_p95_latency_ms: int | None = None
     last_live_failure_kind: str | None = None
@@ -35,13 +33,22 @@ class MonitoringConnectionRow(BaseModel):
     recent_history: list[MonitoringConnectionHistoryItem] = Field(default_factory=list)
 
 
+class MonitoringOverviewConnectionRow(MonitoringConnectionBaseRow):
+    monitoring_probe_interval_seconds: int
+    last_probe_at: datetime | None = None
+
+
+class MonitoringModelConnectionRow(MonitoringConnectionBaseRow):
+    pass
+
+
 class MonitoringOverviewModelItem(BaseModel):
     model_config_id: int
     model_id: str
     display_name: str | None = None
     fused_status: str
     connection_count: int
-    connections: list[MonitoringConnectionRow] = Field(default_factory=list)
+    connections: list[MonitoringOverviewConnectionRow] = Field(default_factory=list)
 
 
 class MonitoringOverviewVendorItem(BaseModel):
@@ -86,7 +93,7 @@ class MonitoringModelResponse(BaseModel):
     model_config_id: int
     model_id: str
     display_name: str | None = None
-    connections: list[MonitoringConnectionRow]
+    connections: list[MonitoringModelConnectionRow]
 
 
 class MonitoringManualProbeResponse(BaseModel):
@@ -103,9 +110,11 @@ class MonitoringManualProbeResponse(BaseModel):
 
 __all__ = [
     "MonitoringConnectionHistoryItem",
-    "MonitoringConnectionRow",
+    "MonitoringConnectionBaseRow",
     "MonitoringManualProbeResponse",
+    "MonitoringModelConnectionRow",
     "MonitoringOverviewModelItem",
+    "MonitoringOverviewConnectionRow",
     "MonitoringModelResponse",
     "MonitoringOverviewResponse",
     "MonitoringOverviewVendorItem",

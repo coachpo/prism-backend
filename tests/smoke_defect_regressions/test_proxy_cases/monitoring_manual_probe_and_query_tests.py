@@ -447,7 +447,6 @@ class TestMonitoringManualProbeAndQueryRoutes:
 
         required_model_detail_fields = {
             "last_probe_status",
-            "last_probe_at",
             "endpoint_ping_status",
             "conversation_status",
             "fused_status",
@@ -456,6 +455,7 @@ class TestMonitoringManualProbeAndQueryRoutes:
         for item in connections:
             assert required_model_detail_fields.issubset(item)
             assert "availability_cells" not in item
+            assert "monitoring_probe_interval_seconds" not in item
             recent_history = cast(list[dict[str, object]], item["recent_history"])
             checked_at_values = [
                 datetime.fromisoformat(
@@ -467,7 +467,7 @@ class TestMonitoringManualProbeAndQueryRoutes:
 
         primary_connection = connections[0]
         assert primary_connection["last_probe_status"] == "degraded"
-        assert primary_connection["last_probe_at"] is not None
+        assert "last_probe_at" not in primary_connection
         assert primary_connection["endpoint_ping_status"] == "healthy"
         assert primary_connection["conversation_status"] == "unhealthy"
         assert primary_connection["fused_status"] == "degraded"
@@ -487,7 +487,7 @@ class TestMonitoringManualProbeAndQueryRoutes:
 
         secondary_connection = connections[1]
         assert secondary_connection["last_probe_status"] == "healthy"
-        assert secondary_connection["last_probe_at"] is not None
+        assert "last_probe_at" not in secondary_connection
         assert secondary_connection["endpoint_ping_status"] == "healthy"
         assert secondary_connection["conversation_status"] == "healthy"
         assert secondary_connection["fused_status"] == "healthy"
