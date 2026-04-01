@@ -532,6 +532,7 @@ async def acquire_monitoring_probe_lease(
     profile_id: int,
     connection_id: int,
     lease_ttl_seconds: int,
+    interval_seconds: int | None = None,
     now_at: datetime | None = None,
 ) -> RuntimeLeaseAcquireResult:
     normalized_now = ensure_utc_datetime(now_at) or utc_now()
@@ -569,6 +570,18 @@ async def acquire_monitoring_probe_lease(
             admitted=False,
             deny_reason="probe_in_progress",
         )
+
+    if interval_seconds is not None and state_row.circuit_state == "closed":
+        last_probe_at = ensure_utc_datetime(state_row.last_probe_at)
+        if (
+            last_probe_at is not None
+            and last_probe_at.timestamp() + interval_seconds
+            > normalized_now.timestamp()
+        ):
+            return RuntimeLeaseAcquireResult(
+                admitted=False,
+                deny_reason="probe_not_due",
+            )
 
     if state_row.circuit_state == "open":
         if blocked_until_at is not None and blocked_until_at > normalized_now:

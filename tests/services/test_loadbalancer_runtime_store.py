@@ -324,6 +324,49 @@ class TestLoadbalancerRuntimeStore:
         assert state_row.circuit_state == "half_open"
 
     @pytest.mark.asyncio
+    async def test_acquire_monitoring_probe_lease_denies_recently_probed_closed_connection(
+        self,
+    ):
+        from app.services.loadbalancer.runtime_store import (
+            acquire_monitoring_probe_lease,
+            apply_fused_monitoring_update,
+        )
+
+        profile_id, connection_id = await _create_connection_fixture()
+        checked_at = datetime(2026, 3, 29, 12, 30, tzinfo=timezone.utc)
+
+        async with AsyncSessionLocal() as session:
+            _ = await apply_fused_monitoring_update(
+                session=session,
+                profile_id=profile_id,
+                connection_id=connection_id,
+                last_probe_status="healthy",
+                last_probe_at=checked_at,
+                endpoint_ping_ewma_ms=50.0,
+                conversation_delay_ewma_ms=75.0,
+                live_p95_latency_ms=None,
+                last_live_failure_kind=None,
+                last_live_failure_at=None,
+                last_live_success_at=checked_at,
+                now_at=checked_at,
+            )
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            denied = await acquire_monitoring_probe_lease(
+                session=session,
+                profile_id=profile_id,
+                connection_id=connection_id,
+                lease_ttl_seconds=10,
+                interval_seconds=45,
+                now_at=checked_at + timedelta(seconds=1),
+            )
+            await session.commit()
+
+        assert denied.admitted is False
+        assert denied.deny_reason == "probe_not_due"
+
+    @pytest.mark.asyncio
     async def test_apply_fused_monitoring_update_records_synthetic_monitoring_fields(
         self,
     ):
