@@ -22,7 +22,7 @@ from app.models.models import (
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
 from app.services.loadbalancer.policy import canonicalize_routing_policy_document
-from app.services.loadbalancer.state import clear_profile_state
+from app.services.loadbalancer.runtime_store import clear_profile_runtime_state
 from app.services.proxy_service import normalize_base_url
 
 
@@ -218,7 +218,7 @@ async def execute_import_payload(
     existing_vendors_by_key = await _preflight_import_vendors(
         db, vendor_payloads_by_key=vendor_payloads_by_key
     )
-    await clear_profile_state(profile_id)
+    await clear_profile_runtime_state(session=db, profile_id=profile_id)
     profile_model_ids = select(ModelConfig.id).where(
         ModelConfig.profile_id == profile_id
     )

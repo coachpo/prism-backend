@@ -71,6 +71,66 @@ class TestConfigExportImportIsolation:
     """FR-007: Config Export/Import Isolation"""
 
     @pytest.mark.asyncio
+    async def test_import_config_clears_runtime_state_with_request_session(self):
+        from app.core.database import AsyncSessionLocal
+        from app.routers.config import import_config
+        from app.routers.config_domains import import_executor as import_executor_module
+        from app.schemas.schemas import ConfigImportRequest
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        profile_name = f"import-session-profile-{suffix}"
+        payload = ConfigImportRequest.model_validate(
+            {
+                "version": 1,
+                "vendors": [],
+                "endpoints": [],
+                "pricing_templates": [],
+                "loadbalance_strategies": [],
+                "models": [],
+                "header_blocklist_rules": [],
+            }
+        )
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=profile_name,
+                description="Import runtime state should clear inside request session",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.commit()
+            profile_id = profile.id
+
+        captured: dict[str, object] = {}
+
+        async def fake_clear_profile_runtime_state(*, session, profile_id: int) -> int:
+            captured["session"] = session
+            captured["profile_id"] = profile_id
+            return 0
+
+        async with AsyncSessionLocal() as db:
+            with patch.object(
+                import_executor_module,
+                "clear_profile_runtime_state",
+                new=fake_clear_profile_runtime_state,
+            ):
+                response = await import_config(
+                    data=payload, db=db, profile_id=profile_id
+                )
+                await db.commit()
+
+        assert captured["session"] is db
+        assert captured["profile_id"] == profile_id
+        assert response.endpoints_imported == 0
+        assert response.models_imported == 0
+        assert response.pricing_templates_imported == 0
+        assert response.strategies_imported == 0
+        assert response.connections_imported == 0
+
+    @pytest.mark.asyncio
     async def test_import_config_allows_proxy_model_with_empty_targets_for_target_profile_only(
         self,
     ):
