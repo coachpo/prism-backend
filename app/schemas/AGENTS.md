@@ -45,10 +45,10 @@ schemas/
 - Add or update models in the correct domain file, then re-export them through `schemas.py`.
 - Keep field naming aligned with the actual wire contract. Frontend mirror types follow this backend surface.
 - Keep response and request shapes explicit in the schema layer instead of constructing anonymous dict contracts in handlers.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 
 - Do not import domain leaf modules directly from routers when `app.schemas.schemas` already defines the supported surface.
-- Do not document internal helper modules as if they are public schema domains when the stable boundary is `admin`, `auth`, `core`, `monitoring`, and `stats`.
+- Do not document internal helper modules as if they are public schema domains when the stable boundary is `admin`, `auth`, `core`, `monitoring`, `stats`, and `usage_statistics`.
 - Do not let route handlers drift into hand-built payloads that bypass the schema layer.
