@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import random
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -20,6 +22,10 @@ from app.services.loadbalancer.runtime_store import (
 )
 from app.services.monitoring.routing_feedback import record_probe_outcome
 from app.services.proxy_service import build_upstream_headers, build_upstream_url
+
+
+MIN_MONITORING_PROBE_JITTER_SECONDS = 0.0
+MAX_MONITORING_PROBE_JITTER_SECONDS = 10.0
 
 
 @dataclass(frozen=True)
@@ -201,6 +207,13 @@ def _resolve_fused_status(endpoint_ping_status: str, conversation_status: str) -
     return "unhealthy"
 
 
+def _resolve_monitoring_probe_jitter_seconds() -> float:
+    return random.uniform(
+        MIN_MONITORING_PROBE_JITTER_SECONDS,
+        MAX_MONITORING_PROBE_JITTER_SECONDS,
+    )
+
+
 async def _execute_monitoring_probe_checks(
     *,
     client: httpx.AsyncClient,
@@ -338,8 +351,22 @@ async def run_connection_probe(
     acquire_probe_lease_fn=acquire_monitoring_probe_lease,
     release_probe_lease_fn=release_connection_lease,
     record_probe_outcome_fn=record_probe_outcome,
+    resolve_probe_jitter_seconds_fn=_resolve_monitoring_probe_jitter_seconds,
+    sleep_fn=asyncio.sleep,
 ) -> ProbeExecutionResult:
     normalized_checked_at = ensure_utc_datetime(checked_at) or utc_now()
+    if acquire_probe_lease:
+        jitter_seconds = min(
+            MAX_MONITORING_PROBE_JITTER_SECONDS,
+            max(
+                MIN_MONITORING_PROBE_JITTER_SECONDS,
+                float(resolve_probe_jitter_seconds_fn()),
+            ),
+        )
+        if jitter_seconds > 0.0:
+            await sleep_fn(jitter_seconds)
+        normalized_checked_at = utc_now()
+
     connection = await load_connection_fn(
         db,
         profile_id=profile_id,

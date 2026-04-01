@@ -301,6 +301,145 @@ class TestDEF059_HealthCheckRequestBuilder:
             "reasoning_effort": "none",
         }
 
+    @pytest.mark.asyncio
+    async def test_probe_runner_caps_scheduled_probe_jitter_at_configured_max(
+        self,
+    ):
+        from app.services.monitoring_service import run_connection_probe
+
+        vendor = MagicMock()
+        vendor.id = 31
+        vendor.key = "openai"
+
+        endpoint = MagicMock()
+        endpoint.id = 801
+        endpoint.base_url = "https://api.openai.com"
+
+        connection = MagicMock()
+        connection.id = 3003
+        connection.profile_id = 1
+        connection.endpoint_id = 801
+        connection.openai_probe_endpoint_variant = "responses"
+        connection.endpoint_rel = endpoint
+        connection.model_config_rel = MagicMock(
+            id=501,
+            api_family="openai",
+            model_id="gpt-5.4-mini",
+            vendor=vendor,
+            loadbalance_strategy=MagicMock(
+                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
+            ),
+        )
+
+        requested_jitter_seconds = 37.0
+        expected_jitter_seconds = 10.0
+        state = {"slept": False}
+        probe_results = iter(
+            [
+                ("healthy", "Connection successful", 9),
+                ("healthy", "Connection successful", 12),
+            ]
+        )
+
+        async def sleep_fn(seconds: float) -> None:
+            assert seconds == expected_jitter_seconds
+            state["slept"] = True
+
+        async def execute_probe_request_fn(*args, **kwargs):
+            _ = args
+            _ = kwargs
+            assert state["slept"] is True
+            return next(probe_results)
+
+        resolve_probe_jitter_seconds_fn = MagicMock(
+            return_value=requested_jitter_seconds
+        )
+        acquire_probe_lease_fn = AsyncMock(
+            return_value=SimpleNamespace(admitted=True, lease_token="lease-1")
+        )
+        release_probe_lease_fn = AsyncMock()
+
+        result = await run_connection_probe(
+            db=AsyncMock(),
+            client=AsyncMock(),
+            profile_id=1,
+            connection_id=connection.id,
+            acquire_probe_lease=True,
+            load_connection_fn=AsyncMock(return_value=connection),
+            load_blocklist_rules_fn=AsyncMock(return_value=[]),
+            build_upstream_headers_fn=MagicMock(
+                return_value={"authorization": "Bearer sk-test"}
+            ),
+            execute_probe_request_fn=execute_probe_request_fn,
+            acquire_probe_lease_fn=acquire_probe_lease_fn,
+            release_probe_lease_fn=release_probe_lease_fn,
+            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
+            resolve_probe_jitter_seconds_fn=resolve_probe_jitter_seconds_fn,
+            sleep_fn=sleep_fn,
+        )
+
+        assert result.fused_status == "healthy"
+        assert state["slept"] is True
+        resolve_probe_jitter_seconds_fn.assert_called_once_with()
+        acquire_probe_lease_fn.assert_awaited_once()
+        release_probe_lease_fn.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_probe_runner_skips_jitter_for_manual_probe_requests(self):
+        from app.services.monitoring_service import run_connection_probe
+
+        vendor = MagicMock()
+        vendor.id = 32
+        vendor.key = "openai"
+
+        endpoint = MagicMock()
+        endpoint.id = 802
+        endpoint.base_url = "https://api.openai.com"
+
+        connection = MagicMock()
+        connection.id = 3004
+        connection.profile_id = 1
+        connection.endpoint_id = 802
+        connection.openai_probe_endpoint_variant = "responses"
+        connection.endpoint_rel = endpoint
+        connection.model_config_rel = MagicMock(
+            id=502,
+            api_family="openai",
+            model_id="gpt-5.4-mini",
+            vendor=vendor,
+            loadbalance_strategy=MagicMock(
+                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
+            ),
+        )
+
+        sleep_fn = AsyncMock()
+        resolve_probe_jitter_seconds_fn = MagicMock(return_value=10.0)
+
+        result = await run_connection_probe(
+            db=AsyncMock(),
+            client=AsyncMock(),
+            profile_id=1,
+            connection_id=connection.id,
+            load_connection_fn=AsyncMock(return_value=connection),
+            load_blocklist_rules_fn=AsyncMock(return_value=[]),
+            build_upstream_headers_fn=MagicMock(
+                return_value={"authorization": "Bearer sk-test"}
+            ),
+            execute_probe_request_fn=AsyncMock(
+                side_effect=[
+                    ("healthy", "Connection successful", 9),
+                    ("healthy", "Connection successful", 12),
+                ]
+            ),
+            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
+            resolve_probe_jitter_seconds_fn=resolve_probe_jitter_seconds_fn,
+            sleep_fn=sleep_fn,
+        )
+
+        assert result.fused_status == "healthy"
+        sleep_fn.assert_not_awaited()
+        resolve_probe_jitter_seconds_fn.assert_not_called()
+
 
 class TestMonitoringManualHealthChecksAndPersistence:
     def test_connections_router_mounts_model_scoped_preview_health_check_route(self):
