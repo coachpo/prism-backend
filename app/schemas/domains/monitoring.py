@@ -48,6 +48,7 @@ class MonitoringOverviewVendorItem(BaseModel):
     vendor_id: int
     vendor_key: str
     vendor_name: str
+    icon_key: str | None = None
     fused_status: str = "unknown"
     model_count: int
     connection_count: int

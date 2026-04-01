@@ -448,6 +448,7 @@ async def query_monitoring_overview(
                 vendor_id=vendor_id,
                 vendor_key=vendor.key,
                 vendor_name=vendor.name,
+                icon_key=vendor.icon_key,
                 fused_status=_roll_up_group_status(
                     [model_item.fused_status for model_item in model_items]
                 ),

@@ -19,6 +19,7 @@ from .mutation_helpers import (
     ensure_valid_model_type,
     load_model_config_or_404,
     replace_proxy_targets,
+    resolve_persisted_display_name,
     sync_renamed_model_references,
     validate_native_model_update,
 )
@@ -176,6 +177,12 @@ async def update_model_config_record(
         raise HTTPException(
             status_code=400,
             detail="loadbalance_strategy_id must be null for proxy models",
+        )
+
+    if "display_name" in update_data:
+        update_data["display_name"] = resolve_persisted_display_name(
+            model_id=new_model_id,
+            display_name=body.display_name,
         )
 
     apply_model_type_update_defaults(update_data, model_type=new_model_type)

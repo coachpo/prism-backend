@@ -133,13 +133,22 @@ def build_model_create_values(
         "vendor_id": vendor_id,
         "api_family": api_family,
         "model_id": model_id,
-        "display_name": display_name,
+        "display_name": resolve_persisted_display_name(
+            model_id=model_id,
+            display_name=display_name,
+        ),
         "model_type": model_type,
         "loadbalance_strategy_id": (
             None if model_type == "proxy" else loadbalance_strategy_id
         ),
         "is_enabled": is_enabled,
     }
+
+
+def resolve_persisted_display_name(*, model_id: str, display_name: str | None) -> str:
+    if display_name is None or not display_name.strip():
+        return model_id
+    return display_name
 
 
 def apply_model_type_update_defaults(
@@ -219,6 +228,7 @@ __all__ = [
     "ensure_valid_model_type",
     "load_model_config_or_404",
     "replace_proxy_targets",
+    "resolve_persisted_display_name",
     "sync_renamed_model_references",
     "validate_native_model_update",
 ]

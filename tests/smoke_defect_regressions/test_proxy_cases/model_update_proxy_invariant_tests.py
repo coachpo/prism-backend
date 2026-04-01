@@ -781,6 +781,24 @@ class TestDEF032_ProxyModelUpdateInvariants:
 
         assert "proxy_targets must be empty for native models" in str(exc_info.value)
 
+    def test_model_schema_normalizes_blank_display_name_inputs(self):
+        from app.schemas.schemas import ModelConfigCreate, ModelConfigUpdate
+
+        created = ModelConfigCreate(
+            vendor_id=1,
+            api_family="openai",
+            model_id="def032-display-name-normalized-create",
+            display_name="   ",
+            model_type="native",
+            proxy_targets=[],
+            loadbalance_strategy_id=1,
+            is_enabled=True,
+        )
+        updated = ModelConfigUpdate(display_name="   ")
+
+        assert created.display_name is None
+        assert updated.display_name is None
+
     def test_proxy_model_schema_rejects_duplicate_proxy_targets(self):
         from app.schemas.schemas import ModelConfigCreate, ProxyTargetReference
 
@@ -844,3 +862,94 @@ class TestDEF032_ProxyModelUpdateInvariants:
         assert "loadbalance_strategy_id is required for native models" in str(
             exc_info.value
         )
+
+    @pytest.mark.asyncio
+    async def test_create_and_update_model_normalize_blank_display_name_to_model_id(
+        self,
+    ):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import ModelConfig, Profile
+        from app.routers.models import create_model, update_model
+        from app.schemas.schemas import ModelConfigCreate, ModelConfigUpdate
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        model_id = f"def032-display-name-normalized-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            vendor = _make_vendor(
+                key=f"def032-display-name-vendor-{suffix}",
+                name=f"DEF032 Display Name Vendor {suffix}",
+                description="DEF032 display name vendor",
+            )
+            profile = Profile(
+                name=f"DEF032 Display Name Profile {suffix}",
+                is_active=False,
+                version=0,
+            )
+            db.add_all([vendor, profile])
+            await db.flush()
+
+            strategy = make_loadbalance_strategy(
+                profile_id=profile.id,
+                strategy_type="single",
+            )
+            db.add(strategy)
+            await db.flush()
+
+            created = await create_model(
+                body=ModelConfigCreate(
+                    vendor_id=vendor.id,
+                    api_family="openai",
+                    model_id=model_id,
+                    model_type="native",
+                    proxy_targets=[],
+                    loadbalance_strategy_id=strategy.id,
+                    is_enabled=True,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.flush()
+
+            stored_after_create = (
+                await db.execute(
+                    select(ModelConfig).where(
+                        ModelConfig.profile_id == profile.id,
+                        ModelConfig.model_id == model_id,
+                    )
+                )
+            ).scalar_one()
+
+            assert created.display_name == model_id
+            assert stored_after_create.display_name == model_id
+
+            updated_custom = await update_model(
+                model_config_id=stored_after_create.id,
+                body=ModelConfigUpdate(display_name="Friendly Display"),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.flush()
+
+            assert updated_custom.display_name == "Friendly Display"
+
+            updated_blank = await update_model(
+                model_config_id=stored_after_create.id,
+                body=ModelConfigUpdate(display_name="   "),
+                db=db,
+                profile_id=profile.id,
+            )
+            await db.flush()
+
+            stored_after_blank_update = (
+                await db.execute(
+                    select(ModelConfig).where(ModelConfig.id == stored_after_create.id)
+                )
+            ).scalar_one()
+
+            assert updated_blank.display_name == model_id
+            assert stored_after_blank_update.display_name == model_id

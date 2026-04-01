@@ -80,12 +80,14 @@ async def _insert_monitoring_query_fixture(
     openai_vendor = Vendor(
         key=f"openai-monitoring-{suffix}",
         name=f"OpenAI Monitoring {suffix}",
+        icon_key="openai",
         audit_enabled=False,
         audit_capture_bodies=False,
     )
     anthropic_vendor = Vendor(
         key=f"anthropic-monitoring-{suffix}",
         name=f"Anthropic Monitoring {suffix}",
+        icon_key="anthropic",
         audit_enabled=False,
         audit_capture_bodies=False,
     )
@@ -414,6 +416,7 @@ class TestMonitoringQueryContracts:
                         "vendor_id": 11,
                         "vendor_key": "openai",
                         "vendor_name": "OpenAI",
+                        "icon_key": "openai",
                         "fused_status": "degraded",
                         "model_count": 2,
                         "connection_count": 3,
@@ -477,6 +480,7 @@ class TestMonitoringQueryContracts:
 
         assert len(payload.vendors) == 1
         assert payload.vendors[0].vendor_id == 11
+        assert payload.vendors[0].icon_key == "openai"
         assert payload.vendors[0].model_count == 2
         assert payload.vendors[0].models[0].model_config_id == 21
         assert payload.vendors[0].models[0].connections[0].connection_id == 31
@@ -637,6 +641,7 @@ class TestMonitoringQueryBehavior:
         ]
 
         openai_item = vendors_by_key[str(fixture["openai_vendor_key"])]
+        assert openai_item.icon_key == "openai"
         assert openai_item.fused_status == "degraded"
         assert openai_item.model_count == 2
         assert openai_item.connection_count == 3
@@ -677,6 +682,7 @@ class TestMonitoringQueryBehavior:
         assert degraded_row.conversation_delay_ms is None
 
         anthropic_item = vendors_by_key[str(fixture["anthropic_vendor_key"])]
+        assert anthropic_item.icon_key == "anthropic"
         assert anthropic_item.fused_status == "healthy"
         assert anthropic_item.model_count == 1
         assert anthropic_item.connection_count == 1

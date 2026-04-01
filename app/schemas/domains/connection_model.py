@@ -373,6 +373,14 @@ def validate_unique_proxy_targets(
         raise ValueError("proxy_targets must contain unique target_model_id values")
 
 
+def normalize_display_name_input(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if not value.strip():
+        return None
+    return value
+
+
 class ModelConfigBase(BaseModel):
     vendor_id: int
     api_family: ApiFamily
@@ -381,6 +389,11 @@ class ModelConfigBase(BaseModel):
     model_type: Literal["native", "proxy"] = "native"
     proxy_targets: list[ProxyTargetReference] = Field(default_factory=list)
     loadbalance_strategy_id: int | None = None
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def validate_display_name(cls, value: str | None) -> str | None:
+        return normalize_display_name_input(value)
 
     @model_validator(mode="after")
     def validate_strategy_attachment(self):
@@ -409,6 +422,11 @@ class ModelConfigUpdate(BaseModel):
     proxy_targets: list[ProxyTargetReference] | None = None
     loadbalance_strategy_id: int | None = None
     is_enabled: bool | None = None
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def validate_display_name(cls, value: str | None) -> str | None:
+        return normalize_display_name_input(value)
 
     @model_validator(mode="after")
     def validate_proxy_targets(self):
