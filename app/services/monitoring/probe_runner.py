@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,6 +12,7 @@ from sqlalchemy import or_, select  # pyright: ignore[reportMissingImports]
 from sqlalchemy.ext.asyncio import AsyncSession  # pyright: ignore[reportMissingImports]
 from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
+from app.core.database import AsyncSessionLocal
 from app.core.time import ensure_utc_datetime, utc_now
 from app.models.models import Connection, HeaderBlocklistRule, ModelConfig
 from app.routers.connections_domains.health_check_request_helpers import (
@@ -26,6 +28,8 @@ from app.services.proxy_service import build_upstream_headers, build_upstream_ur
 
 MIN_MONITORING_PROBE_JITTER_SECONDS = 0.0
 MAX_MONITORING_PROBE_JITTER_SECONDS = 10.0
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -411,6 +415,7 @@ async def run_connection_probe(
             )
         lease_token = lease_result.lease_token
 
+    probe_failed = False
     try:
         result = await _execute_monitoring_probe_checks(
             client=client,
@@ -457,14 +462,34 @@ async def run_connection_probe(
             failure_kind=result.failure_kind,
             detail=result.detail,
         )
+    except BaseException:
+        probe_failed = True
+        raise
     finally:
         if lease_token is not None:
-            await release_probe_lease_fn(
-                session=db,
-                profile_id=profile_id,
-                lease_token=lease_token,
-                now_at=normalized_checked_at,
-            )
+            if probe_failed:
+                try:
+                    async with AsyncSessionLocal() as cleanup_session:
+                        await release_probe_lease_fn(
+                            session=cleanup_session,
+                            profile_id=profile_id,
+                            lease_token=lease_token,
+                            now_at=normalized_checked_at,
+                        )
+                        await cleanup_session.commit()
+                except Exception:
+                    logger.exception(
+                        "Monitoring probe lease cleanup failed: profile_id=%d connection_id=%d",
+                        profile_id,
+                        connection_id,
+                    )
+            else:
+                await release_probe_lease_fn(
+                    session=db,
+                    profile_id=profile_id,
+                    lease_token=lease_token,
+                    now_at=normalized_checked_at,
+                )
 
 
 __all__ = [
