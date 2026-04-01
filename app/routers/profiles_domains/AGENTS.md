@@ -20,7 +20,7 @@ profiles_domains/
 - Keep `profiles.py` thin and inject `ensure_profile_invariants()` from the service layer instead of recreating that logic here.
 - Keep max-profile-count and name-availability rules in `helpers.py`.
 - Keep active-profile lookup and update locking explicit through helper loaders.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

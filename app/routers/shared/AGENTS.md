@@ -24,7 +24,7 @@ shared/
 - Raise router-facing exceptions here only when the helper directly owns that validation boundary, as `endpoint_records.py` does for duplicate endpoint names.
 - Keep row-locking and ordered-field normalization generic enough for reuse across management routes.
 - Let service packages keep business logic and side effects; `shared/` is for cross-router helper seams, not service orchestration.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

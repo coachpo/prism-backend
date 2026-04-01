@@ -31,7 +31,7 @@ auth/
 - Keep proxy-key parsing, verification, limits, and serialization in `proxy_keys.py`.
 - Keep refresh-token rotation and family revocation in `sessions.py` so router handlers stay thin.
 - Keep email side effects in `email_delivery.py`; password-reset and email-verification flows should call into it instead of opening SMTP clients elsewhere.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

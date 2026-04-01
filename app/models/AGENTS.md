@@ -47,7 +47,7 @@ models/
 - Use `observability.py` for telemetry, logs, settings, and persisted loadbalance current-state or event persistence.
 - Keep business logic out of models; use properties for simple derivations like secret masking.
 - Ensure all new models are re-exported in `models/models.py` to maintain the public ORM boundary.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 - Do not add an ORM class to a domain file and forget to expose it from `models.py`.

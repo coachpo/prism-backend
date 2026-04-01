@@ -61,7 +61,7 @@ services/
 - Keep cleanup helpers explicit and separate from request-serving code so retention work stays testable.
 - Keep one-off reporting helpers at the service root only when they don't warrant a new package. `loadbalance_event_summary.py` is that kind of module.
 - Keep the loadbalancer package decomposed. Execution, scoring, runtime-store, limiter, recovery, and strategy/admin seams should stay separate instead of collapsing back into a flat service module.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

@@ -31,7 +31,7 @@ stats_domains/
 - Normalize datetime filters through `helpers.py` before calling the stats service layer.
 - Keep request-log deletion wired through the background cleanup helper instead of inlining delete work in the route shell.
 - Keep usage-snapshot, summary, throughput, spending, and metrics batch handlers split instead of merging them into one large module.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 

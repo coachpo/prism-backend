@@ -75,7 +75,7 @@ backend/
 - Keep routers thin. Dense logic belongs in `*_domains/`, `connections_domains/`, `proxy_domains/`, or service modules.
 - Use `app.schemas.schemas`, `app.models.models`, and the service-root `*_service.py` modules as the supported re-export boundaries.
 - Keep management auth and profile rules separate from runtime proxy auth and API-family-native routing semantics.
-- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
+- When doing upgrade work, backward compatibility with the pre-upgrade implementation is not a goal unless explicitly requested. Prefer the best current implementation shape over preserving the old one. Do not add compatibility shims, dual paths, or fallback behavior solely to preserve the old interface.
 
 ## ANTI-PATTERNS
 
