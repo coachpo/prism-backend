@@ -14,7 +14,13 @@ from sqlalchemy.orm import selectinload  # pyright: ignore[reportMissingImports]
 
 from app.core.database import AsyncSessionLocal
 from app.core.time import ensure_utc_datetime, utc_now
-from app.models.models import Connection, HeaderBlocklistRule, ModelConfig
+from app.models.models import (
+    Connection,
+    HeaderBlocklistRule,
+    ModelConfig,
+    RoutingConnectionRuntimeState,
+)
+from app.services.background_tasks import BackgroundTaskManager
 from app.routers.connections_domains.health_check_request_helpers import (
     _execute_health_check_request,
 )
@@ -28,6 +34,9 @@ from app.services.proxy_service import build_upstream_headers, build_upstream_ur
 
 MIN_MONITORING_PROBE_JITTER_SECONDS = 0.0
 MAX_MONITORING_PROBE_JITTER_SECONDS = 10.0
+DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS = 300
+MIN_MONITORING_PROBE_INTERVAL_SECONDS = 30
+MAX_MONITORING_PROBE_INTERVAL_SECONDS = 3_600
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +72,40 @@ class ProbeCheckOutcome:
     @property
     def health_status(self) -> str:
         return "healthy" if self.fused_status == "healthy" else "unhealthy"
+
+
+def resolve_monitoring_probe_interval_seconds(value: int | None) -> int:
+    if value is None:
+        return DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
+    return max(
+        MIN_MONITORING_PROBE_INTERVAL_SECONDS,
+        min(MAX_MONITORING_PROBE_INTERVAL_SECONDS, int(value)),
+    )
+
+
+def is_connection_due_for_probe(
+    state_row: RoutingConnectionRuntimeState | None,
+    *,
+    interval_seconds: int,
+    now_at: datetime,
+) -> bool:
+    if state_row is None:
+        return True
+
+    if state_row.circuit_state == "open":
+        probe_available_at = ensure_utc_datetime(state_row.probe_available_at)
+        blocked_until_at = ensure_utc_datetime(state_row.blocked_until_at)
+        if probe_available_at is None:
+            probe_available_at = blocked_until_at
+        return probe_available_at is not None and probe_available_at <= now_at
+
+    if state_row.circuit_state == "half_open":
+        return False
+
+    last_probe_at = ensure_utc_datetime(state_row.last_probe_at)
+    if last_probe_at is None:
+        return True
+    return last_probe_at.timestamp() + interval_seconds <= now_at.timestamp()
 
 
 def _build_monitoring_conversation_request(
@@ -183,6 +226,22 @@ async def _load_enabled_blocklist_rules(
     return list(result.scalars().all())
 
 
+async def _load_runtime_state(
+    db: AsyncSession,
+    *,
+    profile_id: int,
+    connection_id: int,
+) -> RoutingConnectionRuntimeState | None:
+    return (
+        await db.execute(
+            select(RoutingConnectionRuntimeState).where(
+                RoutingConnectionRuntimeState.profile_id == profile_id,
+                RoutingConnectionRuntimeState.connection_id == connection_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
 def _resolve_openai_probe_endpoint_variant(
     connection: Connection, *, api_family: str
 ) -> str:
@@ -216,6 +275,91 @@ def _resolve_monitoring_probe_jitter_seconds() -> float:
         MIN_MONITORING_PROBE_JITTER_SECONDS,
         MAX_MONITORING_PROBE_JITTER_SECONDS,
     )
+
+
+def _resolve_enqueue_probe_resources(
+    *,
+    background_task_manager: BackgroundTaskManager | None,
+    client: httpx.AsyncClient | None,
+) -> tuple[BackgroundTaskManager | None, httpx.AsyncClient | None]:
+    if background_task_manager is not None and client is not None:
+        return background_task_manager, client
+
+    try:
+        from app.main import app as prism_app
+    except Exception:
+        return background_task_manager, client
+
+    resolved_background_task_manager = background_task_manager or getattr(
+        prism_app.state,
+        "background_task_manager",
+        None,
+    )
+    resolved_client = client or getattr(prism_app.state, "http_client", None)
+    return resolved_background_task_manager, resolved_client
+
+
+def enqueue_connection_probe(
+    *,
+    profile_id: int,
+    connection_id: int,
+    background_task_manager: BackgroundTaskManager | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    resolved_background_task_manager, resolved_client = (
+        _resolve_enqueue_probe_resources(
+            background_task_manager=background_task_manager,
+            client=client,
+        )
+    )
+    if (
+        resolved_background_task_manager is None
+        or not getattr(resolved_background_task_manager, "started", False)
+        or resolved_client is None
+    ):
+        return False
+
+    async def run_immediate_probe() -> None:
+        async with AsyncSessionLocal() as session:
+            try:
+                await run_connection_probe(
+                    db=session,
+                    client=resolved_client,
+                    profile_id=profile_id,
+                    connection_id=connection_id,
+                    acquire_probe_lease=True,
+                    resolve_probe_jitter_seconds_fn=lambda: 0.0,
+                )
+                await session.commit()
+            except HTTPException as exc:
+                await session.rollback()
+                if exc.status_code == 409:
+                    logger.debug(
+                        "Skipping immediate probe enqueue run: profile_id=%d connection_id=%d detail=%s",
+                        profile_id,
+                        connection_id,
+                        exc.detail,
+                    )
+                    return
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+
+    try:
+        resolved_background_task_manager.enqueue(
+            name=f"monitoring-immediate-probe:{profile_id}:{connection_id}",
+            run=run_immediate_probe,
+            max_retries=0,
+        )
+        return True
+    except Exception:
+        logger.exception(
+            "Failed to enqueue immediate connection probe: profile_id=%d connection_id=%d",
+            profile_id,
+            connection_id,
+        )
+        return False
 
 
 async def _execute_monitoring_probe_checks(
@@ -376,6 +520,24 @@ async def run_connection_probe(
         profile_id=profile_id,
         connection_id=connection_id,
     )
+    if acquire_probe_lease:
+        state_row = await _load_runtime_state(
+            db,
+            profile_id=profile_id,
+            connection_id=connection_id,
+        )
+        interval_seconds = resolve_monitoring_probe_interval_seconds(
+            getattr(connection, "monitoring_probe_interval_seconds", None)
+        )
+        if not is_connection_due_for_probe(
+            state_row,
+            interval_seconds=interval_seconds,
+            now_at=normalized_checked_at,
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Monitoring probe unavailable: probe_not_due",
+            )
     endpoint = connection.endpoint_rel
     if endpoint is None:
         raise HTTPException(status_code=400, detail="Connection endpoint is missing")
@@ -406,6 +568,7 @@ async def run_connection_probe(
             profile_id=profile_id,
             connection_id=connection_id,
             lease_ttl_seconds=30,
+            interval_seconds=interval_seconds,
             now_at=normalized_checked_at,
         )
         if not lease_result.admitted:
@@ -493,7 +656,11 @@ async def run_connection_probe(
 
 
 __all__ = [
+    "DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS",
     "ProbeExecutionResult",
+    "enqueue_connection_probe",
+    "is_connection_due_for_probe",
     "probe_connection_health",
+    "resolve_monitoring_probe_interval_seconds",
     "run_connection_probe",
 ]
