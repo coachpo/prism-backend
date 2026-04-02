@@ -18,11 +18,13 @@ from app.models.models import (
     UserSetting,
     Vendor,
 )
-from app.services.loadbalancer.policy import canonicalize_routing_policy_document
+from app.services.loadbalancer.policy import (
+    build_default_auto_recovery_document,
+    build_default_routing_policy_document,
+)
 from app.services.monitoring.scheduler import (
     DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
 )
-from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
@@ -90,7 +92,11 @@ SYSTEM_BLOCKLIST_DEFAULTS: list[dict[str, str]] = [
     },
 ]
 
-DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = "Default adaptive routing"
+DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME = "Default adaptive routing"
+DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME = "Default legacy routing"
+DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = (
+    DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME
+)
 LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME = "Default failover"
 
 
@@ -122,7 +128,23 @@ async def seed_profile_invariants() -> None:
         logger.info("Ensured default profile invariants")
 
 
-async def seed_loadbalance_strategy_preset() -> None:
+def _canonicalize_seeded_legacy_strategy(strategy: LoadbalanceStrategy) -> None:
+    strategy.name = DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+    strategy.strategy_type = "legacy"
+    strategy.legacy_strategy_type = "round-robin"
+    strategy.auto_recovery = build_default_auto_recovery_document()
+    strategy.routing_policy = None
+
+
+def _canonicalize_seeded_adaptive_strategy(strategy: LoadbalanceStrategy) -> None:
+    strategy.name = DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME
+    strategy.strategy_type = "adaptive"
+    strategy.legacy_strategy_type = None
+    strategy.auto_recovery = None
+    strategy.routing_policy = build_default_routing_policy_document()
+
+
+async def seed_loadbalance_strategy_presets() -> None:
     async with database_core.AsyncSessionLocal() as session:
         default_profile = (
             await session.execute(
@@ -135,7 +157,7 @@ async def seed_loadbalance_strategy_preset() -> None:
         if default_profile is None:
             return
 
-        matching_presets = list(
+        existing_strategies = list(
             (
                 await session.execute(
                     select(LoadbalanceStrategy)
@@ -143,7 +165,8 @@ async def seed_loadbalance_strategy_preset() -> None:
                         LoadbalanceStrategy.profile_id == default_profile.id,
                         LoadbalanceStrategy.name.in_(
                             [
-                                DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
+                                DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME,
+                                DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
                                 LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
                             ]
                         ),
@@ -154,67 +177,63 @@ async def seed_loadbalance_strategy_preset() -> None:
             .scalars()
             .all()
         )
-        if any(
-            strategy.name == DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
-            for strategy in matching_presets
-        ):
-            return
-
-        legacy_preset = next(
+        adaptive_strategy = next(
             (
                 strategy
-                for strategy in matching_presets
+                for strategy in existing_strategies
+                if strategy.name == DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME
+            ),
+            None,
+        )
+        legacy_strategy = next(
+            (
+                strategy
+                for strategy in existing_strategies
+                if strategy.name == DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+            ),
+            None,
+        )
+        old_failover_strategy = next(
+            (
+                strategy
+                for strategy in existing_strategies
                 if strategy.name == LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
             ),
             None,
         )
-        if legacy_preset is not None:
-            legacy_preset.name = DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
+
+        changed = False
+
+        if adaptive_strategy is None:
+            adaptive_strategy = LoadbalanceStrategy(profile_id=default_profile.id)
+            session.add(adaptive_strategy)
+            changed = True
+        _canonicalize_seeded_adaptive_strategy(adaptive_strategy)
+
+        if legacy_strategy is None and old_failover_strategy is not None:
+            legacy_strategy = old_failover_strategy
+            changed = True
+
+        if legacy_strategy is None:
+            legacy_strategy = LoadbalanceStrategy(profile_id=default_profile.id)
+            session.add(legacy_strategy)
+            changed = True
+        _canonicalize_seeded_legacy_strategy(legacy_strategy)
+
+        if (
+            old_failover_strategy is not None
+            and old_failover_strategy is not legacy_strategy
+        ):
+            await session.delete(old_failover_strategy)
+            changed = True
+
+        await session.flush()
+        if changed:
             await session.commit()
             logger.info(
-                "Renamed default loadbalance strategy preset for profile %d",
+                "Seeded default loadbalance strategy presets for profile %d",
                 default_profile.id,
             )
-            return
-
-        session.add(
-            LoadbalanceStrategy(
-                profile_id=default_profile.id,
-                name=DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME,
-                routing_policy=canonicalize_routing_policy_document(
-                    {
-                        "kind": "adaptive",
-                        "routing_objective": "minimize_latency",
-                        "deadline_budget_ms": 30_000,
-                        "hedge": {
-                            "enabled": False,
-                            "delay_ms": 1_500,
-                            "max_additional_attempts": 1,
-                        },
-                        "circuit_breaker": {
-                            "failure_status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),
-                            "ban_mode": "off",
-                        },
-                        "admission": {
-                            "respect_qps_limit": True,
-                            "respect_in_flight_limits": True,
-                        },
-                        "monitoring": {
-                            "enabled": True,
-                            "stale_after_seconds": 300,
-                            "endpoint_ping_weight": 1.0,
-                            "conversation_delay_weight": 1.0,
-                            "failure_penalty_weight": 2.0,
-                        },
-                    }
-                ),
-            )
-        )
-        await session.commit()
-        logger.info(
-            "Seeded default loadbalance strategy preset for profile %d",
-            default_profile.id,
-        )
 
 
 async def seed_header_blocklist_rules() -> None:
@@ -366,7 +385,7 @@ async def run_startup_sequence() -> None:
     await run_startup_migrations()
     await seed_vendors()
     await seed_profile_invariants()
-    await seed_loadbalance_strategy_preset()
+    await seed_loadbalance_strategy_presets()
     await seed_user_settings()
     await seed_app_auth_settings()
     await encrypt_endpoint_secrets()
@@ -398,7 +417,7 @@ __all__ = [
     "run_startup_sequence",
     "seed_app_auth_settings",
     "seed_header_blocklist_rules",
-    "seed_loadbalance_strategy_preset",
+    "seed_loadbalance_strategy_presets",
     "seed_profile_invariants",
     "seed_vendors",
     "seed_user_settings",

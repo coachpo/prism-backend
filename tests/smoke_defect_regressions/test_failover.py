@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -55,19 +55,21 @@ class TestLoadbalanceStrategyFieldValidation:
             exc_info.value
         )
 
-    def test_single_strategy_rejects_recovery_enabled(self):
+    def test_adaptive_strategy_rejects_legacy_recovery_fields(self):
         from app.schemas.schemas import LoadbalanceStrategyCreate
         from pydantic import ValidationError
 
         with pytest.raises(ValidationError) as exc_info:
             LoadbalanceStrategyCreate.model_validate(
                 {
-                    "name": "single-with-recovery",
-                    "strategy_type": "single",
+                    "name": "adaptive-with-recovery",
+                    "strategy_type": "adaptive",
+                    "legacy_strategy_type": "single",
                     "auto_recovery": make_auto_recovery_enabled(),
+                    "routing_policy": make_routing_policy_adaptive(),
                 }
             )
-        assert "routing_policy" in str(exc_info.value)
+        assert "legacy_strategy_type" in str(exc_info.value)
 
     def test_config_export_includes_strategy_reference(self):
         from app.schemas.schemas import (
@@ -78,6 +80,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         strategy = ConfigLoadbalanceStrategyExport(
             name="failover-primary",
+            strategy_type="adaptive",
             routing_policy=make_routing_policy_adaptive(),
         )
         model = ConfigModelExport(
@@ -94,7 +97,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 )
             ],
         )
-        assert strategy.routing_policy.kind == "adaptive"
+        assert strategy.strategy_type == "adaptive"
         exported = model.model_dump(mode="json")
         assert exported["loadbalance_strategy_name"] == "failover-primary"
 
@@ -103,6 +106,7 @@ class TestLoadbalanceStrategyFieldValidation:
 
         strategy = ConfigLoadbalanceStrategyExport(
             name="failover-primary",
+            strategy_type="adaptive",
             routing_policy=make_routing_policy_adaptive(
                 routing_objective="maximize_availability",
                 failure_status_codes=[503, 429],
@@ -131,14 +135,16 @@ class TestLoadbalanceStrategyFieldValidation:
             max_open_strikes_before_ban=3,
             ban_duration_seconds=600,
         )
-        assert "strategy_type" not in exported
-        assert "auto_recovery" not in exported
+        assert exported["strategy_type"] == "adaptive"
+        assert exported["legacy_strategy_type"] is None
+        assert exported["auto_recovery"] is None
 
     def test_strategy_contract_accepts_sorted_unique_failover_status_codes(self):
         from app.schemas.schemas import ConfigLoadbalanceStrategyImport
 
         strategy = ConfigLoadbalanceStrategyImport(
             name="failover-primary",
+            strategy_type="adaptive",
             routing_policy=make_routing_policy_adaptive(
                 failure_status_codes=[503, 429]
             ),
@@ -158,6 +164,7 @@ class TestLoadbalanceStrategyFieldValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigLoadbalanceStrategyImport(
                 name="failover-primary",
+                strategy_type="adaptive",
                 routing_policy=make_routing_policy_adaptive(
                     failure_status_codes=[99, 503]
                 ),
@@ -173,6 +180,7 @@ class TestLoadbalanceStrategyFieldValidation:
             ConfigLoadbalanceStrategyImport.model_validate(
                 {
                     "name": "failover-primary",
+                    "strategy_type": "adaptive",
                     "routing_policy": {
                         **make_routing_policy_adaptive(),
                         "circuit_breaker": {
@@ -211,6 +219,7 @@ class TestLoadbalanceStrategyFieldValidation:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="adaptive-availability",
+                    strategy_type="adaptive",
                     routing_policy=make_routing_policy_adaptive(
                         routing_objective="maximize_availability",
                         failure_status_codes=[503, 429],
@@ -262,6 +271,7 @@ class TestLoadbalanceStrategyFieldValidation:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="adaptive-latency",
+                    strategy_type="adaptive",
                     routing_policy=make_routing_policy_adaptive(
                         failure_status_codes=[503, 429],
                         base_open_seconds=45,
@@ -431,6 +441,7 @@ class TestLoadbalanceStrategyFieldValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
@@ -501,6 +512,7 @@ class TestLoadbalanceStrategyFieldValidation:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="failover-primary",
+                    strategy_type="adaptive",
                     routing_policy=make_routing_policy_adaptive(),
                 )
             ],
@@ -530,6 +542,7 @@ class TestLoadbalanceStrategyFieldValidation:
         assert len(reimported.models) == 1
         strategy = reimported.loadbalance_strategies[0]
         assert strategy.name == "failover-primary"
+        assert strategy.strategy_type == "adaptive"
         assert strategy.routing_policy.kind == "adaptive"
         model = reimported.models[0]
         assert model.loadbalance_strategy_name == "failover-primary"
@@ -742,10 +755,12 @@ class TestLoadbalanceCurrentStateContracts:
         ) as reset_connection_current_state:
             response = await reset_loadbalance_current_state(
                 connection_id=44,
+                db=AsyncMock(),
                 profile_id=8,
             )
 
         reset_connection_current_state.assert_awaited_once_with(
+            db=ANY,
             profile_id=8,
             connection_id=44,
         )

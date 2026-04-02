@@ -5,23 +5,16 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import LoadbalanceStrategy, Profile
-from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
+from app.services.loadbalancer.policy import (
+    build_default_auto_recovery_document,
+    build_default_routing_policy_document,
+)
 
 
 class TestDEF085_LoadbalanceStrategyPresetSeed:
-    @pytest.mark.asyncio
-    async def test_seed_loadbalance_strategy_preset_creates_adaptive_strategy_on_default_profile(
-        self,
-    ):
-        from app.main import seed_profile_invariants
-        from app.bootstrap import startup
-
-        await seed_profile_invariants()
-        await getattr(startup, "seed_loadbalance_strategy_preset")()
-        await getattr(startup, "seed_loadbalance_strategy_preset")()
-
+    async def _get_default_profile(self) -> Profile:
         async with AsyncSessionLocal() as session:
-            default_profile = (
+            return (
                 await session.execute(
                     select(Profile)
                     .where(Profile.is_default.is_(True))
@@ -29,32 +22,171 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
                     .limit(1)
                 )
             ).scalar_one()
-            strategies = (
+
+    async def _replace_default_profile_strategies(
+        self, strategies: list[LoadbalanceStrategy]
+    ) -> None:
+        default_profile = await self._get_default_profile()
+        async with AsyncSessionLocal() as session:
+            existing = list(
+                (
+                    await session.execute(
+                        select(LoadbalanceStrategy).where(
+                            LoadbalanceStrategy.profile_id == default_profile.id
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for strategy in existing:
+                await session.delete(strategy)
+            await session.flush()
+            for strategy in strategies:
+                strategy.profile_id = default_profile.id
+                session.add(strategy)
+            await session.commit()
+
+    @pytest.mark.asyncio
+    async def test_seed_loadbalance_strategy_presets_creates_both_defaults_idempotently(
+        self,
+    ):
+        from app.main import seed_profile_invariants
+        from app.bootstrap import startup
+
+        await seed_profile_invariants()
+        await self._replace_default_profile_strategies([])
+        await getattr(startup, "seed_loadbalance_strategy_presets")()
+        await getattr(startup, "seed_loadbalance_strategy_presets")()
+
+        default_profile = await self._get_default_profile()
+        async with AsyncSessionLocal() as session:
+            strategies = list(
                 (
                     await session.execute(
                         select(LoadbalanceStrategy)
                         .where(LoadbalanceStrategy.profile_id == default_profile.id)
-                        .order_by(LoadbalanceStrategy.id.asc())
+                        .order_by(LoadbalanceStrategy.name.asc())
                     )
                 )
                 .scalars()
                 .all()
             )
 
-        preset_strategies = [
-            strategy
-            for strategy in strategies
-            if strategy.name == startup.DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
-        ]
-
         assert default_profile.is_default is True
-        assert len(preset_strategies) == 1
-        assert preset_strategies[0].profile_id == default_profile.id
-        assert preset_strategies[0].strategy_type == "adaptive"
-        assert preset_strategies[0].routing_policy == make_routing_policy_adaptive()
+        assert {strategy.name for strategy in strategies} == {
+            startup.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
+            startup.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME,
+        }
+
+        strategies_by_name = {strategy.name: strategy for strategy in strategies}
+        legacy_strategy = strategies_by_name[
+            startup.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+        ]
+        adaptive_strategy = strategies_by_name[
+            startup.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME
+        ]
+        assert legacy_strategy.strategy_type == "legacy"
+        assert legacy_strategy.legacy_strategy_type == "round-robin"
+        assert legacy_strategy.auto_recovery == build_default_auto_recovery_document()
+        assert legacy_strategy.routing_policy is None
+
+        assert adaptive_strategy.strategy_type == "adaptive"
+        assert adaptive_strategy.legacy_strategy_type is None
+        assert adaptive_strategy.auto_recovery is None
+        assert (
+            adaptive_strategy.routing_policy == build_default_routing_policy_document()
+        )
 
     @pytest.mark.asyncio
-    async def test_run_startup_sequence_seeds_preset_after_profile_invariants(self):
+    async def test_seed_loadbalance_strategy_presets_keeps_existing_adaptive_default_and_adds_missing_legacy(
+        self,
+    ):
+        from app.main import seed_profile_invariants
+        from app.bootstrap import startup
+
+        await seed_profile_invariants()
+        await self._replace_default_profile_strategies(
+            [
+                LoadbalanceStrategy(
+                    name=startup.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME,
+                    strategy_type="adaptive",
+                    routing_policy=build_default_routing_policy_document(),
+                )
+            ]
+        )
+
+        await getattr(startup, "seed_loadbalance_strategy_presets")()
+
+        default_profile = await self._get_default_profile()
+        async with AsyncSessionLocal() as session:
+            strategies = list(
+                (
+                    await session.execute(
+                        select(LoadbalanceStrategy)
+                        .where(LoadbalanceStrategy.profile_id == default_profile.id)
+                        .order_by(LoadbalanceStrategy.name.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert {strategy.name for strategy in strategies} == {
+            startup.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME,
+            startup.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
+        }
+
+    @pytest.mark.asyncio
+    async def test_seed_loadbalance_strategy_presets_replaces_old_default_failover_row_with_legacy_default(
+        self,
+    ):
+        from app.main import seed_profile_invariants
+        from app.bootstrap import startup
+
+        await seed_profile_invariants()
+        await self._replace_default_profile_strategies(
+            [
+                LoadbalanceStrategy(
+                    name=startup.LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
+                    strategy_type="legacy",
+                    legacy_strategy_type="fill-first",
+                    auto_recovery=build_default_auto_recovery_document(),
+                )
+            ]
+        )
+
+        await getattr(startup, "seed_loadbalance_strategy_presets")()
+        await getattr(startup, "seed_loadbalance_strategy_presets")()
+
+        default_profile = await self._get_default_profile()
+        async with AsyncSessionLocal() as session:
+            strategies = list(
+                (
+                    await session.execute(
+                        select(LoadbalanceStrategy)
+                        .where(LoadbalanceStrategy.profile_id == default_profile.id)
+                        .order_by(LoadbalanceStrategy.name.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert {strategy.name for strategy in strategies} == {
+            startup.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME,
+            startup.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME,
+        }
+        strategies_by_name = {strategy.name: strategy for strategy in strategies}
+        legacy_strategy = strategies_by_name[
+            startup.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+        ]
+        assert legacy_strategy.strategy_type == "legacy"
+        assert legacy_strategy.legacy_strategy_type == "round-robin"
+        assert legacy_strategy.auto_recovery == build_default_auto_recovery_document()
+
+    @pytest.mark.asyncio
+    async def test_run_startup_sequence_seeds_presets_after_profile_invariants(self):
         from app.bootstrap.startup import run_startup_sequence
 
         calls: list[str] = []
@@ -72,8 +204,8 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
                 _record("profile_invariants"),
             ),
             patch(
-                "app.bootstrap.startup.seed_loadbalance_strategy_preset",
-                _record("strategy_preset"),
+                "app.bootstrap.startup.seed_loadbalance_strategy_presets",
+                _record("strategy_presets"),
                 create=True,
             ),
             patch("app.bootstrap.startup.seed_user_settings", _record("user_settings")),
@@ -96,7 +228,7 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
             "migrations",
             "vendors",
             "profile_invariants",
-            "strategy_preset",
+            "strategy_presets",
             "user_settings",
             "auth_settings",
             "encrypt_secrets",

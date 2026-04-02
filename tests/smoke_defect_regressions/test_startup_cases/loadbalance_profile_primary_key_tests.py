@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -61,9 +62,122 @@ async def _drop_database(database_url: str) -> None:
     await engine.dispose()
 
 
+async def _mutate_database_to_legacy_runtime_cleanup_shape(database_url: str) -> None:
+    engine = create_async_engine(database_url)
+    async with engine.begin() as conn:
+        await conn.execute(
+            text(
+                "ALTER TABLE loadbalance_strategies DROP CONSTRAINT IF EXISTS chk_loadbalance_strategies_shape"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE loadbalance_strategies DROP CONSTRAINT IF EXISTS chk_loadbalance_strategies_legacy_strategy_type"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE loadbalance_strategies DROP CONSTRAINT IF EXISTS chk_loadbalance_strategies_type"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE loadbalance_strategies DROP COLUMN IF EXISTS legacy_strategy_type"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE loadbalance_strategies DROP COLUMN IF EXISTS routing_policy"
+            )
+        )
+        await conn.execute(
+            text(
+                "ALTER TABLE routing_connection_runtime_state DROP CONSTRAINT IF EXISTS ck_rt_state_circuit_state"
+            )
+        )
+        for column_name in [
+            "probe_eligible_logged",
+            "circuit_state",
+            "probe_available_at",
+            "live_p95_latency_ms",
+            "last_live_failure_kind",
+            "last_live_failure_at",
+            "last_live_success_at",
+            "last_probe_status",
+            "last_probe_at",
+            "endpoint_ping_ewma_ms",
+            "conversation_delay_ewma_ms",
+        ]:
+            await conn.execute(
+                text(
+                    f"ALTER TABLE routing_connection_runtime_state DROP COLUMN IF EXISTS {column_name}"
+                )
+            )
+        await conn.execute(
+            text(
+                "UPDATE alembic_version SET version_num = '0007_legacy_runtime_cleanup'"
+            )
+        )
+    await engine.dispose()
+
+
 class TestDEF075_LoadbalancePrimaryKeyContract:
+    def test_dual_strategy_migration_only_recreates_round_robin_table_when_missing(
+        self,
+    ):
+        migration = importlib.import_module(
+            "app.alembic.versions.0004_dual_strategy_contract"
+        )
+
+        created_tables: list[str] = []
+        created_indexes: list[str] = []
+
+        class _Inspector:
+            def get_columns(self, table_name: str):
+                assert table_name == "loadbalance_strategies"
+                return [{"name": "routing_policy"}]
+
+            def has_table(self, table_name: str) -> bool:
+                assert table_name == "loadbalance_round_robin_state"
+                return True
+
+        class _OpStub:
+            def add_column(self, *args, **kwargs):
+                return None
+
+            def alter_column(self, *args, **kwargs):
+                return None
+
+            def execute(self, *args, **kwargs):
+                return None
+
+            def create_check_constraint(self, *args, **kwargs):
+                return None
+
+            def get_bind(self):
+                return object()
+
+            def create_table(self, name, *args, **kwargs):
+                created_tables.append(name)
+
+            def create_index(self, name, *args, **kwargs):
+                created_indexes.append(name)
+
+        original_op = migration.op
+        original_inspect = migration.sa.inspect
+        try:
+            migration.op = _OpStub()
+            migration.sa.inspect = lambda bind: _Inspector()
+            migration.upgrade()
+        finally:
+            migration.op = original_op
+            migration.sa.inspect = original_inspect
+
+        assert created_tables == []
+        assert created_indexes == []
+
     @pytest.mark.asyncio
-    async def test_initial_schema_creates_profile_vendor_primary_keys_and_auto_recovery_storage(
+    async def test_initial_schema_creates_profile_vendor_primary_keys_and_dual_strategy_columns(
         self, test_database_url: str
     ):
         drift_database_url = _database_url_with_name(
@@ -143,9 +257,83 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
             assert vendors_pk == ["PRIMARY KEY (id)"]
             assert loadbalance_table == "loadbalance_events"
             assert "routing_policy" in strategy_columns
-            assert "strategy_type" not in strategy_columns
-            assert "auto_recovery" not in strategy_columns
+            assert "strategy_type" in strategy_columns
+            assert "legacy_strategy_type" in strategy_columns
+            assert "auto_recovery" in strategy_columns
             assert "monitoring_probe_interval_seconds" in connection_columns
             assert "openai_probe_endpoint_variant" in connection_columns
         finally:
             await _drop_database(drift_database_url)
+
+    @pytest.mark.asyncio
+    async def test_legacy_runtime_cleanup_stamped_database_upgrades_to_current_head(
+        self, test_database_url: str
+    ):
+        legacy_database_url = _database_url_with_name(
+            test_database_url, f"prism_def075_legacy_{uuid4().hex[:12]}"
+        )
+        current_head_revision = _get_current_head_revision(legacy_database_url)
+
+        await _create_database(legacy_database_url)
+        try:
+            await asyncio.to_thread(_upgrade_database, legacy_database_url, "head")
+            await _mutate_database_to_legacy_runtime_cleanup_shape(legacy_database_url)
+            await asyncio.to_thread(_upgrade_database, legacy_database_url, "head")
+
+            engine = create_async_engine(legacy_database_url)
+            async with engine.connect() as conn:
+                version = (
+                    (
+                        await conn.execute(
+                            text("SELECT version_num FROM alembic_version")
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                strategy_columns = set(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'loadbalance_strategies'"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                runtime_state_columns = set(
+                    (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'routing_connection_runtime_state'"
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            await engine.dispose()
+
+            assert version == [current_head_revision]
+            assert {
+                "strategy_type",
+                "legacy_strategy_type",
+                "auto_recovery",
+                "routing_policy",
+            }.issubset(strategy_columns)
+            assert {
+                "probe_eligible_logged",
+                "circuit_state",
+                "probe_available_at",
+                "live_p95_latency_ms",
+                "last_live_failure_kind",
+                "last_live_failure_at",
+                "last_live_success_at",
+                "last_probe_status",
+                "last_probe_at",
+                "endpoint_ping_ewma_ms",
+                "conversation_delay_ewma_ms",
+            }.issubset(runtime_state_columns)
+        finally:
+            await _drop_database(legacy_database_url)

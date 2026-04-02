@@ -36,6 +36,12 @@ from app.routers import (
     vendors,
 )
 
+DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME = (
+    bootstrap.DEFAULT_ADAPTIVE_LOADBALANCE_STRATEGY_PRESET_NAME
+)
+DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME = (
+    bootstrap.DEFAULT_LEGACY_LOADBALANCE_STRATEGY_PRESET_NAME
+)
 DEFAULT_VENDORS = bootstrap.DEFAULT_VENDORS
 DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME = (
     bootstrap.DEFAULT_LOADBALANCE_STRATEGY_PRESET_NAME
@@ -46,7 +52,7 @@ encrypt_endpoint_secrets = bootstrap.encrypt_endpoint_secrets
 run_startup_migrations = bootstrap.run_startup_migrations
 seed_app_auth_settings = bootstrap.seed_app_auth_settings
 seed_header_blocklist_rules = bootstrap.seed_header_blocklist_rules
-seed_loadbalance_strategy_preset = bootstrap.seed_loadbalance_strategy_preset
+seed_loadbalance_strategy_presets = bootstrap.seed_loadbalance_strategy_presets
 seed_profile_invariants = bootstrap.seed_profile_invariants
 seed_vendors = bootstrap.seed_vendors
 seed_user_settings = bootstrap.seed_user_settings

@@ -115,9 +115,11 @@ async def list_loadbalance_current_state(
 )
 async def reset_loadbalance_current_state(
     connection_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
 ):
     return await reset_connection_current_state(
+        db=db,
         profile_id=profile_id,
         connection_id=connection_id,
     )
