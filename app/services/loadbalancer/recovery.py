@@ -162,6 +162,9 @@ async def record_connection_failure(
     vendor_id: int | None = None,
     now_at: datetime | None = None,
 ) -> None:
+    if not policy.failover_recovery_enabled:
+        return
+
     normalized_now = ensure_utc_datetime(now_at) or utc_now()
 
     async with AsyncSessionLocal() as session:

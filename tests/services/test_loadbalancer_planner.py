@@ -14,7 +14,10 @@ from app.services.loadbalancer.types import (
     AttemptCandidateScoreInput,
     AttemptPlan,
 )
-from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
+)
 
 
 def _make_connection(
@@ -89,6 +92,9 @@ def _make_model_config(
     *,
     connections: list[Connection],
     routing_policy: dict[str, object] | None = None,
+    strategy_type: str = "adaptive",
+    legacy_strategy_type: str | None = None,
+    auto_recovery: dict[str, object] | None = None,
 ) -> ModelConfig:
     vendor = SimpleNamespace(
         id=88,
@@ -112,7 +118,12 @@ def _make_model_config(
                     conversation_delay_ewma_ms=9_999,
                 ),
                 loadbalance_strategy=SimpleNamespace(
-                    routing_policy=routing_policy or make_routing_policy_adaptive()
+                    strategy_type=strategy_type,
+                    legacy_strategy_type=legacy_strategy_type,
+                    auto_recovery=auto_recovery,
+                    routing_policy=(
+                        routing_policy if strategy_type == "adaptive" else None
+                    ),
                 ),
                 connections=connections,
             ),
@@ -382,6 +393,122 @@ class TestLoadbalancerPlanner:
         assert second_plan.policy.deadline_budget_ms == 9_000
         assert [connection.id for connection in first_plan.connections] == [31, 32]
         assert [connection.id for connection in second_plan.connections] == [32, 31]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_keeps_legacy_single_order_without_adaptive_ranking(
+        self,
+    ):
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        first = _make_connection(51, priority=0)
+        second = _make_connection(52, priority=1)
+        third = _make_connection(53, priority=2)
+        model_config = _make_model_config(
+            connections=[third, first, second],
+            strategy_type="legacy",
+            legacy_strategy_type="single",
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+
+        with (
+            patch(
+                "app.services.loadbalancer.planner.get_runtime_states_for_connections",
+                AsyncMock(return_value={}),
+            ) as get_states,
+            patch(
+                "app.services.loadbalancer.planner.rank_candidates",
+                side_effect=AssertionError(
+                    "legacy single should not use adaptive ranking"
+                ),
+            ),
+        ):
+            plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=5,
+                model_config=model_config,
+                now_at=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
+            )
+
+        get_states.assert_awaited_once()
+        assert plan.policy.strategy_type == "legacy"
+        assert plan.policy.legacy_strategy_type == "single"
+        assert [connection.id for connection in plan.connections] == [51, 52, 53]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_advances_round_robin_cursor_for_legacy_round_robin(
+        self,
+    ):
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        first = _make_connection(61, priority=0)
+        second = _make_connection(62, priority=1)
+        third = _make_connection(63, priority=2)
+        model_config = _make_model_config(
+            connections=[first, second, third],
+            strategy_type="legacy",
+            legacy_strategy_type="round-robin",
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+
+        with (
+            patch(
+                "app.services.loadbalancer.planner.get_runtime_states_for_connections",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "app.services.loadbalancer.planner.claim_round_robin_cursor_position",
+                AsyncMock(return_value=1),
+            ) as claim_cursor,
+        ):
+            plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=7,
+                model_config=model_config,
+                now_at=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
+            )
+
+        claim_cursor.assert_awaited_once_with(
+            profile_id=7,
+            model_config_id=model_config.id,
+            connection_count=3,
+            now_at=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
+        )
+        assert [connection.id for connection in plan.connections] == [62, 63, 61]
+
+    @pytest.mark.asyncio
+    async def test_build_attempt_plan_does_not_advance_round_robin_cursor_when_disabled(
+        self,
+    ):
+        from app.services.loadbalancer.planner import build_attempt_plan
+
+        first = _make_connection(71, priority=0)
+        second = _make_connection(72, priority=1)
+        model_config = _make_model_config(
+            connections=[first, second],
+            strategy_type="legacy",
+            legacy_strategy_type="round-robin",
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+
+        with (
+            patch(
+                "app.services.loadbalancer.planner.get_runtime_states_for_connections",
+                AsyncMock(return_value={}),
+            ),
+            patch(
+                "app.services.loadbalancer.planner.claim_round_robin_cursor_position",
+                AsyncMock(side_effect=AssertionError("cursor should not advance")),
+            ),
+        ):
+            plan = await build_attempt_plan(
+                db=AsyncMock(),
+                profile_id=8,
+                model_config=model_config,
+                now_at=datetime(2026, 3, 29, 12, 0, tzinfo=timezone.utc),
+                advance_round_robin=False,
+            )
+
+        assert [connection.id for connection in plan.connections] == [71, 72]
 
     @pytest.mark.asyncio
     async def test_get_model_config_with_connections_selects_first_proxy_target_with_live_candidates(

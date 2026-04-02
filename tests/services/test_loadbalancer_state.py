@@ -8,13 +8,17 @@ from app.models.models import (
     Connection,
     Endpoint,
     LoadbalanceStrategy,
+    LoadbalanceRoundRobinState,
     ModelConfig,
     Profile,
     RoutingConnectionRuntimeLease,
     RoutingConnectionRuntimeState,
     Vendor,
 )
-from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
+)
 
 
 class TestLoadbalancerState:
@@ -290,3 +294,137 @@ class TestLoadbalancerState:
         assert cleared is True
         assert state_row is None
         assert leases == []
+
+    @pytest.mark.asyncio
+    async def test_claim_round_robin_cursor_position_rotates_and_persists_cursor(self):
+        from app.services.loadbalancer.state import claim_round_robin_cursor_position
+
+        suffix = uuid4().hex[:8]
+
+        async with AsyncSessionLocal() as session:
+            vendor = Vendor(
+                key=f"openai-round-robin-{suffix}",
+                name=f"OpenAI RR {suffix}",
+                audit_enabled=False,
+                audit_capture_bodies=False,
+            )
+            profile = Profile(name=f"Profile RR {suffix}", is_active=False, version=0)
+            model = ModelConfig(
+                vendor=vendor,
+                profile=profile,
+                api_family="openai",
+                model_id=f"model-rr-{suffix}",
+                model_type="native",
+                loadbalance_strategy=LoadbalanceStrategy(
+                    profile=profile,
+                    name=f"state-rr-strategy-{suffix}",
+                    strategy_type="legacy",
+                    legacy_strategy_type="round-robin",
+                    auto_recovery=make_auto_recovery_enabled(),
+                    routing_policy=None,
+                ),
+                is_enabled=True,
+            )
+            session.add_all([vendor, profile, model])
+            await session.commit()
+            await session.refresh(profile)
+            await session.refresh(model)
+
+            profile_id = profile.id
+            model_config_id = model.id
+
+        first = await claim_round_robin_cursor_position(
+            profile_id=profile_id,
+            model_config_id=model_config_id,
+            connection_count=3,
+        )
+        second = await claim_round_robin_cursor_position(
+            profile_id=profile_id,
+            model_config_id=model_config_id,
+            connection_count=3,
+        )
+        third = await claim_round_robin_cursor_position(
+            profile_id=profile_id,
+            model_config_id=model_config_id,
+            connection_count=3,
+        )
+
+        async with AsyncSessionLocal() as session:
+            state_row = (
+                await session.execute(
+                    select(LoadbalanceRoundRobinState).where(
+                        LoadbalanceRoundRobinState.profile_id == profile_id,
+                        LoadbalanceRoundRobinState.model_config_id == model_config_id,
+                    )
+                )
+            ).scalar_one()
+
+        assert (first, second, third) == (0, 1, 2)
+        assert state_row.next_cursor == 0
+
+    @pytest.mark.asyncio
+    async def test_clear_round_robin_state_for_model_removes_cursor_row(self):
+        from app.services.loadbalancer.state import clear_round_robin_state_for_model
+
+        suffix = uuid4().hex[:8]
+
+        async with AsyncSessionLocal() as session:
+            vendor = Vendor(
+                key=f"openai-round-robin-clear-{suffix}",
+                name=f"OpenAI RR Clear {suffix}",
+                audit_enabled=False,
+                audit_capture_bodies=False,
+            )
+            profile = Profile(
+                name=f"Profile RR Clear {suffix}", is_active=False, version=0
+            )
+            model = ModelConfig(
+                vendor=vendor,
+                profile=profile,
+                api_family="openai",
+                model_id=f"model-rr-clear-{suffix}",
+                model_type="native",
+                loadbalance_strategy=LoadbalanceStrategy(
+                    profile=profile,
+                    name=f"state-rr-clear-strategy-{suffix}",
+                    strategy_type="legacy",
+                    legacy_strategy_type="round-robin",
+                    auto_recovery=make_auto_recovery_enabled(),
+                    routing_policy=None,
+                ),
+                is_enabled=True,
+            )
+            session.add_all([vendor, profile, model])
+            await session.commit()
+            await session.refresh(profile)
+            await session.refresh(model)
+            session.add(
+                LoadbalanceRoundRobinState(
+                    profile_id=profile.id,
+                    model_config_id=model.id,
+                    next_cursor=2,
+                )
+            )
+            await session.commit()
+
+            profile_id = profile.id
+            model_config_id = model.id
+
+        cleared = await clear_round_robin_state_for_model(
+            db=None,
+            profile_id=profile_id,
+            model_config_id=model_config_id,
+        )
+
+        async with AsyncSessionLocal() as session:
+            state_row = (
+                await session.execute(
+                    select(LoadbalanceRoundRobinState).where(
+                        LoadbalanceRoundRobinState.profile_id == profile_id,
+                        LoadbalanceRoundRobinState.model_config_id == model_config_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+        assert cleared == 1
+        assert state_row is None

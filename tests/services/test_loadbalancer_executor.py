@@ -9,13 +9,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.models.models import Connection, ModelConfig
-from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+from app.services.loadbalancer.policy import (
+    canonicalize_auto_recovery_document,
+    resolve_effective_loadbalance_policy,
+)
 from app.services.loadbalancer.types import (
     AttemptCandidate,
     AttemptCandidateScoreInput,
     AttemptPlan,
 )
-from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
+)
 
 
 def _make_connection(connection_id: int, *, priority: int = 0) -> Connection:
@@ -44,10 +50,23 @@ def _make_policy(**overrides):
     )
 
 
+def _make_legacy_policy(*, legacy_strategy_type: str = "single"):
+    return resolve_effective_loadbalance_policy(
+        SimpleNamespace(
+            strategy_type="legacy",
+            legacy_strategy_type=legacy_strategy_type,
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+    )
+
+
 def _make_model_config(
     *,
     connections: list[Connection],
-    routing_policy: dict[str, object],
+    routing_policy: dict[str, object] | None,
+    strategy_type: str = "adaptive",
+    legacy_strategy_type: str | None = None,
+    auto_recovery: dict[str, object] | None = None,
 ) -> ModelConfig:
     return cast(
         ModelConfig,
@@ -57,7 +76,14 @@ def _make_model_config(
                 id=501,
                 model_id="executor-model",
                 connections=connections,
-                loadbalance_strategy=SimpleNamespace(routing_policy=routing_policy),
+                loadbalance_strategy=SimpleNamespace(
+                    strategy_type=strategy_type,
+                    legacy_strategy_type=legacy_strategy_type,
+                    auto_recovery=auto_recovery,
+                    routing_policy=(
+                        routing_policy if strategy_type == "adaptive" else None
+                    ),
+                ),
             ),
         ),
     )
@@ -402,3 +428,86 @@ class TestLoadbalancerExecutor:
         assert launches == [41, 43]
         assert commits == [("reranked-third", 2)]
         build_attempt_plan.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_deadline_aware_attempts_snapshots_legacy_round_robin_strategy_for_live_rerank(
+        self,
+    ):
+        from app.services.loadbalancer.executor import (
+            AttemptExecutionResult,
+            ExecutionCandidate,
+            PreparedExecutionResponse,
+            execute_deadline_aware_attempts,
+        )
+
+        primary = _make_connection(81, priority=0)
+        reranked = _make_connection(82, priority=1)
+        policy = _make_legacy_policy(legacy_strategy_type="round-robin")
+        launches: list[int] = []
+
+        async def run_attempt(candidate: ExecutionCandidate, attempt_number: int):
+            launches.append(candidate.connection.id)
+            if candidate.connection.id == primary.id:
+                return AttemptExecutionResult(
+                    attempted=True,
+                    accepted=False,
+                    error_detail="primary failed",
+                )
+
+            async def commit_response(attempt_count: int):
+                return {
+                    "winner": candidate.connection.id,
+                    "attempt_count": attempt_count,
+                }
+
+            async def discard_response() -> None:
+                raise AssertionError("legacy winner must not be discarded")
+
+            return AttemptExecutionResult(
+                attempted=True,
+                accepted=True,
+                prepared_response=PreparedExecutionResponse(
+                    commit_response_fn=commit_response,
+                    discard_response_fn=discard_response,
+                ),
+            )
+
+        async def _assert_snapshot(*args, **kwargs):
+            snapshot_model = args[2]
+            snapshot_strategy = snapshot_model.loadbalance_strategy
+            assert snapshot_strategy.strategy_type == "legacy"
+            assert snapshot_strategy.legacy_strategy_type == "round-robin"
+            assert (
+                snapshot_strategy.auto_recovery
+                == canonicalize_auto_recovery_document(make_auto_recovery_enabled())
+            )
+            assert snapshot_strategy.routing_policy is None
+            return _make_attempt_plan(policy, reranked)
+
+        with patch(
+            "app.services.loadbalancer.executor.build_attempt_plan",
+            AsyncMock(side_effect=_assert_snapshot),
+        ) as build_attempt_plan:
+            result = await execute_deadline_aware_attempts(
+                db=AsyncMock(),
+                profile_id=17,
+                model_config=_make_model_config(
+                    connections=[primary, reranked],
+                    routing_policy=None,
+                    strategy_type="legacy",
+                    legacy_strategy_type="round-robin",
+                    auto_recovery=make_auto_recovery_enabled(),
+                ),
+                policy=policy,
+                initial_candidates=[
+                    ExecutionCandidate(connection=primary, probe_eligible=False)
+                ],
+                is_streaming=False,
+                request_deadline_at_monotonic=time.monotonic() + 1,
+                run_attempt_fn=run_attempt,
+            )
+
+        assert result.response == {"winner": 82, "attempt_count": 2}
+        assert launches == [81, 82]
+        build_attempt_plan.assert_awaited_once()
+        assert build_attempt_plan.await_args.kwargs["advance_round_robin"] is False

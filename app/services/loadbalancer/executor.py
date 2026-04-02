@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.models import Connection, ModelConfig
 
 from .planner import build_attempt_plan
-from .policy import EffectiveLoadbalancePolicy, serialize_routing_policy
+from .policy import (
+    EffectiveLoadbalancePolicy,
+    serialize_auto_recovery,
+    serialize_routing_policy,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +88,18 @@ def _snapshot_model_config(
                 model_id=model_config.model_id,
                 connections=list(connections),
                 loadbalance_strategy=SimpleNamespace(
-                    routing_policy=serialize_routing_policy(policy),
+                    strategy_type=policy.strategy_type,
+                    legacy_strategy_type=policy.legacy_strategy_type,
+                    auto_recovery=(
+                        serialize_auto_recovery(policy)
+                        if policy.strategy_type == "legacy"
+                        else None
+                    ),
+                    routing_policy=(
+                        serialize_routing_policy(policy)
+                        if policy.strategy_type == "adaptive"
+                        else None
+                    ),
                 ),
             ),
         ),
@@ -168,6 +183,7 @@ async def _pick_live_candidate(
         ),
         now_at=None,
         is_streaming=is_streaming,
+        advance_round_robin=False,
     )
     probe_eligible_connection_ids = set(plan.probe_eligible_connection_ids)
     for connection in plan.connections:

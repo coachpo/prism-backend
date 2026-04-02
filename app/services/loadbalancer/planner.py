@@ -12,6 +12,7 @@ from app.models.models import Connection, ModelConfig, ModelProxyTarget
 from .policy import resolve_effective_loadbalance_policy
 from .runtime_store import get_runtime_states_for_connections
 from .scoring import rank_candidates
+from .state import claim_round_robin_cursor_position
 from .types import AttemptCandidateScoreInput, AttemptPlan
 
 logger = logging.getLogger("app.services.loadbalancer")
@@ -276,6 +277,7 @@ async def build_attempt_plan(
     blocked_connection_ids: list[int] = []
     probe_eligible_connection_ids: list[int] = []
     candidate_inputs: list[AttemptCandidateScoreInput] = []
+    ordered_legacy_connections: list[Connection] = []
 
     for connection in active_connections:
         current_state = state_by_connection_id.get(connection.id)
@@ -292,7 +294,30 @@ async def build_attempt_plan(
         ):
             probe_eligible_connection_ids.append(connection.id)
 
+        ordered_legacy_connections.append(connection)
         candidate_inputs.append(_build_candidate_score_input(connection, current_state))
+
+    if policy.strategy_type == "legacy":
+        if policy.legacy_strategy_type == "round-robin" and ordered_legacy_connections:
+            cursor_position = 0
+            if advance_round_robin:
+                cursor_position = await claim_round_robin_cursor_position(
+                    profile_id=profile_id,
+                    model_config_id=model_config.id,
+                    connection_count=len(ordered_legacy_connections),
+                    now_at=normalized_now,
+                )
+            if cursor_position > 0:
+                ordered_legacy_connections = (
+                    ordered_legacy_connections[cursor_position:]
+                    + ordered_legacy_connections[:cursor_position]
+                )
+        return AttemptPlan(
+            policy=policy,
+            connections=ordered_legacy_connections,
+            blocked_connection_ids=blocked_connection_ids,
+            probe_eligible_connection_ids=probe_eligible_connection_ids,
+        )
 
     ranked_candidates = rank_candidates(
         policy=policy,

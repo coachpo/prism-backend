@@ -11,6 +11,7 @@ from app.models.models import (
     Connection,
     Endpoint,
     LoadbalanceCurrentState,
+    LoadbalanceRoundRobinState,
     LoadbalanceStrategy,
     ModelConfig,
     Profile,
@@ -19,6 +20,8 @@ from app.models.models import (
 )
 from tests.loadbalance_strategy_helpers import (
     DEFAULT_FAILOVER_STATUS_CODES,
+    make_auto_recovery_disabled,
+    make_auto_recovery_enabled,
     make_routing_policy_adaptive,
 )
 
@@ -55,6 +58,22 @@ def _policy(**overrides):
     )
     return resolve_effective_loadbalance_policy(
         SimpleNamespace(routing_policy=routing_policy)
+    )
+
+
+def _legacy_policy(
+    *,
+    legacy_strategy_type: str = "single",
+    auto_recovery: dict[str, object] | None = None,
+):
+    from app.services.loadbalancer.policy import resolve_effective_loadbalance_policy
+
+    return resolve_effective_loadbalance_policy(
+        SimpleNamespace(
+            strategy_type="legacy",
+            legacy_strategy_type=legacy_strategy_type,
+            auto_recovery=auto_recovery or make_auto_recovery_enabled(),
+        )
     )
 
 
@@ -513,6 +532,42 @@ class TestLoadbalancerRecovery:
         assert current_state.banned_until_at is not None
 
     @pytest.mark.asyncio
+    async def test_record_connection_failure_skips_runtime_mutation_when_legacy_recovery_is_disabled(
+        self,
+    ):
+        from datetime import datetime, timezone
+
+        from app.services.loadbalancer.recovery import record_connection_failure
+
+        suffix = uuid4().hex[:8]
+        profile_id, connection_id = await _create_connection_fixture(suffix=suffix)
+
+        with patch(
+            "app.services.loadbalancer.recovery.record_failed_transition"
+        ) as record_failed_transition:
+            await record_connection_failure(
+                profile_id=profile_id,
+                connection_id=connection_id,
+                base_cooldown_seconds=30.0,
+                failure_kind="transient_http",
+                policy=_legacy_policy(auto_recovery=make_auto_recovery_disabled()),
+                now_at=datetime(2026, 3, 26, 14, 0, tzinfo=timezone.utc),
+            )
+
+        async with AsyncSessionLocal() as session:
+            current_state = (
+                await session.execute(
+                    select(LoadbalanceCurrentState).where(
+                        LoadbalanceCurrentState.profile_id == profile_id,
+                        LoadbalanceCurrentState.connection_id == connection_id,
+                    )
+                )
+            ).scalar_one_or_none()
+
+        record_failed_transition.assert_not_called()
+        assert current_state is None
+
+    @pytest.mark.asyncio
     async def test_record_connection_recovery_preserves_monitoring_fields_when_runtime_row_is_not_empty(
         self,
     ):
@@ -602,12 +657,29 @@ class TestLoadbalancerRecovery:
                     probe_eligible_logged=False,
                 )
             )
+            model_config_id = (
+                await session.execute(
+                    select(Connection.model_config_id).where(
+                        Connection.id == connection_id
+                    )
+                )
+            ).scalar_one()
+            session.add(
+                LoadbalanceRoundRobinState(
+                    profile_id=profile_id,
+                    model_config_id=model_config_id,
+                    next_cursor=2,
+                )
+            )
             await session.commit()
 
-        response = await reset_connection_current_state(
-            profile_id=profile_id,
-            connection_id=connection_id,
-        )
+        async with AsyncSessionLocal() as session:
+            response = await reset_connection_current_state(
+                db=session,
+                profile_id=profile_id,
+                connection_id=connection_id,
+            )
+            await session.commit()
 
         async with AsyncSessionLocal() as session:
             current_state = (
@@ -618,7 +690,16 @@ class TestLoadbalancerRecovery:
                     )
                 )
             ).scalar_one_or_none()
+            round_robin_state = (
+                await session.execute(
+                    select(LoadbalanceRoundRobinState).where(
+                        LoadbalanceRoundRobinState.profile_id == profile_id,
+                        LoadbalanceRoundRobinState.model_config_id == model_config_id,
+                    )
+                )
+            ).scalar_one_or_none()
 
         assert response.connection_id == connection_id
         assert response.cleared is True
         assert current_state is None
+        assert round_robin_state is None

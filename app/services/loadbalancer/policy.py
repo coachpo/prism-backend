@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
-from typing import Literal
-from typing import cast
+from typing import Any, Literal, cast
 
 from app.core.config import get_settings
 from app.services.proxy_support.constants import DEFAULT_FAILOVER_STATUS_CODES
 
 BanMode = Literal["off", "temporary", "manual"]
+LoadbalanceStrategyType = Literal["legacy", "adaptive"]
+LegacyStrategyType = Literal["single", "fill-first", "round-robin"]
 RoutingObjective = Literal["minimize_latency", "maximize_availability"]
 
 _DEFAULT_DEADLINE_BUDGET_MS = 30_000
@@ -23,21 +23,23 @@ _DEFAULT_MONITORING_FAILURE_PENALTY_WEIGHT = 2.0
 
 @dataclass(slots=True, frozen=True)
 class EffectiveLoadbalancePolicy:
-    kind: Literal["adaptive"]
+    strategy_type: LoadbalanceStrategyType
+    legacy_strategy_type: LegacyStrategyType | None
     routing_objective: RoutingObjective
     deadline_budget_ms: int
     hedge_enabled: bool
     hedge_delay_ms: int
     max_additional_attempts: int
-    circuit_failure_status_codes: tuple[int, ...]
-    circuit_base_open_seconds: float
-    circuit_failure_threshold: int
-    circuit_backoff_multiplier: float
-    circuit_max_open_seconds: int
-    circuit_jitter_ratio: float
-    circuit_ban_mode: BanMode
-    circuit_max_open_strikes_before_ban: int
-    circuit_ban_duration_seconds: int
+    failover_recovery_enabled: bool
+    failover_status_codes: tuple[int, ...]
+    failover_cooldown_seconds: float
+    failover_failure_threshold: int
+    failover_backoff_multiplier: float
+    failover_max_cooldown_seconds: int
+    failover_jitter_ratio: float
+    failover_ban_mode: BanMode
+    failover_max_cooldown_strikes_before_ban: int
+    failover_ban_duration_seconds: int
     admission_respect_qps_limit: bool
     admission_respect_in_flight_limits: bool
     monitoring_enabled: bool
@@ -47,48 +49,8 @@ class EffectiveLoadbalancePolicy:
     monitoring_failure_penalty_weight: float
 
     @property
-    def strategy_type(self) -> str:
-        return self.kind
-
-    @property
-    def failover_recovery_enabled(self) -> bool:
-        return True
-
-    @property
-    def failover_status_codes(self) -> tuple[int, ...]:
-        return self.circuit_failure_status_codes
-
-    @property
-    def failover_cooldown_seconds(self) -> float:
-        return self.circuit_base_open_seconds
-
-    @property
-    def failover_failure_threshold(self) -> int:
-        return self.circuit_failure_threshold
-
-    @property
-    def failover_backoff_multiplier(self) -> float:
-        return self.circuit_backoff_multiplier
-
-    @property
-    def failover_max_cooldown_seconds(self) -> int:
-        return self.circuit_max_open_seconds
-
-    @property
-    def failover_jitter_ratio(self) -> float:
-        return self.circuit_jitter_ratio
-
-    @property
-    def failover_ban_mode(self) -> BanMode:
-        return self.circuit_ban_mode
-
-    @property
-    def failover_max_cooldown_strikes_before_ban(self) -> int:
-        return self.circuit_max_open_strikes_before_ban
-
-    @property
-    def failover_ban_duration_seconds(self) -> int:
-        return self.circuit_ban_duration_seconds
+    def kind(self) -> str:
+        return self.strategy_type
 
 
 def _resolve_bool(value: object, *, default: bool) -> bool:
@@ -113,6 +75,29 @@ def _resolve_ban_mode(value: object, *, default: BanMode) -> BanMode:
     if value == "manual":
         return "manual"
     return default
+
+
+def _resolve_strategy_type(strategy: object) -> LoadbalanceStrategyType:
+    explicit = getattr(strategy, "strategy_type", None)
+    if explicit == "legacy":
+        return "legacy"
+    if explicit == "adaptive":
+        return "adaptive"
+    if getattr(strategy, "routing_policy", None) is not None:
+        return "adaptive"
+    raise ValueError("strategy_type must be one of 'legacy' or 'adaptive'")
+
+
+def _resolve_legacy_strategy_type(value: object) -> LegacyStrategyType:
+    if value == "round-robin":
+        return "round-robin"
+    if value == "fill-first":
+        return "fill-first"
+    if value == "single":
+        return "single"
+    raise ValueError(
+        "legacy_strategy_type must be one of 'single', 'fill-first', or 'round-robin'"
+    )
 
 
 def _resolve_routing_objective(
@@ -148,7 +133,6 @@ def normalize_failover_status_codes(value: object) -> tuple[int, ...]:
 
     if len(normalized) != len(items):
         raise ValueError("failover_status_codes must not contain duplicates")
-
     if not normalized:
         raise ValueError("failover_status_codes must contain at least one status code")
 
@@ -196,6 +180,79 @@ def validate_strategy_ban_policy(
         )
 
 
+def canonicalize_auto_recovery_document(
+    auto_recovery: object | None,
+) -> dict[str, object]:
+    if auto_recovery is None:
+        raise ValueError("auto_recovery is required for legacy strategies")
+    mode = _get_object_member(auto_recovery, "mode", "enabled")
+    if mode == "disabled":
+        return {"mode": "disabled"}
+
+    settings = get_settings()
+    cooldown = _get_object_member(auto_recovery, "cooldown", {})
+    ban = _get_object_member(auto_recovery, "ban", {})
+    normalized_ban_mode = _resolve_ban_mode(
+        _get_object_member(ban, "mode", None),
+        default="off",
+    )
+    max_open_strikes_before_ban = _resolve_int(
+        _get_object_member(ban, "max_cooldown_strikes_before_ban", None),
+        default=0,
+    )
+    ban_duration_seconds = _resolve_int(
+        _get_object_member(ban, "ban_duration_seconds", None),
+        default=0,
+    )
+    validate_strategy_ban_policy(
+        ban_mode=normalized_ban_mode,
+        max_open_strikes_before_ban=max_open_strikes_before_ban,
+        ban_duration_seconds=ban_duration_seconds,
+    )
+
+    return {
+        "mode": "enabled",
+        "status_codes": list(
+            _resolve_status_codes(
+                _get_object_member(auto_recovery, "status_codes", None)
+            )
+        ),
+        "cooldown": {
+            "base_seconds": _resolve_int(
+                _get_object_member(cooldown, "base_seconds", None),
+                default=settings.failover_cooldown_seconds,
+            ),
+            "failure_threshold": _resolve_int(
+                _get_object_member(cooldown, "failure_threshold", None),
+                default=settings.failover_failure_threshold,
+            ),
+            "backoff_multiplier": _resolve_float(
+                _get_object_member(cooldown, "backoff_multiplier", None),
+                default=settings.failover_backoff_multiplier,
+            ),
+            "max_cooldown_seconds": _resolve_int(
+                _get_object_member(cooldown, "max_cooldown_seconds", None),
+                default=settings.failover_max_cooldown_seconds,
+            ),
+            "jitter_ratio": _resolve_float(
+                _get_object_member(cooldown, "jitter_ratio", None),
+                default=settings.failover_jitter_ratio,
+            ),
+        },
+        "ban": {
+            "mode": normalized_ban_mode,
+            "max_cooldown_strikes_before_ban": (
+                max_open_strikes_before_ban
+                if normalized_ban_mode in {"manual", "temporary"}
+                else 0
+            ),
+            "ban_duration_seconds": (
+                ban_duration_seconds if normalized_ban_mode == "temporary" else 0
+            ),
+        },
+    }
+
+
 def canonicalize_routing_policy_document(
     routing_policy: object | None,
 ) -> dict[str, object]:
@@ -206,7 +263,6 @@ def canonicalize_routing_policy_document(
     circuit_breaker = _get_object_member(routing_policy, "circuit_breaker", {})
     admission = _get_object_member(routing_policy, "admission", {})
     monitoring = _get_object_member(routing_policy, "monitoring", {})
-
     normalized_ban_mode = _resolve_ban_mode(
         _get_object_member(circuit_breaker, "ban_mode", None),
         default="off",
@@ -314,9 +370,41 @@ def canonicalize_routing_policy_document(
     }
 
 
+def serialize_auto_recovery(policy: EffectiveLoadbalancePolicy) -> dict[str, object]:
+    if policy.strategy_type != "legacy":
+        raise ValueError("auto_recovery is only available for legacy strategies")
+    if not policy.failover_recovery_enabled:
+        return {"mode": "disabled"}
+
+    return {
+        "mode": "enabled",
+        "status_codes": list(policy.failover_status_codes),
+        "cooldown": {
+            "base_seconds": int(policy.failover_cooldown_seconds),
+            "failure_threshold": policy.failover_failure_threshold,
+            "backoff_multiplier": policy.failover_backoff_multiplier,
+            "max_cooldown_seconds": policy.failover_max_cooldown_seconds,
+            "jitter_ratio": policy.failover_jitter_ratio,
+        },
+        "ban": {
+            "mode": policy.failover_ban_mode,
+            "max_cooldown_strikes_before_ban": (
+                policy.failover_max_cooldown_strikes_before_ban
+                if policy.failover_ban_mode in {"manual", "temporary"}
+                else 0
+            ),
+            "ban_duration_seconds": (
+                policy.failover_ban_duration_seconds
+                if policy.failover_ban_mode == "temporary"
+                else 0
+            ),
+        },
+    }
+
+
 def serialize_routing_policy(policy: EffectiveLoadbalancePolicy) -> dict[str, object]:
     return {
-        "kind": policy.kind,
+        "kind": "adaptive",
         "routing_objective": policy.routing_objective,
         "deadline_budget_ms": policy.deadline_budget_ms,
         "hedge": {
@@ -325,15 +413,15 @@ def serialize_routing_policy(policy: EffectiveLoadbalancePolicy) -> dict[str, ob
             "max_additional_attempts": policy.max_additional_attempts,
         },
         "circuit_breaker": {
-            "failure_status_codes": list(policy.circuit_failure_status_codes),
-            "base_open_seconds": int(policy.circuit_base_open_seconds),
-            "failure_threshold": policy.circuit_failure_threshold,
-            "backoff_multiplier": policy.circuit_backoff_multiplier,
-            "max_open_seconds": policy.circuit_max_open_seconds,
-            "jitter_ratio": policy.circuit_jitter_ratio,
-            "ban_mode": policy.circuit_ban_mode,
-            "max_open_strikes_before_ban": policy.circuit_max_open_strikes_before_ban,
-            "ban_duration_seconds": policy.circuit_ban_duration_seconds,
+            "failure_status_codes": list(policy.failover_status_codes),
+            "base_open_seconds": int(policy.failover_cooldown_seconds),
+            "failure_threshold": policy.failover_failure_threshold,
+            "backoff_multiplier": policy.failover_backoff_multiplier,
+            "max_open_seconds": policy.failover_max_cooldown_seconds,
+            "jitter_ratio": policy.failover_jitter_ratio,
+            "ban_mode": policy.failover_ban_mode,
+            "max_open_strikes_before_ban": policy.failover_max_cooldown_strikes_before_ban,
+            "ban_duration_seconds": policy.failover_ban_duration_seconds,
         },
         "admission": {
             "respect_qps_limit": policy.admission_respect_qps_limit,
@@ -343,45 +431,121 @@ def serialize_routing_policy(policy: EffectiveLoadbalancePolicy) -> dict[str, ob
             "enabled": policy.monitoring_enabled,
             "stale_after_seconds": policy.monitoring_stale_after_seconds,
             "endpoint_ping_weight": policy.monitoring_endpoint_ping_weight,
-            "conversation_delay_weight": (policy.monitoring_conversation_delay_weight),
+            "conversation_delay_weight": policy.monitoring_conversation_delay_weight,
             "failure_penalty_weight": policy.monitoring_failure_penalty_weight,
         },
     }
 
 
+def _build_legacy_policy(
+    auto_recovery: dict[str, object], strategy: object
+) -> EffectiveLoadbalancePolicy:
+    settings = get_settings()
+    legacy_strategy_type = _resolve_legacy_strategy_type(
+        getattr(strategy, "legacy_strategy_type", None)
+    )
+    if auto_recovery.get("mode") == "disabled":
+        return EffectiveLoadbalancePolicy(
+            strategy_type="legacy",
+            legacy_strategy_type=legacy_strategy_type,
+            routing_objective="minimize_latency",
+            deadline_budget_ms=_DEFAULT_DEADLINE_BUDGET_MS,
+            hedge_enabled=False,
+            hedge_delay_ms=_DEFAULT_HEDGE_DELAY_MS,
+            max_additional_attempts=_DEFAULT_MAX_ADDITIONAL_ATTEMPTS,
+            failover_recovery_enabled=False,
+            failover_status_codes=tuple(DEFAULT_FAILOVER_STATUS_CODES),
+            failover_cooldown_seconds=float(settings.failover_cooldown_seconds),
+            failover_failure_threshold=settings.failover_failure_threshold,
+            failover_backoff_multiplier=settings.failover_backoff_multiplier,
+            failover_max_cooldown_seconds=settings.failover_max_cooldown_seconds,
+            failover_jitter_ratio=settings.failover_jitter_ratio,
+            failover_ban_mode="off",
+            failover_max_cooldown_strikes_before_ban=0,
+            failover_ban_duration_seconds=0,
+            admission_respect_qps_limit=True,
+            admission_respect_in_flight_limits=True,
+            monitoring_enabled=False,
+            monitoring_stale_after_seconds=_DEFAULT_MONITORING_STALE_AFTER_SECONDS,
+            monitoring_endpoint_ping_weight=0.0,
+            monitoring_conversation_delay_weight=0.0,
+            monitoring_failure_penalty_weight=0.0,
+        )
+
+    cooldown = cast(dict[str, Any], auto_recovery["cooldown"])
+    ban = cast(dict[str, Any], auto_recovery["ban"])
+    return EffectiveLoadbalancePolicy(
+        strategy_type="legacy",
+        legacy_strategy_type=legacy_strategy_type,
+        routing_objective="minimize_latency",
+        deadline_budget_ms=_DEFAULT_DEADLINE_BUDGET_MS,
+        hedge_enabled=False,
+        hedge_delay_ms=_DEFAULT_HEDGE_DELAY_MS,
+        max_additional_attempts=_DEFAULT_MAX_ADDITIONAL_ATTEMPTS,
+        failover_recovery_enabled=True,
+        failover_status_codes=tuple(cast(list[int], auto_recovery["status_codes"])),
+        failover_cooldown_seconds=float(cooldown["base_seconds"]),
+        failover_failure_threshold=cast(int, cooldown["failure_threshold"]),
+        failover_backoff_multiplier=float(cooldown["backoff_multiplier"]),
+        failover_max_cooldown_seconds=cast(int, cooldown["max_cooldown_seconds"]),
+        failover_jitter_ratio=float(cooldown["jitter_ratio"]),
+        failover_ban_mode=cast(BanMode, ban["mode"]),
+        failover_max_cooldown_strikes_before_ban=cast(
+            int,
+            ban.get("max_cooldown_strikes_before_ban", 0),
+        ),
+        failover_ban_duration_seconds=cast(int, ban.get("ban_duration_seconds", 0)),
+        admission_respect_qps_limit=True,
+        admission_respect_in_flight_limits=True,
+        monitoring_enabled=False,
+        monitoring_stale_after_seconds=_DEFAULT_MONITORING_STALE_AFTER_SECONDS,
+        monitoring_endpoint_ping_weight=0.0,
+        monitoring_conversation_delay_weight=0.0,
+        monitoring_failure_penalty_weight=0.0,
+    )
+
+
 def resolve_effective_loadbalance_policy(
     strategy: object,
 ) -> EffectiveLoadbalancePolicy:
+    strategy_type = _resolve_strategy_type(strategy)
+    if strategy_type == "legacy":
+        auto_recovery = canonicalize_auto_recovery_document(
+            getattr(strategy, "auto_recovery", None)
+        )
+        return _build_legacy_policy(auto_recovery, strategy)
+
     routing_policy = canonicalize_routing_policy_document(
         getattr(strategy, "routing_policy", None)
     )
-
     hedge = cast(dict[str, Any], routing_policy["hedge"])
     circuit_breaker = cast(dict[str, Any], routing_policy["circuit_breaker"])
     admission = cast(dict[str, Any], routing_policy["admission"])
     monitoring = cast(dict[str, Any], routing_policy["monitoring"])
 
     return EffectiveLoadbalancePolicy(
-        kind="adaptive",
+        strategy_type="adaptive",
+        legacy_strategy_type=None,
         routing_objective=cast(RoutingObjective, routing_policy["routing_objective"]),
         deadline_budget_ms=cast(int, routing_policy["deadline_budget_ms"]),
         hedge_enabled=cast(bool, hedge["enabled"]),
         hedge_delay_ms=cast(int, hedge["delay_ms"]),
         max_additional_attempts=cast(int, hedge["max_additional_attempts"]),
-        circuit_failure_status_codes=tuple(
+        failover_recovery_enabled=True,
+        failover_status_codes=tuple(
             cast(list[int], circuit_breaker["failure_status_codes"])
         ),
-        circuit_base_open_seconds=float(circuit_breaker["base_open_seconds"]),
-        circuit_failure_threshold=cast(int, circuit_breaker["failure_threshold"]),
-        circuit_backoff_multiplier=float(circuit_breaker["backoff_multiplier"]),
-        circuit_max_open_seconds=cast(int, circuit_breaker["max_open_seconds"]),
-        circuit_jitter_ratio=float(circuit_breaker["jitter_ratio"]),
-        circuit_ban_mode=cast(BanMode, circuit_breaker["ban_mode"]),
-        circuit_max_open_strikes_before_ban=cast(
+        failover_cooldown_seconds=float(circuit_breaker["base_open_seconds"]),
+        failover_failure_threshold=cast(int, circuit_breaker["failure_threshold"]),
+        failover_backoff_multiplier=float(circuit_breaker["backoff_multiplier"]),
+        failover_max_cooldown_seconds=cast(int, circuit_breaker["max_open_seconds"]),
+        failover_jitter_ratio=float(circuit_breaker["jitter_ratio"]),
+        failover_ban_mode=cast(BanMode, circuit_breaker["ban_mode"]),
+        failover_max_cooldown_strikes_before_ban=cast(
             int,
             circuit_breaker["max_open_strikes_before_ban"],
         ),
-        circuit_ban_duration_seconds=cast(
+        failover_ban_duration_seconds=cast(
             int,
             circuit_breaker["ban_duration_seconds"],
         ),
@@ -398,6 +562,10 @@ def resolve_effective_loadbalance_policy(
         ),
         monitoring_failure_penalty_weight=float(monitoring["failure_penalty_weight"]),
     )
+
+
+def build_default_auto_recovery_document() -> dict[str, object]:
+    return canonicalize_auto_recovery_document({"mode": "enabled"})
 
 
 def build_default_routing_policy_document() -> dict[str, object]:
@@ -420,18 +588,31 @@ def build_default_routing_policy_document() -> dict[str, object]:
                 ),
                 "failure_penalty_weight": _DEFAULT_MONITORING_FAILURE_PENALTY_WEIGHT,
             },
+            circuit_breaker={
+                "failure_status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),
+                "ban_mode": "off",
+            },
+            admission={
+                "respect_qps_limit": True,
+                "respect_in_flight_limits": True,
+            },
         )
     )
 
 
 __all__ = [
     "BanMode",
+    "build_default_auto_recovery_document",
     "build_default_routing_policy_document",
+    "canonicalize_auto_recovery_document",
     "canonicalize_routing_policy_document",
     "EffectiveLoadbalancePolicy",
+    "LegacyStrategyType",
+    "LoadbalanceStrategyType",
     "normalize_failover_status_codes",
     "resolve_effective_loadbalance_policy",
     "RoutingObjective",
+    "serialize_auto_recovery",
     "serialize_routing_policy",
     "validate_strategy_ban_policy",
 ]
