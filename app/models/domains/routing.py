@@ -40,6 +40,19 @@ class LoadbalanceStrategy(Base):
             "id",
             name="uq_loadbalance_strategies_profile_id_id",
         ),
+        CheckConstraint(
+            "strategy_type IN ('legacy', 'adaptive')",
+            name="chk_loadbalance_strategies_type",
+        ),
+        CheckConstraint(
+            "legacy_strategy_type IN ('single', 'fill-first', 'round-robin') OR legacy_strategy_type IS NULL",
+            name="chk_loadbalance_strategies_legacy_strategy_type",
+        ),
+        CheckConstraint(
+            "((strategy_type = 'legacy' AND legacy_strategy_type IS NOT NULL AND auto_recovery IS NOT NULL AND routing_policy IS NULL) "
+            "OR (strategy_type = 'adaptive' AND legacy_strategy_type IS NULL AND auto_recovery IS NULL AND routing_policy IS NOT NULL))",
+            name="chk_loadbalance_strategies_shape",
+        ),
         Index("idx_loadbalance_strategies_profile_id", "profile_id"),
     )
 
@@ -48,10 +61,17 @@ class LoadbalanceStrategy(Base):
         ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    routing_policy: Mapped[dict[str, Any]] = mapped_column(
-        JSONB,
-        nullable=False,
-        default=lambda: {"kind": "adaptive"},
+    strategy_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="adaptive"
+    )
+    legacy_strategy_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    auto_recovery: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+    )
+    routing_policy: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
