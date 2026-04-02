@@ -254,11 +254,11 @@ def _classify_failover_failure(
     exception: Exception | None = None,
 ) -> FailureKind:
     if exception is not None:
-        return (
-            "timeout"
-            if isinstance(exception, httpx.TimeoutException)
-            else "connect_error"
-        )
+        if isinstance(exception, httpx.TimeoutException):
+            return "timeout"
+        if isinstance(exception, (httpx.ConnectError, httpx.ReadError)):
+            return "connect_error"
+        return "connect_error"
     if status_code is None:
         return "transient_http"
     return _classify_http_failure(status_code, raw_body)

@@ -196,7 +196,7 @@ async def execute_proxy_attempts(
                 client=setup.client,
                 start_time=start_time,
             )
-        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        except (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException) as exc:
             return await handle_transport_exception(
                 deps=deps,
                 state=state,

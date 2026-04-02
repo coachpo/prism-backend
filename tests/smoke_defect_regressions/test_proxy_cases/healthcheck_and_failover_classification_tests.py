@@ -1335,6 +1335,16 @@ class TestDEF061_FailoverFailureClassification:
 
         assert failure_kind == "connect_error"
 
+    def test_classify_failover_failure_for_read_error(self):
+        import httpx
+        from app.routers.proxy import _classify_failover_failure
+
+        failure_kind = _classify_failover_failure(
+            exception=httpx.ReadError("read fail")
+        )
+
+        assert failure_kind == "connect_error"
+
     def test_classify_failover_failure_uses_http_classifier(self):
         from app.routers.proxy import _classify_failover_failure
 

@@ -349,6 +349,9 @@ async def handle_transport_exception(
     if isinstance(exc, httpx.ConnectError):
         last_error = f"Connection error: {exc}"
         logger.warning("Endpoint %d connection failed: %s", target.connection.id, exc)
+    elif isinstance(exc, httpx.ReadError):
+        last_error = f"Read error: {exc}"
+        logger.warning("Endpoint %d read failed: %s", target.connection.id, exc)
     else:
         last_error = f"Timeout: {exc}"
         logger.warning("Endpoint %d timed out: %s", target.connection.id, exc)
@@ -362,7 +365,7 @@ async def handle_transport_exception(
         response_body=None,
         is_stream=state.setup.is_streaming,
         elapsed_ms=elapsed_ms,
-        error_detail=str(exc)[:500],
+        error_detail=last_error[:500],
     )
     await _release_limiter_lease_if_needed(
         deps=deps,
