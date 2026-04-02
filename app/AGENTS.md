@@ -51,7 +51,7 @@ app/
 ## WHERE TO LOOK
 
 - App assembly, router mounts, lifespan startup, and shared infra ownership: `main.py`
-- Startup sequence, connection-limit reconciliation, adaptive-routing preset seeding, and monitoring cadence defaults: `bootstrap/startup.py`
+- Startup sequence, connection-limit reconciliation, dual-strategy preset seeding, and monitoring cadence defaults: `bootstrap/startup.py`
 - Migration packaging, env wiring, and revision layout: `alembic/AGENTS.md`, `alembic/env.py`, `alembic/script.py.mako`, `alembic/versions/`
 - Management profile overrides versus runtime active-profile routing: `dependencies.py`
 - Router surface, shared router helpers, monitoring routes, and router-domain leaf docs: `routers/AGENTS.md`, `routers/shared/AGENTS.md`, `routers/monitoring.py`, `routers/`

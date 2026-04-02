@@ -20,7 +20,7 @@ bootstrap/
 
 ## CONVENTIONS
 
-- Keep startup ordering centralized in `run_startup_sequence()`; `main.py` should call it from lifespan, run `reconcile_all_connection_limits()` before shared client and worker startup, then manage shared client and worker startup and teardown around that sequence.
+- Keep startup ordering centralized in `run_startup_sequence()`; `main.py` should call it from lifespan, then run `reconcile_all_connection_limits()` before shared client, background-task, and monitoring-scheduler startup.
 - Keep `/api/*` cookie auth and `/v1*` plus `/v1beta*` proxy-key auth split in `auth_middleware.py`.
 - Mirror allowed origins on auth error responses when the request `Origin` is explicitly allowed.
 - Add new unauthenticated management routes to `PUBLIC_MANAGEMENT_PATHS` instead of hand-rolling route exceptions.
@@ -31,3 +31,4 @@ bootstrap/
 - Do not bypass lifespan-owned bootstrap timing with extra startup-event handlers.
 - Do not push session-cookie or proxy-key enforcement into routers; middleware already owns that contract.
 - Do not bypass startup seeds for vendors, profile invariants, auth settings, or system header blocklist rules.
+t legacy/adaptive loadbalance strategies, auth settings, or system header blocklist rules.

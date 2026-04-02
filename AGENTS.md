@@ -1,7 +1,7 @@
 # BACKEND KNOWLEDGE BASE
 
 ## OVERVIEW
-Prism's backend owns the management API on `/api/*` and the runtime proxy API on `/v1/*` and `/v1beta/*`. It is uv-managed from `pyproject.toml` and `uv.lock`, packages `app*`, runs against PostgreSQL, applies Alembic migrations during startup, and owns auth, proxy keys, passkeys, realtime updates, adaptive routing, backend-run monitoring, costing, and observability.
+Prism's backend owns the management API on `/api/*` and the runtime proxy API on `/v1/*` and `/v1beta/*`. It is uv-managed from `pyproject.toml` and `uv.lock`, packages `app*`, runs against PostgreSQL, applies Alembic migrations during startup, and owns auth, proxy keys, passkeys, realtime updates, dual-strategy load balancing, backend-run monitoring, costing, and observability.
 
 ## STRUCTURE
 ```
@@ -61,7 +61,7 @@ backend/
 ## WHERE TO LOOK
 
 - App assembly, router registration, lifespan startup, and shared infra wiring: `app/main.py`
-- Startup sequencing, vendor and profile seeding, adaptive-routing preset seeding, monitoring cadence defaults, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
+- Startup sequencing, vendor and profile seeding, dual-strategy preset seeding, monitoring cadence defaults, auth settings, header blocklist defaults, and shared HTTP client builder: `app/bootstrap/startup.py`
 - Management versus runtime scope rules: `app/dependencies.py`
 - Router map, shared router helpers, monitoring routes, and router-domain leaves: `app/routers/AGENTS.md`, `app/routers/shared/AGENTS.md`, `app/routers/monitoring.py`, `app/routers/`
 - Public schema and model import boundaries: `app/schemas/AGENTS.md`, `app/models/AGENTS.md`
