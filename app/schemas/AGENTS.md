@@ -35,7 +35,7 @@ schemas/
 
 - `schemas.py` currently re-exports a broad explicit surface from `domains/admin.py`, `domains/auth.py`, `domains/core.py`, `domains/monitoring.py`, `domains/stats.py`, and `domains/usage_statistics.py`.
 - Config export/import payloads use the current top-level `version: 1` format, and the admin schemas carry the vendor `icon_key` field on vendor payloads only.
-- Loadbalance strategy management contracts now use one `routing_policy` document with `hedge`, `circuit_breaker`, `admission`, and `monitoring` branches.
+- Loadbalance strategy management contracts now use a top-level `strategy_type` discriminator: legacy payloads carry `legacy_strategy_type` plus `auto_recovery`, while adaptive payloads carry `routing_policy` with `hedge`, `circuit_breaker`, `admission`, and `monitoring` branches.
 - Supporting domain files such as `common.py`, `connection_model.py`, `endpoint_pricing.py`, and `profile_vendor.py` still live under `domains/`, but the stable router-facing boundary is `schemas.py`.
 - The parent doc covers schema-domain ownership. Don't create new AGENTS docs inside `schemas/domains/` for the current layout.
 - Routers should depend on the re-export boundary, not on scattered leaf-module imports.

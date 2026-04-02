@@ -16,9 +16,9 @@ config_domains/
 ## WHERE TO LOOK
 
 - Route entrypoints and import version gate: `import_export.py`
-- Export payload assembly: `export_builder.py`
-- Import payload validation: `import_validator.py`
-- Import execution: `import_executor.py`
+- Export payload assembly, including family-specific loadbalance strategy serialization: `export_builder.py`
+- Import payload validation, including family-specific loadbalance strategy shape checks: `import_validator.py`
+- Import execution and dual-family strategy persistence: `import_executor.py`
 - Header-blocklist CRUD routes: `blocklist.py`
 
 ## CONVENTIONS

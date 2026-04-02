@@ -27,7 +27,7 @@ models/
 ### ROUTING
 - `ModelConfig`: Per-profile model settings that require both `vendor_id` and fixed `api_family`, plus attached loadbalance strategy selection for native models and ordered proxy-target routing for proxy models. Model rows do not carry vendor icon metadata.
 - `ModelProxyTarget`: Ordered proxy-model target rows that connect one proxy model to one native target model.
-- `LoadbalanceStrategy`: Profile-scoped reusable routing strategy metadata for native model attachment.
+- `LoadbalanceStrategy`: Profile-scoped reusable routing strategy rows for native model attachment, with `strategy_type = legacy | adaptive`, legacy `legacy_strategy_type + auto_recovery`, and adaptive `routing_policy` payloads.
 - `Endpoint`: Encrypted upstream base URLs and API keys.
 - `PricingTemplate`: Costing rules for input, output, reasoning, and cache tokens.
 - `Connection`: Linkage between model configs, endpoints, and pricing; owns health status.
