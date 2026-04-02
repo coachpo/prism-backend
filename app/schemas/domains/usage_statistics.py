@@ -83,14 +83,6 @@ class UsageSnapshotOverview(BaseModel):
     rolling_tpm: float
 
 
-class UsageServiceHealthPoint(BaseModel):
-    bucket_start: datetime
-    request_count: int
-    success_count: int
-    failed_count: int
-    availability_percentage: float | None = None
-
-
 class UsageServiceHealthCell(BaseModel):
     bucket_start: datetime
     request_count: int
@@ -105,9 +97,7 @@ class UsageServiceHealth(BaseModel):
     request_count: int
     success_count: int
     failed_count: int
-    days: int
     interval_minutes: int
-    daily: list[UsageServiceHealthPoint] = Field(default_factory=list)
     cells: list[UsageServiceHealthCell] = Field(default_factory=list)
 
 

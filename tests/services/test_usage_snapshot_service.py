@@ -23,9 +23,11 @@ from app.schemas.domains.usage_statistics import (
     UsageEndpointStatistic,
     UsageModelStatistic,
     UsageProxyApiKeyStatistic,
+    UsageServiceHealth,
     UsageSnapshotResponse,
 )
 from app.services import stats_service
+from app.services.stats import usage_snapshot as usage_snapshot_module
 from app.services.stats.time_presets import resolve_time_preset
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
@@ -408,6 +410,14 @@ class TestUsageSnapshotService:
             "total_tokens",
             "total_cost_micros",
         }
+        assert set(UsageServiceHealth.model_fields.keys()) == {
+            "availability_percentage",
+            "request_count",
+            "success_count",
+            "failed_count",
+            "interval_minutes",
+            "cells",
+        }
 
     def test_resolve_time_preset_supports_last_seven_hours(self):
         fixed_end = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
@@ -416,6 +426,17 @@ class TestUsageSnapshotService:
 
         assert from_time == fixed_end - timedelta(hours=7)
         assert to_time == fixed_end
+
+    def test_latest_service_health_bucket_uses_live_interval_when_now_not_on_boundary(
+        self,
+    ):
+        fixed_end = datetime(2026, 3, 27, 12, 7, tzinfo=timezone.utc)
+
+        latest_bucket_start = usage_snapshot_module._latest_service_health_bucket_start(
+            fixed_end
+        )
+
+        assert latest_bucket_start == datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
 
     @pytest.mark.asyncio
     async def test_get_usage_snapshot_aggregates_usage_request_events_for_selected_profile(
@@ -468,15 +489,32 @@ class TestUsageSnapshotService:
             "rolling_rpm": 0.033,
             "rolling_tpm": 6.167,
         }
-        assert snapshot["service_health"]["availability_percentage"] == 50.0
-        assert snapshot["service_health"]["days"] == 7
+        assert snapshot["service_health"]["availability_percentage"] == 75.0
+        assert snapshot["service_health"]["request_count"] == 4
+        assert snapshot["service_health"]["success_count"] == 3
+        assert snapshot["service_health"]["failed_count"] == 1
         assert snapshot["service_health"]["interval_minutes"] == 15
-        assert len(snapshot["service_health"]["daily"]) == 7
+        assert "days" not in snapshot["service_health"]
+        assert "daily" not in snapshot["service_health"]
+
+        service_health_cells_list = snapshot["service_health"]["cells"]
+        assert len(service_health_cells_list) == 672
+        assert service_health_cells_list[0]["bucket_start"] == datetime(
+            2026, 3, 20, 12, 0, tzinfo=timezone.utc
+        )
+        assert service_health_cells_list[-1]["bucket_start"] == datetime(
+            2026, 3, 27, 11, 45, tzinfo=timezone.utc
+        )
+        assert all(
+            right["bucket_start"] - left["bucket_start"] == timedelta(minutes=15)
+            for left, right in zip(
+                service_health_cells_list, service_health_cells_list[1:]
+            )
+        )
 
         service_health_cells = {
-            cell["bucket_start"]: cell for cell in snapshot["service_health"]["cells"]
+            cell["bucket_start"]: cell for cell in service_health_cells_list
         }
-        assert len(service_health_cells) == 7 * 96
         assert service_health_cells[
             datetime(2026, 3, 27, 11, 45, tzinfo=timezone.utc)
         ] == {
@@ -506,6 +544,26 @@ class TestUsageSnapshotService:
             "failed_count": 0,
             "availability_percentage": None,
             "status": "empty",
+        }
+        assert service_health_cells[
+            datetime(2026, 3, 27, 2, 0, tzinfo=timezone.utc)
+        ] == {
+            "bucket_start": datetime(2026, 3, 27, 2, 0, tzinfo=timezone.utc),
+            "request_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "availability_percentage": 100.0,
+            "status": "ok",
+        }
+        assert service_health_cells[
+            datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc)
+        ] == {
+            "bucket_start": datetime(2026, 3, 25, 12, 0, tzinfo=timezone.utc),
+            "request_count": 1,
+            "success_count": 1,
+            "failed_count": 0,
+            "availability_percentage": 100.0,
+            "status": "ok",
         }
 
         request_trend_series = {

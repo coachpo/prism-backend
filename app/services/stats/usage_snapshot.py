@@ -16,7 +16,7 @@ from app.services.user_settings import get_report_currency_preferences
 UsageSnapshotPreset = Literal["all", "7h", "24h", "7d"]
 
 ROLLING_WINDOW_MINUTES = 30
-SERVICE_HEALTH_DAYS = 7
+SERVICE_HEALTH_BUCKET_COUNT = 12 * 56
 SERVICE_HEALTH_INTERVAL_MINUTES = 15
 
 
@@ -132,6 +132,22 @@ def _service_health_bucket_floor(value: datetime) -> datetime:
     return normalized.replace(minute=minute, second=0, microsecond=0)
 
 
+def _latest_service_health_bucket_start(end_at: datetime) -> datetime:
+    adjusted_end = _normalize_datetime(end_at) - timedelta(microseconds=1)
+    return _service_health_bucket_floor(adjusted_end)
+
+
+def _service_health_window_bounds(end_at: datetime) -> tuple[datetime, datetime]:
+    latest_bucket_start = _latest_service_health_bucket_start(end_at)
+    window_start = latest_bucket_start - timedelta(
+        minutes=SERVICE_HEALTH_INTERVAL_MINUTES * (SERVICE_HEALTH_BUCKET_COUNT - 1)
+    )
+    window_end = latest_bucket_start + timedelta(
+        minutes=SERVICE_HEALTH_INTERVAL_MINUTES
+    )
+    return window_start, window_end
+
+
 def _bucket_minutes(granularity: Literal["hour", "day"]) -> float:
     if granularity == "hour":
         return 60.0
@@ -196,90 +212,71 @@ def _build_service_health(
     events: list[_SnapshotEvent],
     end_at: datetime,
 ) -> dict[str, object]:
-    service_health_start = _bucket_floor(end_at, "day") - timedelta(
-        days=SERVICE_HEALTH_DAYS - 1
-    )
-    service_health_end = service_health_start + timedelta(days=SERVICE_HEALTH_DAYS)
-    daily_stats = defaultdict(
-        lambda: {"request_count": 0, "success_count": 0, "failed_count": 0}
-    )
+    service_health_start, service_health_end = _service_health_window_bounds(end_at)
     cell_stats = defaultdict(
         lambda: {"request_count": 0, "success_count": 0, "failed_count": 0}
     )
+    request_count = 0
+    success_count = 0
+    failed_count = 0
 
     for event in events:
-        day_bucket = _bucket_floor(event.created_at, "day")
-        if day_bucket < service_health_start or day_bucket >= service_health_end:
+        if (
+            event.created_at < service_health_start
+            or event.created_at >= service_health_end
+        ):
             continue
 
-        daily_stats[day_bucket]["request_count"] += 1
         cell_bucket = _service_health_bucket_floor(event.created_at)
         cell_stats[cell_bucket]["request_count"] += 1
+        request_count += 1
 
         if event.success_flag:
-            daily_stats[day_bucket]["success_count"] += 1
             cell_stats[cell_bucket]["success_count"] += 1
+            success_count += 1
         else:
-            daily_stats[day_bucket]["failed_count"] += 1
             cell_stats[cell_bucket]["failed_count"] += 1
-
-    daily: list[dict[str, object]] = []
-    for offset in range(SERVICE_HEALTH_DAYS):
-        bucket = service_health_start + timedelta(days=offset)
-        request_count = daily_stats[bucket]["request_count"]
-        success_count = daily_stats[bucket]["success_count"]
-        failed_count = daily_stats[bucket]["failed_count"]
-        daily.append(
-            {
-                "bucket_start": bucket,
-                "request_count": request_count,
-                "success_count": success_count,
-                "failed_count": failed_count,
-                "availability_percentage": (
-                    _success_rate(
-                        success_count=success_count,
-                        total_count=request_count,
-                    )
-                    if request_count > 0
-                    else None
-                ),
-            }
-        )
+            failed_count += 1
 
     cells: list[dict[str, object]] = []
     bucket = service_health_start
-    cell_count = SERVICE_HEALTH_DAYS * (24 * 60 // SERVICE_HEALTH_INTERVAL_MINUTES)
-    for _ in range(cell_count):
-        request_count = cell_stats[bucket]["request_count"]
-        success_count = cell_stats[bucket]["success_count"]
-        failed_count = cell_stats[bucket]["failed_count"]
+    for _ in range(SERVICE_HEALTH_BUCKET_COUNT):
+        bucket_request_count = cell_stats[bucket]["request_count"]
+        bucket_success_count = cell_stats[bucket]["success_count"]
+        bucket_failed_count = cell_stats[bucket]["failed_count"]
         cells.append(
             {
                 "bucket_start": bucket,
-                "request_count": request_count,
-                "success_count": success_count,
-                "failed_count": failed_count,
+                "request_count": bucket_request_count,
+                "success_count": bucket_success_count,
+                "failed_count": bucket_failed_count,
                 "availability_percentage": (
                     _success_rate(
-                        success_count=success_count,
-                        total_count=request_count,
+                        success_count=bucket_success_count,
+                        total_count=bucket_request_count,
                     )
-                    if request_count > 0
+                    if bucket_request_count > 0
                     else None
                 ),
                 "status": _service_health_status(
-                    request_count=request_count,
-                    success_count=success_count,
-                    failed_count=failed_count,
+                    request_count=bucket_request_count,
+                    success_count=bucket_success_count,
+                    failed_count=bucket_failed_count,
                 ),
             }
         )
         bucket += timedelta(minutes=SERVICE_HEALTH_INTERVAL_MINUTES)
 
     return {
-        "days": SERVICE_HEALTH_DAYS,
+        "availability_percentage": (
+            _success_rate(success_count=success_count, total_count=request_count)
+            if request_count > 0
+            else None
+        ),
+        "request_count": request_count,
+        "success_count": success_count,
+        "failed_count": failed_count,
         "interval_minutes": SERVICE_HEALTH_INTERVAL_MINUTES,
-        "daily": daily,
         "cells": cells,
     }
 
@@ -876,8 +873,15 @@ async def get_usage_snapshot(
     ]
     rolling_request_count = len(rolling_events)
     rolling_token_count = sum(event.total_tokens for event in rolling_events)
+    service_health_window_start, _ = _service_health_window_bounds(normalized_end_at)
+    service_health_events = await _load_snapshot_events(
+        db,
+        profile_id=profile_id,
+        start_at=service_health_window_start,
+        end_at=normalized_end_at,
+    )
     service_health = _build_service_health(
-        events=events,
+        events=service_health_events,
         end_at=normalized_end_at,
     )
 
@@ -926,20 +930,7 @@ async def get_usage_snapshot(
                 3,
             ),
         },
-        "service_health": {
-            "availability_percentage": (
-                _success_rate(
-                    success_count=success_requests,
-                    total_count=total_requests,
-                )
-                if total_requests > 0
-                else None
-            ),
-            "request_count": total_requests,
-            "success_count": success_requests,
-            "failed_count": failed_requests,
-            **service_health,
-        },
+        "service_health": service_health,
         "request_trends": {
             "hourly": _build_request_trend_series(
                 events=events,

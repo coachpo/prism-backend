@@ -1,5 +1,5 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
@@ -126,6 +126,12 @@ async def _fetch_table_persistence(database_url: str, table_name: str) -> str | 
     if isinstance(persistence, bytes):
         return persistence.decode()
     return str(persistence)
+
+
+def _expected_latest_service_health_bucket_start(end_at: datetime) -> datetime:
+    adjusted_end = end_at - timedelta(microseconds=1)
+    minute = (adjusted_end.minute // 15) * 15
+    return adjusted_end.replace(minute=minute, second=0, microsecond=0)
 
 
 async def _seed_usage_snapshot_route_fixture() -> tuple[int, str, str]:
@@ -406,9 +412,37 @@ class TestDEF086_UsageStatisticsStorageContract:
         assert payload["overview"]["rolling_request_count"] == 0
         assert payload["overview"]["rolling_token_count"] == 0
         assert "request_events" not in payload
-        assert payload["service_health"]["days"] == 7
+        assert payload["service_health"]["availability_percentage"] == 100.0
+        assert payload["service_health"]["request_count"] == 1
+        assert payload["service_health"]["success_count"] == 1
+        assert payload["service_health"]["failed_count"] == 0
         assert payload["service_health"]["interval_minutes"] == 15
-        assert len(payload["service_health"]["cells"]) == 7 * 96
+        assert "days" not in payload["service_health"]
+        assert "daily" not in payload["service_health"]
+        assert len(payload["service_health"]["cells"]) == 672
+
+        service_health_bucket_starts = [
+            datetime.fromisoformat(cell["bucket_start"].replace("Z", "+00:00"))
+            for cell in payload["service_health"]["cells"]
+        ]
+        snapshot_end_at = datetime.fromisoformat(
+            payload["time_range"]["end_at"].replace("Z", "+00:00")
+        )
+
+        assert service_health_bucket_starts == sorted(service_health_bucket_starts)
+        assert all(
+            next_bucket - current_bucket == timedelta(minutes=15)
+            for current_bucket, next_bucket in zip(
+                service_health_bucket_starts,
+                service_health_bucket_starts[1:],
+            )
+        )
+        assert service_health_bucket_starts[0] == service_health_bucket_starts[
+            -1
+        ] - timedelta(minutes=15 * 671)
+        assert service_health_bucket_starts[
+            -1
+        ] == _expected_latest_service_health_bucket_start(snapshot_end_at)
         assert payload["endpoint_statistics"] == [
             {
                 "endpoint_id": payload["endpoint_statistics"][0]["endpoint_id"],
