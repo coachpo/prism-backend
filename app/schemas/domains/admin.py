@@ -1,12 +1,43 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .common import ApiFamily, AuthType, _HEADER_TOKEN_RE
-from .connection_model import RoutingPolicy
+from .connection_model import AutoRecovery, RoutingPolicy
 
 # --- Config Export/Import Schemas ---
+
+
+class _ConfigLoadbalanceStrategyBase(BaseModel):
+    name: str
+    strategy_type: Literal["legacy", "adaptive"]
+    legacy_strategy_type: Literal["single", "fill-first", "round-robin"] | None = None
+    auto_recovery: AutoRecovery | None = None
+    routing_policy: RoutingPolicy | None = None
+
+    @model_validator(mode="after")
+    def validate_strategy_shape(self):
+        if self.strategy_type == "legacy":
+            if self.legacy_strategy_type is None:
+                raise ValueError(
+                    "legacy_strategy_type is required for legacy strategies"
+                )
+            if self.auto_recovery is None:
+                raise ValueError("auto_recovery is required for legacy strategies")
+            if self.routing_policy is not None:
+                raise ValueError("routing_policy must be null for legacy strategies")
+            return self
+
+        if self.routing_policy is None:
+            raise ValueError("routing_policy is required for adaptive strategies")
+        if self.legacy_strategy_type is not None:
+            raise ValueError(
+                "legacy_strategy_type must be null for adaptive strategies"
+            )
+        if self.auto_recovery is not None:
+            raise ValueError("auto_recovery must be null for adaptive strategies")
+        return self
 
 
 class ConfigEndpointExport(BaseModel):
@@ -44,16 +75,12 @@ class ConfigPricingTemplateImport(ConfigPricingTemplateExport):
     pass
 
 
-class ConfigLoadbalanceStrategyExport(BaseModel):
-    name: str
-    routing_policy: RoutingPolicy
+class ConfigLoadbalanceStrategyExport(_ConfigLoadbalanceStrategyBase):
+    pass
 
 
-class ConfigLoadbalanceStrategyImport(BaseModel):
+class ConfigLoadbalanceStrategyImport(_ConfigLoadbalanceStrategyBase):
     model_config = ConfigDict(extra="forbid")
-
-    name: str
-    routing_policy: RoutingPolicy
 
 
 class ConfigVendorExport(BaseModel):

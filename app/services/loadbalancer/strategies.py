@@ -13,10 +13,12 @@ from app.schemas.schemas import (
 )
 
 from .policy import (
+    canonicalize_auto_recovery_document,
     canonicalize_routing_policy_document,
     resolve_effective_loadbalance_policy,
+    serialize_auto_recovery,
+    serialize_routing_policy,
 )
-from .policy import serialize_routing_policy
 from .state import clear_strategy_state
 
 
@@ -60,19 +62,42 @@ def _build_strategy_response(
     *,
     attached_model_count: int,
 ) -> LoadbalanceStrategyResponse:
-    return LoadbalanceStrategyResponse.model_validate(
-        {
-            "id": strategy.id,
-            "profile_id": strategy.profile_id,
-            "name": strategy.name,
-            "routing_policy": serialize_routing_policy(
-                resolve_effective_loadbalance_policy(strategy)
-            ),
-            "attached_model_count": attached_model_count,
-            "created_at": strategy.created_at,
-            "updated_at": strategy.updated_at,
-        }
-    )
+    policy = resolve_effective_loadbalance_policy(strategy)
+    payload: dict[str, object] = {
+        "id": strategy.id,
+        "profile_id": strategy.profile_id,
+        "name": strategy.name,
+        "strategy_type": policy.strategy_type,
+        "legacy_strategy_type": policy.legacy_strategy_type,
+        "auto_recovery": None,
+        "routing_policy": None,
+        "attached_model_count": attached_model_count,
+        "created_at": strategy.created_at,
+        "updated_at": strategy.updated_at,
+    }
+    if policy.strategy_type == "legacy":
+        payload["auto_recovery"] = serialize_auto_recovery(policy)
+    else:
+        payload["routing_policy"] = serialize_routing_policy(policy)
+    return LoadbalanceStrategyResponse.model_validate(payload)
+
+
+def _apply_strategy_body(
+    strategy: LoadbalanceStrategy,
+    *,
+    body: LoadbalanceStrategyCreate | LoadbalanceStrategyUpdate,
+) -> None:
+    strategy.name = body.name
+    strategy.strategy_type = body.strategy_type
+    if body.strategy_type == "legacy":
+        strategy.legacy_strategy_type = body.legacy_strategy_type
+        strategy.auto_recovery = canonicalize_auto_recovery_document(body.auto_recovery)
+        strategy.routing_policy = None
+        return
+
+    strategy.legacy_strategy_type = None
+    strategy.auto_recovery = None
+    strategy.routing_policy = canonicalize_routing_policy_document(body.routing_policy)
 
 
 async def list_loadbalance_strategies(
@@ -110,10 +135,9 @@ async def create_loadbalance_strategy(
     strategy = LoadbalanceStrategy(
         profile_id=profile_id,
         name=body.name,
-        routing_policy=canonicalize_routing_policy_document(
-            body.routing_policy,
-        ),
+        strategy_type=body.strategy_type,
     )
+    _apply_strategy_body(strategy, body=body)
     db.add(strategy)
     await db.flush()
     await db.refresh(strategy)
@@ -181,10 +205,7 @@ async def update_loadbalance_strategy(
             exclude_id=strategy.id,
         )
 
-    strategy.name = body.name
-    strategy.routing_policy = canonicalize_routing_policy_document(
-        body.routing_policy,
-    )
+    _apply_strategy_body(strategy, body=body)
     strategy.updated_at = utc_now()
 
     await db.flush()

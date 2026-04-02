@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.time import ensure_utc_datetime, utc_now
-from app.models.models import LoadbalanceEvent, ModelConfig
+from app.models.models import Connection, LoadbalanceEvent, ModelConfig
 from app.schemas.schemas import (
     LoadbalanceCurrentStateItem,
     LoadbalanceCurrentStateListResponse,
@@ -18,6 +18,7 @@ from app.schemas.schemas import (
 
 from .state import (
     clear_connection_state,
+    clear_round_robin_state_for_model,
     list_current_states_for_model,
 )
 
@@ -122,10 +123,23 @@ async def list_model_current_state(
 
 async def reset_connection_current_state(
     *,
+    db: AsyncSession,
     profile_id: int,
     connection_id: int,
 ) -> LoadbalanceCurrentStateResetResponse:
+    model_config_id = await db.scalar(
+        select(Connection.model_config_id).where(
+            Connection.profile_id == profile_id,
+            Connection.id == connection_id,
+        )
+    )
     cleared = await clear_connection_state(profile_id, connection_id)
+    if model_config_id is not None:
+        _ = await clear_round_robin_state_for_model(
+            db,
+            profile_id=profile_id,
+            model_config_id=model_config_id,
+        )
     return LoadbalanceCurrentStateResetResponse(
         connection_id=connection_id,
         cleared=cleared,

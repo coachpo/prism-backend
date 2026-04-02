@@ -13,8 +13,10 @@ from pydantic import (
 )
 
 from app.services.loadbalancer.policy import (
+    canonicalize_auto_recovery_document,
     normalize_failover_status_codes,
     resolve_effective_loadbalance_policy,
+    serialize_auto_recovery,
     serialize_routing_policy,
 )
 
@@ -207,6 +209,65 @@ class ModelConnectionsBatchResponse(BaseModel):
     items: list[ModelConnectionsBatchItem]
 
 
+class AutoRecoveryCooldown(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    base_seconds: int = Field(default=60, ge=0, le=86_400)
+    failure_threshold: int = Field(default=2, ge=1, le=50)
+    backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0)
+    max_cooldown_seconds: int = Field(default=900, ge=1, le=86_400)
+    jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
+
+
+class AutoRecoveryBan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["off", "manual", "temporary"] = "off"
+    max_cooldown_strikes_before_ban: int = Field(default=0, ge=0, le=100)
+    ban_duration_seconds: int = Field(default=0, ge=0, le=86_400)
+
+    @model_validator(mode="after")
+    def validate_ban_policy(self):
+        if self.mode == "off":
+            if self.max_cooldown_strikes_before_ban != 0:
+                raise ValueError(
+                    "mode='off' requires max_cooldown_strikes_before_ban=0"
+                )
+            if self.ban_duration_seconds != 0:
+                raise ValueError("mode='off' requires ban_duration_seconds=0")
+        if self.mode == "manual":
+            if self.max_cooldown_strikes_before_ban < 1:
+                raise ValueError(
+                    "mode='manual' requires max_cooldown_strikes_before_ban >= 1"
+                )
+            if self.ban_duration_seconds != 0:
+                raise ValueError("mode='manual' requires ban_duration_seconds=0")
+        if self.mode == "temporary":
+            if self.max_cooldown_strikes_before_ban < 1:
+                raise ValueError(
+                    "mode='temporary' requires max_cooldown_strikes_before_ban >= 1"
+                )
+            if self.ban_duration_seconds < 1:
+                raise ValueError("mode='temporary' requires ban_duration_seconds >= 1")
+        return self
+
+
+class AutoRecovery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["disabled", "enabled"] = "enabled"
+    status_codes: list[int] = Field(
+        default_factory=lambda: [403, 422, 429, 500, 502, 503, 504, 529]
+    )
+    cooldown: AutoRecoveryCooldown = Field(default_factory=AutoRecoveryCooldown)
+    ban: AutoRecoveryBan = Field(default_factory=AutoRecoveryBan)
+
+    @field_validator("status_codes", mode="before")
+    @classmethod
+    def validate_status_codes(cls, value: object) -> list[int]:
+        return list(normalize_failover_status_codes(value))
+
+
 class RoutingPolicyHedge(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -300,7 +361,10 @@ class LoadbalanceStrategyBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str
-    routing_policy: RoutingPolicy
+    strategy_type: Literal["legacy", "adaptive"]
+    legacy_strategy_type: Literal["single", "fill-first", "round-robin"] | None = None
+    auto_recovery: AutoRecovery | None = None
+    routing_policy: RoutingPolicy | None = None
 
     @field_validator("name")
     @classmethod
@@ -309,6 +373,30 @@ class LoadbalanceStrategyBase(BaseModel):
         if not normalized:
             raise ValueError("name must not be empty")
         return normalized
+
+    @model_validator(mode="after")
+    def validate_strategy_shape(self):
+        if self.strategy_type == "legacy":
+            if self.legacy_strategy_type is None:
+                raise ValueError(
+                    "legacy_strategy_type is required for legacy strategies"
+                )
+            if self.auto_recovery is None:
+                raise ValueError("auto_recovery is required for legacy strategies")
+            canonicalize_auto_recovery_document(self.auto_recovery)
+            if self.routing_policy is not None:
+                raise ValueError("routing_policy must be null for legacy strategies")
+            return self
+
+        if self.routing_policy is None:
+            raise ValueError("routing_policy is required for adaptive strategies")
+        if self.legacy_strategy_type is not None:
+            raise ValueError(
+                "legacy_strategy_type must be null for adaptive strategies"
+            )
+        if self.auto_recovery is not None:
+            raise ValueError("auto_recovery must be null for adaptive strategies")
+        return self
 
 
 class LoadbalanceStrategyCreate(LoadbalanceStrategyBase):
@@ -333,11 +421,19 @@ class LoadbalanceStrategySummary(LoadbalanceStrategyBase):
             return value
 
         policy = resolve_effective_loadbalance_policy(value)
-        return {
+        payload: dict[str, object] = {
             "id": getattr(value, "id"),
             "name": getattr(value, "name"),
-            "routing_policy": serialize_routing_policy(policy),
+            "strategy_type": policy.strategy_type,
+            "legacy_strategy_type": policy.legacy_strategy_type,
+            "auto_recovery": None,
+            "routing_policy": None,
         }
+        if policy.strategy_type == "legacy":
+            payload["auto_recovery"] = serialize_auto_recovery(policy)
+        else:
+            payload["routing_policy"] = serialize_routing_policy(policy)
+        return payload
 
 
 class LoadbalanceStrategyResponse(LoadbalanceStrategySummary):

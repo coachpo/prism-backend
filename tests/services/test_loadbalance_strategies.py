@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
+    LoadbalanceRoundRobinState,
     LoadbalanceStrategy,
     ModelConfig,
     Profile,
@@ -20,7 +21,11 @@ from app.routers.loadbalance import (
     update_strategy,
 )
 from app.schemas.schemas import LoadbalanceStrategyCreate, LoadbalanceStrategyUpdate
-from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
+from app.services.loadbalancer.policy import canonicalize_auto_recovery_document
+from tests.loadbalance_strategy_helpers import (
+    make_auto_recovery_enabled,
+    make_routing_policy_adaptive,
+)
 
 
 def _vendor_key_for_api_family(api_family: str) -> str:
@@ -44,7 +49,7 @@ async def _get_or_create_vendor(db, *, api_family: str = "openai"):
     if vendor is not None:
         return vendor
 
-    vendor = Vendor(key=vendor_key, name="Adaptive routing vendor")
+    vendor = Vendor(key=vendor_key, name="Dual strategy vendor")
     db.add(vendor)
     await db.flush()
     return vendor
@@ -57,170 +62,396 @@ def _strategy_public_json(strategy) -> dict[str, object]:
 def _make_strategy_create(
     *,
     name: str,
-    routing_policy: dict[str, object],
+    strategy_type: str,
+    legacy_strategy_type: str | None = None,
+    auto_recovery: dict[str, object] | None = None,
+    routing_policy: dict[str, object] | None = None,
 ) -> LoadbalanceStrategyCreate:
-    return LoadbalanceStrategyCreate.model_validate(
-        {
-            "name": name,
-            "routing_policy": routing_policy,
-        }
-    )
+    payload: dict[str, object] = {
+        "name": name,
+        "strategy_type": strategy_type,
+    }
+    if legacy_strategy_type is not None:
+        payload["legacy_strategy_type"] = legacy_strategy_type
+    if auto_recovery is not None:
+        payload["auto_recovery"] = auto_recovery
+    if routing_policy is not None:
+        payload["routing_policy"] = routing_policy
+    return LoadbalanceStrategyCreate.model_validate(payload)
 
 
 def _make_strategy_update(
     *,
     name: str,
-    routing_policy: dict[str, object],
+    strategy_type: str,
+    legacy_strategy_type: str | None = None,
+    auto_recovery: dict[str, object] | None = None,
+    routing_policy: dict[str, object] | None = None,
 ) -> LoadbalanceStrategyUpdate:
-    return LoadbalanceStrategyUpdate.model_validate(
-        {
-            "name": name,
-            "routing_policy": routing_policy,
-        }
+    payload: dict[str, object] = {
+        "name": name,
+        "strategy_type": strategy_type,
+    }
+    if legacy_strategy_type is not None:
+        payload["legacy_strategy_type"] = legacy_strategy_type
+    if auto_recovery is not None:
+        payload["auto_recovery"] = auto_recovery
+    if routing_policy is not None:
+        payload["routing_policy"] = routing_policy
+    return LoadbalanceStrategyUpdate.model_validate(payload)
+
+
+def _assert_legacy_strategy_contract(
+    strategy_payload: dict[str, object],
+    *,
+    legacy_strategy_type: str,
+    auto_recovery: dict[str, object],
+) -> None:
+    assert strategy_payload["strategy_type"] == "legacy"
+    assert strategy_payload["legacy_strategy_type"] == legacy_strategy_type
+    assert strategy_payload["auto_recovery"] == canonicalize_auto_recovery_document(
+        auto_recovery
     )
+    assert strategy_payload.get("routing_policy") is None
 
 
-def _assert_routing_policy_contract(strategy_payload: dict[str, object]) -> None:
-    assert "routing_policy" in strategy_payload
-    assert "strategy_type" not in strategy_payload
-    assert "auto_recovery" not in strategy_payload
+def _assert_adaptive_strategy_contract(
+    strategy_payload: dict[str, object],
+    *,
+    routing_policy: dict[str, object],
+) -> None:
+    assert strategy_payload["strategy_type"] == "adaptive"
+    assert strategy_payload.get("legacy_strategy_type") is None
+    assert strategy_payload.get("auto_recovery") is None
+    assert strategy_payload["routing_policy"] == routing_policy
 
 
 class TestLoadbalanceStrategies:
-    def test_strategy_contract_uses_routing_policy_document_and_rejects_legacy_fields(
+    def test_strategy_contract_supports_explicit_legacy_and_adaptive_strategy_types(
         self,
     ):
-        created = _make_strategy_create(
+        legacy = _make_strategy_create(
+            name="legacy-primary",
+            strategy_type="legacy",
+            legacy_strategy_type="single",
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+        adaptive_policy = make_routing_policy_adaptive(
+            routing_objective="maximize_availability",
+            deadline_budget_ms=12_000,
+            hedge_enabled=True,
+            hedge_delay_ms=900,
+            endpoint_ping_weight=1.5,
+            conversation_delay_weight=0.75,
+            failure_penalty_weight=2.5,
+            stale_after_seconds=180,
+        )
+        adaptive = _make_strategy_create(
             name="adaptive-primary",
-            routing_policy=make_routing_policy_adaptive(),
+            strategy_type="adaptive",
+            routing_policy=adaptive_policy,
         )
 
-        created_payload = _strategy_public_json(created)
-        _assert_routing_policy_contract(created_payload)
-        assert created_payload["routing_policy"] == make_routing_policy_adaptive()
+        _assert_legacy_strategy_contract(
+            _strategy_public_json(legacy),
+            legacy_strategy_type="single",
+            auto_recovery=make_auto_recovery_enabled(),
+        )
+        _assert_adaptive_strategy_contract(
+            _strategy_public_json(adaptive),
+            routing_policy=adaptive_policy,
+        )
 
         with pytest.raises(ValidationError):
-            _ = LoadbalanceStrategyCreate.model_validate(
-                {
-                    "name": "legacy-failover",
-                    "strategy_type": "failover",
-                    "auto_recovery": {"mode": "disabled"},
-                }
+            _make_strategy_create(
+                name="legacy-missing-mode",
+                strategy_type="legacy",
+                auto_recovery=make_auto_recovery_enabled(),
+            )
+        with pytest.raises(ValidationError):
+            _make_strategy_create(
+                name="adaptive-missing-policy",
+                strategy_type="adaptive",
+            )
+        with pytest.raises(ValidationError):
+            _make_strategy_create(
+                name="adaptive-with-legacy-fields",
+                strategy_type="adaptive",
+                legacy_strategy_type="fill-first",
+                auto_recovery=make_auto_recovery_enabled(),
+                routing_policy=adaptive_policy,
             )
 
     @pytest.mark.asyncio
-    async def test_strategy_crud_roundtrip_persists_single_routing_policy_document(
-        self,
-    ):
+    async def test_strategy_crud_roundtrip_persists_dual_strategy_contract(self):
         async with AsyncSessionLocal() as db:
             profile = Profile(name="Strategy CRUD Profile", is_active=False, version=0)
             db.add(profile)
             await db.flush()
 
-            created_policy = make_routing_policy_adaptive(
-                endpoint_ping_weight=0.75,
-                conversation_delay_weight=1.5,
-                failure_penalty_weight=3.0,
-                stale_after_seconds=180,
+            legacy_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[429, 503],
+                base_seconds=45,
+                failure_threshold=4,
+                backoff_multiplier=3.5,
+                max_cooldown_seconds=720,
+                jitter_ratio=0.35,
+                ban_mode="temporary",
+                max_cooldown_strikes_before_ban=3,
+                ban_duration_seconds=600,
             )
-            updated_policy = make_routing_policy_adaptive(
+            adaptive_policy = make_routing_policy_adaptive(
                 routing_objective="maximize_availability",
-                deadline_budget_ms=18_000,
+                deadline_budget_ms=12_000,
                 hedge_enabled=True,
                 hedge_delay_ms=900,
-                endpoint_ping_weight=0.5,
+                failure_status_codes=[429, 503],
+                endpoint_ping_weight=1.5,
                 conversation_delay_weight=0.75,
-                failure_penalty_weight=4.0,
-                stale_after_seconds=120,
+                failure_penalty_weight=2.5,
+                stale_after_seconds=180,
+            )
+            updated_legacy_auto_recovery = make_auto_recovery_enabled(
+                status_codes=[403, 429, 503],
+                base_seconds=60,
+                failure_threshold=2,
+                backoff_multiplier=2.0,
+                max_cooldown_seconds=900,
+                jitter_ratio=0.2,
+            )
+            updated_adaptive_policy = make_routing_policy_adaptive(
+                routing_objective="minimize_latency",
+                deadline_budget_ms=18_000,
+                hedge_enabled=False,
+                hedge_delay_ms=1_500,
+                failure_status_codes=[403, 429, 503],
+                endpoint_ping_weight=1.0,
+                conversation_delay_weight=1.0,
+                failure_penalty_weight=2.0,
+                stale_after_seconds=300,
             )
 
-            created = await create_strategy(
+            created_legacy = await create_strategy(
                 body=_make_strategy_create(
-                    name="adaptive-primary",
-                    routing_policy=created_policy,
+                    name="legacy-fill-first",
+                    strategy_type="legacy",
+                    legacy_strategy_type="fill-first",
+                    auto_recovery=legacy_auto_recovery,
                 ),
                 db=db,
                 profile_id=profile.id,
             )
+            created_adaptive = await create_strategy(
+                body=_make_strategy_create(
+                    name="adaptive-latency",
+                    strategy_type="adaptive",
+                    routing_policy=adaptive_policy,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            vendor = await _get_or_create_vendor(db)
+            legacy_model = ModelConfig(
+                profile_id=profile.id,
+                vendor_id=vendor.id,
+                api_family="openai",
+                model_id="legacy-round-robin-model",
+                model_type="native",
+                loadbalance_strategy_id=created_legacy.id,
+                is_enabled=True,
+            )
+            db.add(legacy_model)
+            await db.flush()
+            db.add(
+                LoadbalanceRoundRobinState(
+                    profile_id=profile.id,
+                    model_config_id=legacy_model.id,
+                    next_cursor=1,
+                )
+            )
             await db.commit()
 
-            created_payload = _strategy_public_json(created)
-            assert created.name == "adaptive-primary"
-            assert created_payload["routing_policy"] == created_policy
-            assert created.attached_model_count == 0
-            _assert_routing_policy_contract(created_payload)
+            _assert_legacy_strategy_contract(
+                _strategy_public_json(created_legacy),
+                legacy_strategy_type="fill-first",
+                auto_recovery=legacy_auto_recovery,
+            )
+            _assert_adaptive_strategy_contract(
+                _strategy_public_json(created_adaptive),
+                routing_policy=adaptive_policy,
+            )
 
             listed = await list_strategies(db=db, profile_id=profile.id)
-            assert [strategy.name for strategy in listed] == ["adaptive-primary"]
-            listed_payload = _strategy_public_json(listed[0])
-            assert listed_payload["routing_policy"] == created_policy
-            _assert_routing_policy_contract(listed_payload)
+            listed_by_name = {strategy.name: strategy for strategy in listed}
+            _assert_legacy_strategy_contract(
+                _strategy_public_json(listed_by_name["legacy-fill-first"]),
+                legacy_strategy_type="fill-first",
+                auto_recovery=legacy_auto_recovery,
+            )
+            _assert_adaptive_strategy_contract(
+                _strategy_public_json(listed_by_name["adaptive-latency"]),
+                routing_policy=adaptive_policy,
+            )
 
-            updated = await update_strategy(
-                strategy_id=created.id,
+            updated_legacy = await update_strategy(
+                strategy_id=created_legacy.id,
                 body=_make_strategy_update(
-                    name="adaptive-secondary",
-                    routing_policy=updated_policy,
+                    name="legacy-round-robin",
+                    strategy_type="legacy",
+                    legacy_strategy_type="round-robin",
+                    auto_recovery=updated_legacy_auto_recovery,
+                ),
+                db=db,
+                profile_id=profile.id,
+            )
+            updated_adaptive = await update_strategy(
+                strategy_id=created_adaptive.id,
+                body=_make_strategy_update(
+                    name="adaptive-availability",
+                    strategy_type="adaptive",
+                    routing_policy=updated_adaptive_policy,
                 ),
                 db=db,
                 profile_id=profile.id,
             )
             await db.commit()
 
-            persisted_strategy = (
+            persisted_legacy = (
                 await db.execute(
                     select(LoadbalanceStrategy).where(
-                        LoadbalanceStrategy.id == created.id
+                        LoadbalanceStrategy.id == created_legacy.id
                     )
                 )
             ).scalar_one()
+            persisted_adaptive = (
+                await db.execute(
+                    select(LoadbalanceStrategy).where(
+                        LoadbalanceStrategy.id == created_adaptive.id
+                    )
+                )
+            ).scalar_one()
+            legacy_round_robin_state = (
+                await db.execute(
+                    select(LoadbalanceRoundRobinState).where(
+                        LoadbalanceRoundRobinState.profile_id == profile.id
+                    )
+                )
+            ).scalar_one_or_none()
 
-            updated_payload = _strategy_public_json(updated)
-            assert updated.name == "adaptive-secondary"
-            assert updated_payload["routing_policy"] == updated_policy
-            assert getattr(persisted_strategy, "routing_policy") == updated_policy
-            _assert_routing_policy_contract(updated_payload)
+            _assert_legacy_strategy_contract(
+                _strategy_public_json(updated_legacy),
+                legacy_strategy_type="round-robin",
+                auto_recovery=updated_legacy_auto_recovery,
+            )
+            _assert_adaptive_strategy_contract(
+                _strategy_public_json(updated_adaptive),
+                routing_policy=updated_adaptive_policy,
+            )
+            assert persisted_legacy.strategy_type == "legacy"
+            assert persisted_legacy.legacy_strategy_type == "round-robin"
+            assert (
+                persisted_legacy.auto_recovery
+                == canonicalize_auto_recovery_document(updated_legacy_auto_recovery)
+            )
+            assert persisted_legacy.routing_policy is None
+            assert persisted_adaptive.strategy_type == "adaptive"
+            assert persisted_adaptive.legacy_strategy_type is None
+            assert persisted_adaptive.auto_recovery is None
+            assert persisted_adaptive.routing_policy == updated_adaptive_policy
+            assert legacy_round_robin_state is None
 
-            deleted = await delete_strategy(
-                strategy_id=created.id,
+            await db.delete(legacy_model)
+            await db.commit()
+
+            deleted_legacy = await delete_strategy(
+                strategy_id=created_legacy.id,
+                db=db,
+                profile_id=profile.id,
+            )
+            deleted_adaptive = await delete_strategy(
+                strategy_id=created_adaptive.id,
                 db=db,
                 profile_id=profile.id,
             )
             await db.commit()
 
-            assert deleted == {"deleted": True}
+            assert deleted_legacy == {"deleted": True}
+            assert deleted_adaptive == {"deleted": True}
 
-    def test_policy_resolver_exposes_monitoring_inputs_from_routing_policy_document(
-        self,
-    ):
+    def test_policy_resolver_supports_legacy_and_adaptive_strategy_types(self):
         from app.services.loadbalancer.policy import (
             resolve_effective_loadbalance_policy,
         )
 
-        strategy = SimpleNamespace(
-            routing_policy=make_routing_policy_adaptive(
-                deadline_budget_ms=22_000,
-                hedge_enabled=True,
-                hedge_delay_ms=750,
-                endpoint_ping_weight=0.6,
-                conversation_delay_weight=1.4,
-                failure_penalty_weight=2.5,
-                stale_after_seconds=90,
+        legacy_policy = resolve_effective_loadbalance_policy(
+            SimpleNamespace(
+                strategy_type="legacy",
+                legacy_strategy_type="round-robin",
+                auto_recovery=make_auto_recovery_enabled(
+                    status_codes=[429, 503],
+                    base_seconds=45,
+                    failure_threshold=4,
+                    backoff_multiplier=3.5,
+                    max_cooldown_seconds=720,
+                    jitter_ratio=0.35,
+                    ban_mode="temporary",
+                    max_cooldown_strikes_before_ban=3,
+                    ban_duration_seconds=600,
+                ),
+            )
+        )
+        adaptive_policy = resolve_effective_loadbalance_policy(
+            SimpleNamespace(
+                strategy_type="adaptive",
+                routing_policy=make_routing_policy_adaptive(
+                    routing_objective="maximize_availability",
+                    deadline_budget_ms=12_000,
+                    hedge_enabled=True,
+                    hedge_delay_ms=900,
+                    failure_status_codes=[429, 503],
+                    endpoint_ping_weight=1.5,
+                    conversation_delay_weight=0.75,
+                    failure_penalty_weight=2.5,
+                    stale_after_seconds=180,
+                ),
             )
         )
 
-        policy = resolve_effective_loadbalance_policy(strategy)
+        assert legacy_policy.strategy_type == "legacy"
+        assert legacy_policy.legacy_strategy_type == "round-robin"
+        assert legacy_policy.failover_recovery_enabled is True
+        assert legacy_policy.failover_status_codes == (429, 503)
+        assert legacy_policy.failover_ban_mode == "temporary"
+        assert legacy_policy.failover_ban_duration_seconds == 600
 
-        assert getattr(policy, "kind", None) == "adaptive"
-        assert getattr(policy, "routing_objective", None) == "minimize_latency"
-        assert getattr(policy, "deadline_budget_ms", None) == 22_000
-        assert getattr(policy, "hedge_enabled", None) is True
-        assert getattr(policy, "hedge_delay_ms", None) == 750
-        assert getattr(policy, "monitoring_enabled", None) is True
-        assert getattr(policy, "monitoring_stale_after_seconds", None) == 90
-        assert getattr(policy, "monitoring_endpoint_ping_weight", None) == 0.6
-        assert getattr(policy, "monitoring_conversation_delay_weight", None) == 1.4
-        assert getattr(policy, "monitoring_failure_penalty_weight", None) == 2.5
+        assert adaptive_policy.strategy_type == "adaptive"
+        assert adaptive_policy.legacy_strategy_type is None
+        assert adaptive_policy.routing_objective == "maximize_availability"
+        assert adaptive_policy.deadline_budget_ms == 12_000
+        assert adaptive_policy.hedge_enabled is True
+        assert adaptive_policy.monitoring_enabled is True
+
+    def test_policy_resolver_rejects_missing_or_inconsistent_dual_strategy_shapes(self):
+        from app.services.loadbalancer.policy import (
+            resolve_effective_loadbalance_policy,
+        )
+
+        with pytest.raises(ValueError, match="strategy_type"):
+            resolve_effective_loadbalance_policy(SimpleNamespace())
+        with pytest.raises(ValueError, match="legacy_strategy_type"):
+            resolve_effective_loadbalance_policy(
+                SimpleNamespace(
+                    strategy_type="legacy",
+                    auto_recovery=make_auto_recovery_enabled(),
+                )
+            )
+        with pytest.raises(ValueError, match="auto_recovery"):
+            resolve_effective_loadbalance_policy(
+                SimpleNamespace(
+                    strategy_type="legacy",
+                    legacy_strategy_type="single",
+                )
+            )
 
     @pytest.mark.asyncio
     async def test_delete_strategy_rejects_attached_models(self):
@@ -236,8 +467,11 @@ class TestLoadbalanceStrategies:
 
             strategy = LoadbalanceStrategy(
                 profile_id=profile.id,
-                name="adaptive-attached",
-                routing_policy=make_routing_policy_adaptive(),
+                name="legacy-attached",
+                strategy_type="legacy",
+                legacy_strategy_type="single",
+                auto_recovery=make_auto_recovery_enabled(),
+                routing_policy=None,
             )
             model = ModelConfig(
                 profile_id=profile.id,

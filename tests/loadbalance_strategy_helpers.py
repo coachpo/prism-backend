@@ -121,52 +121,31 @@ def make_loadbalance_strategy(
     routing_policy: dict[str, object] | None = None,
     name: str | None = None,
 ) -> LoadbalanceStrategy:
-    resolved_routing_policy = routing_policy
-    if resolved_routing_policy is None:
-        if failover_recovery_enabled is None:
-            failover_recovery_enabled = strategy_type not in {None, "single"}
-
-        resolved_auto_recovery = auto_recovery or (
-            make_auto_recovery_enabled(status_codes=failover_status_codes)
-            if strategy_type not in {None, "single"} and failover_recovery_enabled
-            else make_auto_recovery_disabled()
-        )
-        resolved_auto_recovery_dict = cast(dict[str, object], resolved_auto_recovery)
-        cooldown = cast(
-            dict[str, object], resolved_auto_recovery_dict.get("cooldown", {})
-        )
-        ban = cast(dict[str, object], resolved_auto_recovery_dict.get("ban", {}))
-        resolved_routing_policy = make_routing_policy_adaptive(
-            routing_objective=(
-                "maximize_availability"
-                if strategy_type in {"fill-first", "round-robin", "failover"}
-                else "minimize_latency"
-            ),
-            failure_status_codes=cast(
-                list[int] | None,
-                resolved_auto_recovery_dict.get("status_codes", failover_status_codes),
-            ),
-            base_open_seconds=cast(int, cooldown.get("base_seconds", 60)),
-            failure_threshold=cast(int, cooldown.get("failure_threshold", 2)),
-            backoff_multiplier=cast(float, cooldown.get("backoff_multiplier", 2.0)),
-            max_open_seconds=cast(int, cooldown.get("max_cooldown_seconds", 900)),
-            jitter_ratio=cast(float, cooldown.get("jitter_ratio", 0.2)),
-            ban_mode=cast(
-                Literal["off", "manual", "temporary"],
-                ban.get("mode", "off"),
-            ),
-            max_open_strikes_before_ban=cast(
-                int,
-                ban.get("max_cooldown_strikes_before_ban", 0),
-            ),
-            ban_duration_seconds=cast(int, ban.get("ban_duration_seconds", 0)),
-        )
-
     payload: dict[str, object] = {
         "name": name
         or f"{strategy_type or 'adaptive'}-strategy-{next(_strategy_counter)}",
-        "routing_policy": resolved_routing_policy,
+        "strategy_type": "adaptive" if routing_policy is not None else "legacy",
+        "legacy_strategy_type": None,
+        "auto_recovery": None,
+        "routing_policy": routing_policy,
     }
+    if routing_policy is None:
+        resolved_strategy_type = strategy_type or "single"
+        failover_enabled = (
+            failover_recovery_enabled
+            if failover_recovery_enabled is not None
+            else resolved_strategy_type != "single"
+        )
+        payload["legacy_strategy_type"] = (
+            "round-robin"
+            if resolved_strategy_type == "failover"
+            else resolved_strategy_type
+        )
+        payload["auto_recovery"] = auto_recovery or (
+            make_auto_recovery_enabled(status_codes=failover_status_codes)
+            if failover_enabled
+            else make_auto_recovery_disabled()
+        )
     if profile is not None:
         payload["profile"] = profile
     elif profile_id is not None:
