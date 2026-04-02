@@ -463,6 +463,9 @@ class TestConfigExportImportIsolation:
         assert len(payload["loadbalance_strategies"]) == 1
         assert len(payload["models"]) == 2
         strategy_payload = payload["loadbalance_strategies"][0]
+        assert strategy_payload["strategy_type"] == "adaptive"
+        assert strategy_payload["legacy_strategy_type"] is None
+        assert strategy_payload["auto_recovery"] is None
         assert strategy_payload["routing_policy"] == make_routing_policy_adaptive(
             routing_objective="maximize_availability",
             failure_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
@@ -472,8 +475,6 @@ class TestConfigExportImportIsolation:
             max_open_seconds=720,
             jitter_ratio=0.35,
         )
-        assert "strategy_type" not in strategy_payload
-        assert "auto_recovery" not in strategy_payload
         exported_connection = payload["models"][0]["connections"][0]
         assert exported_connection["qps_limit"] == 3
         assert exported_connection["max_in_flight_non_stream"] == 5
@@ -711,6 +712,7 @@ class TestConfigExportImportIsolation:
                 "loadbalance_strategies": [
                     {
                         "name": "adaptive-availability",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(
                             routing_objective="maximize_availability",
                             failure_status_codes=[
@@ -941,6 +943,9 @@ class TestConfigExportImportIsolation:
         assert target_models[0].api_family == "openai"
 
         assert len(target_strategies) == 1
+        assert target_strategies[0].strategy_type == "adaptive"
+        assert target_strategies[0].legacy_strategy_type is None
+        assert target_strategies[0].auto_recovery is None
         assert target_strategies[0].routing_policy == make_routing_policy_adaptive(
             routing_objective="maximize_availability",
             failure_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
@@ -1140,7 +1145,9 @@ class TestConfigExportImportIsolation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
-                        "routing_policy": make_routing_policy_adaptive(),
+                        "strategy_type": "legacy",
+                        "legacy_strategy_type": "single",
+                        "auto_recovery": make_auto_recovery_disabled(),
                     }
                 ],
                 "models": [

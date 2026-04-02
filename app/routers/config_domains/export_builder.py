@@ -34,6 +34,7 @@ from app.schemas.schemas import (
 )
 from app.services.loadbalancer.policy import (
     resolve_effective_loadbalance_policy,
+    serialize_auto_recovery,
     serialize_routing_policy,
 )
 
@@ -163,15 +164,20 @@ async def build_export_payload(
 
     exported_loadbalance_strategies = []
     for strategy in loadbalance_strategies:
+        policy = resolve_effective_loadbalance_policy(strategy)
+        payload: dict[str, object] = {
+            "name": strategy.name,
+            "strategy_type": policy.strategy_type,
+            "legacy_strategy_type": policy.legacy_strategy_type,
+            "auto_recovery": None,
+            "routing_policy": None,
+        }
+        if policy.strategy_type == "legacy":
+            payload["auto_recovery"] = serialize_auto_recovery(policy)
+        else:
+            payload["routing_policy"] = serialize_routing_policy(policy)
         exported_loadbalance_strategies.append(
-            ConfigLoadbalanceStrategyExport.model_validate(
-                {
-                    "name": strategy.name,
-                    "routing_policy": serialize_routing_policy(
-                        resolve_effective_loadbalance_policy(strategy)
-                    ),
-                }
-            )
+            ConfigLoadbalanceStrategyExport.model_validate(payload)
         )
 
     pricing_template_name_by_id = {

@@ -21,7 +21,10 @@ from app.models.models import (
 )
 from app.routers.shared import lock_profile_row
 from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
-from app.services.loadbalancer.policy import canonicalize_routing_policy_document
+from app.services.loadbalancer.policy import (
+    canonicalize_auto_recovery_document,
+    canonicalize_routing_policy_document,
+)
 from app.services.loadbalancer.runtime_store import clear_profile_runtime_state
 from app.services.proxy_service import normalize_base_url
 
@@ -345,8 +348,21 @@ async def execute_import_payload(
             id=strategy_id_allocator.take(),
             profile_id=profile_id,
             name=strategy_name,
-            routing_policy=canonicalize_routing_policy_document(
-                strategy_data.routing_policy,
+            strategy_type=strategy_data.strategy_type,
+            legacy_strategy_type=(
+                strategy_data.legacy_strategy_type
+                if strategy_data.strategy_type == "legacy"
+                else None
+            ),
+            auto_recovery=(
+                canonicalize_auto_recovery_document(strategy_data.auto_recovery)
+                if strategy_data.strategy_type == "legacy"
+                else None
+            ),
+            routing_policy=(
+                canonicalize_routing_policy_document(strategy_data.routing_policy)
+                if strategy_data.strategy_type == "adaptive"
+                else None
             ),
         )
         db.add(strategy)
