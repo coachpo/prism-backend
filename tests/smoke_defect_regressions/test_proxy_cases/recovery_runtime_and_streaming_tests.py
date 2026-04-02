@@ -467,8 +467,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="failover",
-            failover_recovery_enabled=True,
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(),
         )
 
         mock_rules_result = MagicMock()
@@ -684,8 +684,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="failover",
-            failover_recovery_enabled=True,
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(base_open_seconds=17),
         )
 
         mock_rules_result = MagicMock()
@@ -831,8 +831,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="failover",
-            failover_recovery_enabled=True,
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(),
         )
 
         mock_rules_result = MagicMock()
@@ -993,8 +993,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="failover",
-            failover_recovery_enabled=True,
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(base_open_seconds=17),
         )
 
         mock_rules_result = MagicMock()
@@ -1151,8 +1151,8 @@ class TestDEF062_NonFailover4xxRecoveryState:
         model_config.api_family = "openai"
         model_config.model_id = "gpt-4o-mini"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="failover",
-            failover_recovery_enabled=True,
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(),
         )
 
         mock_rules_result = MagicMock()
@@ -1215,6 +1215,518 @@ class TestDEF062_NonFailover4xxRecoveryState:
             call.kwargs["lease_token"]
             for call in release_connection_lease.await_args_list
         ] == ["lease-1", "lease-2"]
+
+    @pytest.mark.asyncio
+    async def test_streaming_read_error_fails_over_to_next_connection(self):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class SuccessStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self):
+                self.closed = True
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.calls = 0
+                self.sent_urls: list[str] = []
+                self.success_response = SuccessStreamResponse()
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                self.calls += 1
+                self.sent_urls.append(str(request.url))
+                if self.calls == 1:
+                    raise httpx.ReadError("read fail")
+                return self.success_response
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+        first_connection.max_in_flight_stream = 1
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+        second_connection.max_in_flight_stream = 1
+
+        model_config = MagicMock()
+        model_config.vendor = vendor
+        model_config.api_family = "openai"
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(),
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        log_request = AsyncMock(side_effect=[901, 902])
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    AsyncMock(
+                        return_value=_attempt_plan(first_connection, second_connection)
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch("app.routers.proxy.log_request", log_request),
+                patch("app.routers.proxy.record_audit_log", AsyncMock()),
+                patch("app.routers.proxy.record_connection_failure", AsyncMock()),
+                patch("app.routers.proxy.record_connection_recovery", AsyncMock()),
+                patch(
+                    "app.routers.proxy.acquire_connection_limit",
+                    AsyncMock(
+                        side_effect=[
+                            LimiterAcquireResult(admitted=True, lease_token="lease-1"),
+                            LimiterAcquireResult(admitted=True, lease_token="lease-2"),
+                        ]
+                    ),
+                ),
+                patch("app.routers.proxy.release_connection_lease", AsyncMock()),
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/chat/completions",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                streamed_chunks = [chunk async for chunk in stream]
+
+            assert streamed_chunks == [
+                b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n',
+                b"data: [DONE]\n\n",
+            ]
+            assert app.state.http_client.sent_urls == [
+                "https://first.example.com/v1/v1/chat/completions",
+                "https://second.example.com/v1/v1/chat/completions",
+            ]
+            assert app.state.http_client.success_response.closed is True
+            assert log_request.await_count == 2
+            first_call = log_request.await_args_list[0].kwargs
+            second_call = log_request.await_args_list[1].kwargs
+            assert first_call["attempt_number"] == 1
+            assert second_call["attempt_number"] == 2
+            assert first_call["ingress_request_id"] == second_call["ingress_request_id"]
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_streaming_read_error_releases_limiter_lease_and_records_failure_before_retry(
+        self,
+    ):
+        import httpx
+        from fastapi import FastAPI
+        from fastapi.responses import StreamingResponse
+        from starlette.requests import Request
+
+        from app.routers.proxy import _handle_proxy
+        from app.services.loadbalancer.limiter import LimiterAcquireResult
+
+        class SuccessStreamResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"content-type": "text/event-stream"}
+                self.closed = False
+
+            async def aiter_bytes(self):
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            async def aclose(self):
+                self.closed = True
+
+        event_log: list[str] = []
+
+        class DummyHttpClient:
+            def __init__(self):
+                self.calls = 0
+                self.success_response = SuccessStreamResponse()
+
+            def build_request(self, method: str, upstream_url: str, **kwargs):
+                return httpx.Request(
+                    method=method,
+                    url=upstream_url,
+                    headers=kwargs.get("headers"),
+                    content=kwargs.get("content"),
+                )
+
+            async def send(self, request: httpx.Request, **kwargs):
+                assert kwargs.get("stream") is True
+                self.calls += 1
+                if self.calls == 1:
+                    event_log.append("send:first")
+                    raise httpx.ReadError("read fail")
+                event_log.append("send:second")
+                return self.success_response
+
+        app = FastAPI()
+        app.state.http_client = DummyHttpClient()
+        request = Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "raw_path": b"/v1/chat/completions",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"testserver"),
+                    (b"content-type", b"application/json"),
+                ],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "scheme": "http",
+                "app": app,
+            }
+        )
+
+        raw_body = json.dumps(
+            {
+                "model": "gpt-4o-mini",
+                "stream": True,
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+        ).encode("utf-8")
+
+        vendor = MagicMock()
+        vendor.key = "openai"
+        vendor.audit_enabled = False
+        vendor.audit_capture_bodies = False
+        vendor.id = 1
+
+        first_endpoint = MagicMock()
+        first_endpoint.base_url = "https://first.example.com/v1"
+        second_endpoint = MagicMock()
+        second_endpoint.base_url = "https://second.example.com/v1"
+
+        first_connection = MagicMock()
+        first_connection.id = 1001
+        first_connection.endpoint_id = 501
+        first_connection.endpoint_rel = first_endpoint
+        first_connection.pricing_template_rel = None
+        first_connection.name = "first"
+        first_connection.custom_headers = None
+        first_connection.auth_type = None
+        first_connection.max_in_flight_stream = 1
+
+        second_connection = MagicMock()
+        second_connection.id = 1002
+        second_connection.endpoint_id = 502
+        second_connection.endpoint_rel = second_endpoint
+        second_connection.pricing_template_rel = None
+        second_connection.name = "second"
+        second_connection.custom_headers = None
+        second_connection.auth_type = None
+        second_connection.max_in_flight_stream = 1
+
+        model_config = MagicMock()
+        model_config.vendor = vendor
+        model_config.api_family = "openai"
+        model_config.model_id = "gpt-4o-mini"
+        model_config.loadbalance_strategy = SimpleNamespace(
+            strategy_type="adaptive",
+            routing_policy=make_routing_policy_adaptive(base_open_seconds=17),
+        )
+
+        mock_rules_result = MagicMock()
+        mock_rules_result.scalars.return_value.all.return_value = []
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_rules_result)
+        release_connection_lease = AsyncMock()
+        record_connection_failure = AsyncMock()
+        record_connection_recovery = AsyncMock()
+        manager = BackgroundTaskManager()
+        await manager.start()
+
+        async def release_lease(*args, **kwargs):
+            event_log.append(f"release:{kwargs['lease_token']}")
+            return True
+
+        async def mark_failure(*args, **kwargs):
+            event_log.append(f"failure:{args[1]}")
+
+        async def mark_recovery(*args, **kwargs):
+            event_log.append(f"recovery:{args[1]}")
+
+        release_connection_lease.side_effect = release_lease
+        record_connection_failure.side_effect = mark_failure
+        record_connection_recovery.side_effect = mark_recovery
+
+        try:
+            with (
+                patch(
+                    "app.routers.proxy_domains.request_setup.get_model_config_with_connections",
+                    AsyncMock(return_value=model_config),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.build_attempt_plan",
+                    AsyncMock(
+                        return_value=_attempt_plan(
+                            first_connection,
+                            second_connection,
+                            policy=make_routing_policy_adaptive(base_open_seconds=17),
+                        )
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy._endpoint_is_active_now",
+                    AsyncMock(return_value=True),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.load_costing_settings",
+                    AsyncMock(return_value=MagicMock()),
+                ),
+                patch(
+                    "app.routers.proxy_domains.request_setup.compute_cost_fields",
+                    return_value={},
+                ),
+                patch(
+                    "app.routers.proxy.log_request", AsyncMock(side_effect=[901, 902])
+                ),
+                patch("app.routers.proxy.record_audit_log", AsyncMock()),
+                patch(
+                    "app.routers.proxy.acquire_connection_limit",
+                    AsyncMock(
+                        side_effect=[
+                            LimiterAcquireResult(admitted=True, lease_token="lease-1"),
+                            LimiterAcquireResult(admitted=True, lease_token="lease-2"),
+                        ]
+                    ),
+                ),
+                patch(
+                    "app.routers.proxy.release_connection_lease",
+                    release_connection_lease,
+                ),
+                patch(
+                    "app.routers.proxy.record_connection_failure",
+                    record_connection_failure,
+                ),
+                patch(
+                    "app.routers.proxy.record_connection_recovery",
+                    record_connection_recovery,
+                ),
+                patch(
+                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
+                    manager,
+                ),
+            ):
+                response = await _handle_proxy(
+                    request=request,
+                    db=mock_db,
+                    raw_body=raw_body,
+                    request_path="/v1/chat/completions",
+                    profile_id=1,
+                )
+
+                assert response.status_code == 200
+                assert isinstance(response, StreamingResponse)
+                stream = cast(AsyncGenerator[bytes, None], response.body_iterator)
+                async for _ in stream:
+                    pass
+
+            release_tokens = [
+                call.kwargs["lease_token"]
+                for call in release_connection_lease.await_args_list
+            ]
+            assert release_tokens == ["lease-1", "lease-2"]
+
+            failure_call = record_connection_failure.await_args
+            assert failure_call is not None
+            assert failure_call.args[1] == 1001
+            assert failure_call.args[2] == 17
+            assert failure_call.args[3] == "connect_error"
+            assert failure_call.args[6] == 501
+
+            recovery_calls = record_connection_recovery.await_args_list
+            assert recovery_calls
+            assert all(call.args[1] != 1001 for call in recovery_calls)
+
+            assert event_log.index("release:lease-1") < event_log.index("send:second")
+            assert event_log.index("failure:1001") < event_log.index("send:second")
+        finally:
+            await manager.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_handle_transport_exception_labels_read_error_without_timeout_wording(
+        self,
+    ):
+        import httpx
+
+        from app.routers.proxy_domains.attempt_handlers import (
+            handle_transport_exception,
+        )
+        from app.routers.proxy_domains.attempt_types import (
+            ProxyAttemptTarget,
+            ProxyRequestState,
+            ProxyRuntimeDependencies,
+        )
+
+        release_connection_lease = AsyncMock(return_value=True)
+        record_connection_failure = AsyncMock()
+
+        deps = cast(
+            ProxyRuntimeDependencies,
+            cast(
+                object,
+                SimpleNamespace(
+                    release_connection_lease_fn=release_connection_lease,
+                    record_connection_failure_fn=record_connection_failure,
+                ),
+            ),
+        )
+        state = cast(
+            ProxyRequestState,
+            cast(
+                object,
+                SimpleNamespace(
+                    profile_id=7,
+                    setup=SimpleNamespace(
+                        is_streaming=True,
+                        failover_policy=SimpleNamespace(
+                            failover_recovery_enabled=True,
+                            failover_cooldown_seconds=17,
+                        ),
+                        model_id="gpt-4o-mini",
+                        vendor_id=1,
+                    ),
+                ),
+            ),
+        )
+        target = cast(
+            ProxyAttemptTarget,
+            cast(
+                object,
+                SimpleNamespace(
+                    connection=SimpleNamespace(id=1001, endpoint_id=501),
+                    limiter_lease_token="lease-1",
+                ),
+            ),
+        )
+
+        with patch(
+            "app.routers.proxy_domains.attempt_handlers.log_and_audit_attempt",
+            AsyncMock(),
+        ):
+            result = await handle_transport_exception(
+                deps=deps,
+                state=state,
+                target=target,
+                start_time=0.0,
+                exc=httpx.ReadError("read fail"),
+            )
+
+        assert result.error_detail is not None
+        assert result.error_detail.startswith("Read error:")
+        assert "Timeout" not in result.error_detail
+        release_connection_lease.assert_awaited_once_with(
+            profile_id=7,
+            lease_token="lease-1",
+            now_at=None,
+        )
+        record_connection_failure.assert_awaited_once()
 
 
 class TestDEF011_RuntimeEndpointActivityCheck:
