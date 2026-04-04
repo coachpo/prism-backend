@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -6,62 +7,47 @@ from pydantic import BaseModel, ConfigDict, Field
 class MonitoringConnectionHistoryItem(BaseModel):
     checked_at: datetime
     endpoint_ping_status: str
-    endpoint_ping_ms: int | None = None
+    endpoint_ping_ms: Optional[int] = None
     conversation_status: str
-    conversation_delay_ms: int | None = None
-    failure_kind: str | None = None
+    conversation_delay_ms: Optional[int] = None
+    failure_kind: Optional[str] = None
 
 
 class MonitoringConnectionBaseRow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     connection_id: int
-    connection_name: str | None = None
+    connection_name: Optional[str] = None
     endpoint_id: int
     endpoint_name: str
-    last_probe_status: str | None = None
-    circuit_state: str | None = None
-    live_p95_latency_ms: int | None = None
-    last_live_failure_kind: str | None = None
-    last_live_failure_at: datetime | None = None
-    last_live_success_at: datetime | None = None
+    last_probe_status: Optional[str] = None
+    circuit_state: Optional[str] = None
+    live_p95_latency_ms: Optional[int] = None
+    last_live_failure_kind: Optional[str] = None
+    last_live_failure_at: Optional[datetime] = None
+    last_live_success_at: Optional[datetime] = None
     endpoint_ping_status: str
-    endpoint_ping_ms: int | None = None
+    endpoint_ping_ms: Optional[int] = None
     conversation_status: str
-    conversation_delay_ms: int | None = None
+    conversation_delay_ms: Optional[int] = None
     fused_status: str
     recent_history: list[MonitoringConnectionHistoryItem] = Field(default_factory=list)
-
-
-class MonitoringOverviewConnectionRow(MonitoringConnectionBaseRow):
-    monitoring_probe_interval_seconds: int
-    last_probe_at: datetime | None = None
 
 
 class MonitoringModelConnectionRow(MonitoringConnectionBaseRow):
     pass
 
 
-class MonitoringOverviewModelItem(BaseModel):
-    model_config_id: int
-    model_id: str
-    display_name: str | None = None
-    fused_status: str
-    connection_count: int
-    connections: list[MonitoringOverviewConnectionRow] = Field(default_factory=list)
-
-
 class MonitoringOverviewVendorItem(BaseModel):
     vendor_id: int
     vendor_key: str
     vendor_name: str
-    icon_key: str | None = None
+    icon_key: Optional[str] = None
     fused_status: str = "unknown"
     model_count: int
     connection_count: int
     healthy_connection_count: int
     degraded_connection_count: int
-    models: list[MonitoringOverviewModelItem] = Field(default_factory=list)
 
 
 class MonitoringOverviewResponse(BaseModel):
@@ -72,7 +58,7 @@ class MonitoringOverviewResponse(BaseModel):
 class MonitoringVendorModelItem(BaseModel):
     model_config_id: int
     model_id: str
-    display_name: str | None = None
+    display_name: Optional[str] = None
     fused_status: str
     connection_count: int
 
@@ -92,7 +78,7 @@ class MonitoringModelResponse(BaseModel):
     vendor_name: str
     model_config_id: int
     model_id: str
-    display_name: str | None = None
+    display_name: Optional[str] = None
     connections: list[MonitoringModelConnectionRow]
 
 
@@ -100,11 +86,11 @@ class MonitoringManualProbeResponse(BaseModel):
     connection_id: int
     checked_at: datetime
     endpoint_ping_status: str
-    endpoint_ping_ms: int | None = None
+    endpoint_ping_ms: Optional[int] = None
     conversation_status: str
-    conversation_delay_ms: int | None = None
+    conversation_delay_ms: Optional[int] = None
     fused_status: str
-    failure_kind: str | None = None
+    failure_kind: Optional[str] = None
     detail: str
 
 
@@ -113,8 +99,6 @@ __all__ = [
     "MonitoringConnectionBaseRow",
     "MonitoringManualProbeResponse",
     "MonitoringModelConnectionRow",
-    "MonitoringOverviewModelItem",
-    "MonitoringOverviewConnectionRow",
     "MonitoringModelResponse",
     "MonitoringOverviewResponse",
     "MonitoringOverviewVendorItem",

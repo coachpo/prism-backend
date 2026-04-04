@@ -1,6 +1,7 @@
 import importlib
 from datetime import datetime, timedelta, timezone
-from typing import TypedDict
+from types import ModuleType
+from typing import NoReturn, TypedDict
 from uuid import uuid4
 
 import pytest
@@ -37,11 +38,16 @@ class MonitoringQueryFixture(TypedDict):
     backup_unhealthy_connection_id: int
 
 
-def _load_module(module_name: str):
+def _fail_module_load(message: str) -> NoReturn:
+    pytest.fail(message)
+    raise AssertionError(message)
+
+
+def _load_module(module_name: str) -> ModuleType:
     try:
         return importlib.import_module(module_name)
     except Exception as exc:
-        pytest.fail(f"{module_name} must exist for monitoring queries: {exc}")
+        _fail_module_load(f"{module_name} must exist for monitoring queries: {exc}")
 
 
 def _require_attr(module: object, attr_name: str):
@@ -402,7 +408,7 @@ class TestMonitoringQueryContracts:
             "POST",
         ) in registered_routes
 
-    def test_monitoring_overview_schema_returns_vendor_model_connection_tree(self):
+    def test_monitoring_overview_schema_returns_vendor_summaries_only(self):
         schemas = _load_module("app.schemas.schemas")
         MonitoringOverviewResponse = _require_attr(
             schemas, "MonitoringOverviewResponse"
@@ -422,57 +428,6 @@ class TestMonitoringQueryContracts:
                         "connection_count": 3,
                         "healthy_connection_count": 2,
                         "degraded_connection_count": 1,
-                        "models": [
-                            {
-                                "model_config_id": 21,
-                                "model_id": "gpt-4.1-mini",
-                                "display_name": "GPT 4.1 Mini",
-                                "fused_status": "degraded",
-                                "connection_count": 2,
-                                "connections": [
-                                    {
-                                        "connection_id": 31,
-                                        "connection_name": "primary-openai",
-                                        "endpoint_id": 41,
-                                        "endpoint_name": "primary-endpoint",
-                                        "monitoring_probe_interval_seconds": 180,
-                                        "last_probe_status": "healthy",
-                                        "last_probe_at": datetime(
-                                            2026, 3, 29, 11, 59, tzinfo=timezone.utc
-                                        ),
-                                        "circuit_state": "closed",
-                                        "live_p95_latency_ms": 123,
-                                        "last_live_failure_kind": None,
-                                        "last_live_failure_at": None,
-                                        "last_live_success_at": datetime(
-                                            2026, 3, 29, 11, 58, tzinfo=timezone.utc
-                                        ),
-                                        "endpoint_ping_status": "healthy",
-                                        "endpoint_ping_ms": 82,
-                                        "conversation_status": "healthy",
-                                        "conversation_delay_ms": 145,
-                                        "fused_status": "healthy",
-                                        "recent_history": [
-                                            {
-                                                "checked_at": datetime(
-                                                    2026,
-                                                    3,
-                                                    29,
-                                                    11,
-                                                    59,
-                                                    tzinfo=timezone.utc,
-                                                ),
-                                                "endpoint_ping_status": "healthy",
-                                                "endpoint_ping_ms": 82,
-                                                "conversation_status": "healthy",
-                                                "conversation_delay_ms": 145,
-                                                "failure_kind": None,
-                                            }
-                                        ],
-                                    }
-                                ],
-                            }
-                        ],
                     }
                 ],
             }
@@ -482,13 +437,21 @@ class TestMonitoringQueryContracts:
         assert payload.vendors[0].vendor_id == 11
         assert payload.vendors[0].icon_key == "openai"
         assert payload.vendors[0].model_count == 2
-        assert payload.vendors[0].models[0].model_config_id == 21
-        assert payload.vendors[0].models[0].connections[0].connection_id == 31
-        assert payload.vendors[0].models[0].connections[0].live_p95_latency_ms == 123
-        assert len(payload.vendors[0].models[0].connections[0].recent_history) == 1
-        assert not hasattr(
-            payload.vendors[0].models[0].connections[0], "availability_cells"
-        )
+        vendor_payload = payload.vendors[0].model_dump()
+        assert set(vendor_payload) == {
+            "vendor_id",
+            "vendor_key",
+            "vendor_name",
+            "icon_key",
+            "fused_status",
+            "model_count",
+            "connection_count",
+            "healthy_connection_count",
+            "degraded_connection_count",
+        }
+        assert "models" not in vendor_payload
+        assert "connections" not in vendor_payload
+        assert "recent_history" not in vendor_payload
 
     def test_monitoring_vendor_schema_groups_by_model(self):
         schemas = _load_module("app.schemas.schemas")
@@ -593,7 +556,7 @@ class TestMonitoringQueryContracts:
 
 class TestMonitoringQueryBehavior:
     @pytest.mark.asyncio
-    async def test_query_monitoring_overview_groups_enabled_active_connections_by_vendor(
+    async def test_query_monitoring_overview_groups_enabled_active_connections_by_vendor_summary(
         self,
     ):
         queries_module = _load_module("app.services.monitoring.queries")
@@ -647,39 +610,21 @@ class TestMonitoringQueryBehavior:
         assert openai_item.connection_count == 3
         assert openai_item.healthy_connection_count == 1
         assert openai_item.degraded_connection_count == 2
-        assert [model.model_config_id for model in openai_item.models] == [
-            fixture["openai_backup_model_id"],
-            fixture["openai_primary_model_id"],
-        ]
-        primary_model = openai_item.models[1]
-        assert [row.connection_id for row in primary_model.connections] == [
-            fixture["primary_healthy_connection_id"],
-            fixture["primary_degraded_connection_id"],
-        ]
-        healthy_row = primary_model.connections[0]
-        assert healthy_row.connection_name is not None
-        assert healthy_row.last_probe_status == "healthy"
-        assert healthy_row.circuit_state == "closed"
-        assert healthy_row.live_p95_latency_ms is None
-        assert not hasattr(healthy_row, "availability_cells")
-
-        degraded_row = primary_model.connections[1]
-        assert len(degraded_row.recent_history) == 60
-        assert degraded_row.recent_history[0].checked_at == fixed_now - timedelta(
-            minutes=2
-        )
-        assert degraded_row.recent_history[-1].checked_at == fixed_now - timedelta(
-            minutes=61
-        )
-        assert degraded_row.recent_history[0].endpoint_ping_ms == 115
-        assert degraded_row.recent_history[-1].endpoint_ping_ms == 161
-        assert degraded_row.recent_history[0].conversation_status == "unhealthy"
-        assert degraded_row.recent_history[0].conversation_delay_ms is None
-        assert degraded_row.recent_history[0].failure_kind == "timeout"
-        assert degraded_row.last_probe_at == fixed_now - timedelta(minutes=2)
-        assert degraded_row.endpoint_ping_ms == 115
-        assert degraded_row.conversation_status == "unhealthy"
-        assert degraded_row.conversation_delay_ms is None
+        openai_payload = openai_item.model_dump()
+        assert set(openai_payload) == {
+            "vendor_id",
+            "vendor_key",
+            "vendor_name",
+            "icon_key",
+            "fused_status",
+            "model_count",
+            "connection_count",
+            "healthy_connection_count",
+            "degraded_connection_count",
+        }
+        assert "models" not in openai_payload
+        assert "connections" not in openai_payload
+        assert "recent_history" not in openai_payload
 
         anthropic_item = vendors_by_key[str(fixture["anthropic_vendor_key"])]
         assert anthropic_item.icon_key == "anthropic"
@@ -688,7 +633,7 @@ class TestMonitoringQueryBehavior:
         assert anthropic_item.connection_count == 1
         assert anthropic_item.healthy_connection_count == 1
         assert anthropic_item.degraded_connection_count == 0
-        assert len(anthropic_item.models) == 1
+        assert "models" not in anthropic_item.model_dump()
 
     @pytest.mark.asyncio
     async def test_query_monitoring_vendor_groups_connections_by_model_and_rolls_up_status(

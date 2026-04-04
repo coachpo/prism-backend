@@ -268,7 +268,7 @@ async def _seed_monitoring_route_fixture() -> dict[str, int]:
 
 class TestMonitoringManualProbeAndQueryRoutes:
     @pytest.mark.asyncio
-    async def test_monitoring_overview_route_returns_profile_scoped_vendor_model_connection_tree(
+    async def test_monitoring_overview_route_returns_profile_scoped_vendor_summaries_only(
         self,
     ):
         fixture = await _seed_monitoring_route_fixture()
@@ -298,32 +298,24 @@ class TestMonitoringManualProbeAndQueryRoutes:
             if vendor["vendor_id"] == fixture["openai_vendor_id"]
         )
         assert openai_vendor["fused_status"] == "degraded"
-        models = cast(list[dict[str, object]], openai_vendor["models"])
-        assert len(models) == 1
-        assert models[0]["model_config_id"] == fixture["openai_model_id"]
-        connections = cast(list[dict[str, object]], models[0]["connections"])
-        assert len(connections) == 1
-        assert connections[0]["connection_id"] == fixture["openai_connection_id"]
-        assert connections[0]["connection_name"] is not None
-        assert connections[0]["monitoring_probe_interval_seconds"] == 150
-        assert connections[0]["last_probe_status"] == "degraded"
-        assert connections[0]["endpoint_ping_status"] == "healthy"
-        assert connections[0]["conversation_status"] == "unhealthy"
-        assert connections[0]["fused_status"] == "degraded"
-        assert "availability_cells" not in connections[0]
-        recent_history = cast(list[dict[str, object]], connections[0]["recent_history"])
-        assert len(recent_history) == 2
-        checked_at_values = [
-            datetime.fromisoformat(cast(str, item["checked_at"]).replace("Z", "+00:00"))
-            for item in recent_history
-        ]
-        assert checked_at_values == sorted(checked_at_values, reverse=True)
-        assert [item["conversation_status"] for item in recent_history] == [
-            "unhealthy",
-            "healthy",
-        ]
-        assert recent_history[0]["endpoint_ping_status"] == "healthy"
-        assert recent_history[0]["conversation_status"] == "unhealthy"
+        assert openai_vendor["model_count"] == 1
+        assert openai_vendor["connection_count"] == 1
+        assert openai_vendor["healthy_connection_count"] == 0
+        assert openai_vendor["degraded_connection_count"] == 1
+        assert set(openai_vendor) == {
+            "vendor_id",
+            "vendor_key",
+            "vendor_name",
+            "icon_key",
+            "fused_status",
+            "model_count",
+            "connection_count",
+            "healthy_connection_count",
+            "degraded_connection_count",
+        }
+        assert "models" not in openai_vendor
+        assert "connections" not in openai_vendor
+        assert "recent_history" not in openai_vendor
 
     @pytest.mark.asyncio
     async def test_monitoring_model_route_pins_model_detail_contract_fields_and_ordering(

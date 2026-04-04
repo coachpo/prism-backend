@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import NamedTuple, TypedDict
 
 from fastapi import HTTPException
 from sqlalchemy import Select, select
@@ -22,8 +22,6 @@ from app.schemas.schemas import (
     MonitoringConnectionHistoryItem,
     MonitoringModelConnectionRow,
     MonitoringModelResponse,
-    MonitoringOverviewConnectionRow,
-    MonitoringOverviewModelItem,
     MonitoringOverviewResponse,
     MonitoringOverviewVendorItem,
     MonitoringVendorModelItem,
@@ -31,15 +29,33 @@ from app.schemas.schemas import (
 )
 
 _HISTORY_LIMIT = 60
-_OVERVIEW_HISTORY_LIMIT = 60
+_DETAIL_HISTORY_LIMIT = 60
 _KNOWN_FUSED_STATUSES = {"healthy", "degraded", "unhealthy"}
 
 
-@dataclass(frozen=True, slots=True)
-class _MonitoringConnectionBundle:
+class _MonitoringConnectionBundle(NamedTuple):
     connection: Connection
     runtime_state: RoutingConnectionRuntimeState | None
     recent_history: list[MonitoringConnectionProbeResult]
+
+
+class _MonitoringConnectionPayload(TypedDict):
+    connection_id: int
+    connection_name: str | None
+    endpoint_id: int
+    endpoint_name: str
+    last_probe_status: str | None
+    circuit_state: str | None
+    live_p95_latency_ms: int | None
+    last_live_failure_kind: str | None
+    last_live_failure_at: datetime | None
+    last_live_success_at: datetime | None
+    endpoint_ping_status: str
+    endpoint_ping_ms: int | None
+    conversation_status: str
+    conversation_delay_ms: int | None
+    fused_status: str
+    recent_history: list[MonitoringConnectionHistoryItem]
 
 
 def _normalize_fused_status(value: str | None) -> str | None:
@@ -118,7 +134,7 @@ def _build_connection_payload(
     bundle: _MonitoringConnectionBundle,
     *,
     history_oldest_first: bool = False,
-) -> tuple[dict[str, object], datetime | None]:
+) -> tuple[_MonitoringConnectionPayload, datetime | None]:
     history_rows = (
         list(reversed(bundle.recent_history))
         if history_oldest_first
@@ -169,7 +185,7 @@ def _build_connection_payload(
         )
     )
 
-    payload = {
+    payload: _MonitoringConnectionPayload = {
         "connection_id": bundle.connection.id,
         "connection_name": bundle.connection.name,
         "endpoint_id": bundle.connection.endpoint_rel.id,
@@ -211,23 +227,6 @@ def _build_connection_payload(
     return payload, last_probe_at
 
 
-def _build_overview_connection_row(
-    bundle: _MonitoringConnectionBundle,
-    *,
-    history_oldest_first: bool = False,
-) -> MonitoringOverviewConnectionRow:
-    payload, last_probe_at = _build_connection_payload(
-        bundle,
-        history_oldest_first=history_oldest_first,
-    )
-
-    return MonitoringOverviewConnectionRow(
-        **payload,
-        monitoring_probe_interval_seconds=bundle.connection.monitoring_probe_interval_seconds,
-        last_probe_at=last_probe_at,
-    )
-
-
 def _build_model_connection_row(
     bundle: _MonitoringConnectionBundle,
     *,
@@ -239,23 +238,6 @@ def _build_model_connection_row(
     )
 
     return MonitoringModelConnectionRow(**payload)
-
-
-def _build_overview_model_item(
-    bundles: list[_MonitoringConnectionBundle],
-) -> MonitoringOverviewModelItem:
-    model = bundles[0].connection.model_config_rel
-    connection_rows = [_build_overview_connection_row(bundle) for bundle in bundles]
-    return MonitoringOverviewModelItem(
-        model_config_id=model.id,
-        model_id=model.model_id,
-        display_name=model.display_name,
-        fused_status=_roll_up_group_status(
-            [row.fused_status for row in connection_rows]
-        ),
-        connection_count=len(connection_rows),
-        connections=connection_rows,
-    )
 
 
 def _build_connection_query(
@@ -336,7 +318,7 @@ async def _load_recent_history_by_connection(
     history_limit: int,
     oldest_first: bool = False,
 ) -> dict[int, list[MonitoringConnectionProbeResult]]:
-    if not connection_ids:
+    if not connection_ids or history_limit <= 0:
         return {}
 
     result = await db.execute(
@@ -385,9 +367,9 @@ async def _load_connection_bundles(
     )
     return [
         _MonitoringConnectionBundle(
-            connection=connection,
-            runtime_state=runtime_state_by_connection.get(connection.id),
-            recent_history=history_by_connection.get(connection.id, []),
+            connection,
+            runtime_state_by_connection.get(connection.id),
+            history_by_connection.get(connection.id, []),
         )
         for connection in connections
     ]
@@ -446,7 +428,7 @@ async def query_monitoring_overview(
         db,
         profile_id=profile_id,
         connections=connections,
-        history_limit=_OVERVIEW_HISTORY_LIMIT,
+        history_limit=0,
     )
     bundles_by_vendor: dict[int, list[_MonitoringConnectionBundle]] = defaultdict(list)
     for bundle in bundles:
@@ -455,22 +437,8 @@ async def query_monitoring_overview(
     vendor_items: list[MonitoringOverviewVendorItem] = []
     for vendor_id, vendor_bundles in bundles_by_vendor.items():
         vendor = vendor_bundles[0].connection.model_config_rel.vendor
-        bundles_by_model: dict[int, list[_MonitoringConnectionBundle]] = defaultdict(
-            list
-        )
-        for bundle in vendor_bundles:
-            bundles_by_model[bundle.connection.model_config_id].append(bundle)
-
-        model_items = [
-            _build_overview_model_item(grouped_bundles)
-            for grouped_bundles in bundles_by_model.values()
-        ]
-        model_items.sort(key=lambda item: (item.model_id.lower(), item.model_config_id))
-
         statuses = [
-            row.fused_status
-            for model_item in model_items
-            for row in model_item.connections
+            _derive_connection_fused_status(bundle) for bundle in vendor_bundles
         ]
         vendor_items.append(
             MonitoringOverviewVendorItem(
@@ -478,10 +446,10 @@ async def query_monitoring_overview(
                 vendor_key=vendor.key,
                 vendor_name=vendor.name,
                 icon_key=vendor.icon_key,
-                fused_status=_roll_up_group_status(
-                    [model_item.fused_status for model_item in model_items]
+                fused_status=_roll_up_group_status(statuses),
+                model_count=len(
+                    {bundle.connection.model_config_id for bundle in vendor_bundles}
                 ),
-                model_count=len(model_items),
                 connection_count=len(vendor_bundles),
                 healthy_connection_count=sum(
                     1 for status in statuses if status == "healthy"
@@ -489,7 +457,6 @@ async def query_monitoring_overview(
                 degraded_connection_count=sum(
                     1 for status in statuses if status != "healthy"
                 ),
-                models=model_items,
             )
         )
 
@@ -568,7 +535,7 @@ async def query_monitoring_model(
         db,
         profile_id=profile_id,
         connections=connections,
-        history_limit=_OVERVIEW_HISTORY_LIMIT,
+        history_limit=_DETAIL_HISTORY_LIMIT,
     )
     connection_rows = [_build_model_connection_row(bundle) for bundle in bundles]
 
