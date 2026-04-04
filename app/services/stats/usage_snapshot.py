@@ -49,17 +49,6 @@ class _SnapshotEvent:
 
 
 @dataclass(slots=True)
-class _EndpointModelAggregate:
-    model_id: str
-    model_label: str
-    request_count: int = 0
-    success_count: int = 0
-    failed_count: int = 0
-    total_tokens: int = 0
-    total_cost_micros: int = 0
-
-
-@dataclass(slots=True)
 class _EndpointAggregate:
     endpoint_id: int | None
     endpoint_label: str
@@ -68,7 +57,6 @@ class _EndpointAggregate:
     failed_count: int = 0
     total_tokens: int = 0
     total_cost_micros: int = 0
-    models: dict[str, _EndpointModelAggregate] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -561,43 +549,8 @@ def _build_endpoint_statistics(events: list[_SnapshotEvent]) -> list[dict[str, o
         group.total_tokens += event.total_tokens
         group.total_cost_micros += event.total_cost_micros
 
-        model_group = group.models.setdefault(
-            event.model_id,
-            _EndpointModelAggregate(
-                model_id=event.model_id,
-                model_label=event.model_label,
-            ),
-        )
-        model_group.request_count += 1
-        model_group.success_count += int(event.success_flag)
-        model_group.failed_count += int(not event.success_flag)
-        model_group.total_tokens += event.total_tokens
-        model_group.total_cost_micros += event.total_cost_micros
-
     rows: list[dict[str, object]] = []
     for group in endpoint_groups.values():
-        model_rows: list[dict[str, object]] = []
-        for model_row in group.models.values():
-            model_rows.append(
-                {
-                    "model_id": model_row.model_id,
-                    "model_label": model_row.model_label,
-                    "request_count": model_row.request_count,
-                    "success_rate": _success_rate(
-                        success_count=model_row.success_count,
-                        total_count=model_row.request_count,
-                    ),
-                    "total_tokens": model_row.total_tokens,
-                    "total_cost_micros": model_row.total_cost_micros,
-                }
-            )
-        model_rows.sort(
-            key=lambda row: (
-                -cast(int, row["request_count"]),
-                cast(str, row["model_label"]),
-            )
-        )
-
         rows.append(
             {
                 "endpoint_id": group.endpoint_id,
@@ -609,7 +562,6 @@ def _build_endpoint_statistics(events: list[_SnapshotEvent]) -> list[dict[str, o
                 ),
                 "total_tokens": group.total_tokens,
                 "total_cost_micros": group.total_cost_micros,
-                "models": model_rows,
             }
         )
 

@@ -19,7 +19,6 @@ from app.models.models import (
     Vendor,
 )
 from app.schemas.domains.usage_statistics import (
-    UsageEndpointModelStatistic,
     UsageEndpointStatistic,
     UsageModelStatistic,
     UsageProxyApiKeyStatistic,
@@ -384,15 +383,6 @@ class TestUsageSnapshotService:
             "success_rate",
             "total_tokens",
             "total_cost_micros",
-            "models",
-        }
-        assert set(UsageEndpointModelStatistic.model_fields.keys()) == {
-            "model_id",
-            "model_label",
-            "request_count",
-            "success_rate",
-            "total_tokens",
-            "total_cost_micros",
         }
         assert set(UsageModelStatistic.model_fields.keys()) == {
             "model_id",
@@ -675,12 +665,7 @@ class TestUsageSnapshotService:
         assert endpoint_rows[seed.secondary_endpoint_id]["success_rate"] == 0.0
         assert "success_count" not in endpoint_rows[seed.primary_endpoint_id]
         assert "failed_count" not in endpoint_rows[seed.primary_endpoint_id]
-        assert (
-            "success_count" not in endpoint_rows[seed.primary_endpoint_id]["models"][0]
-        )
-        assert (
-            "failed_count" not in endpoint_rows[seed.primary_endpoint_id]["models"][0]
-        )
+        assert "models" not in endpoint_rows[seed.primary_endpoint_id]
 
         model_rows = {row["model_id"]: row for row in snapshot["model_statistics"]}
         assert model_rows[seed.primary_model_id]["model_label"].startswith("GPT 4o")

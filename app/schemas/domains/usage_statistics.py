@@ -169,15 +169,6 @@ class UsageCostOverview(BaseModel):
     daily: list[UsageCostOverviewPoint] = Field(default_factory=list)
 
 
-class UsageEndpointModelStatistic(BaseModel):
-    model_id: str
-    model_label: str
-    request_count: int
-    success_rate: float
-    total_tokens: int
-    total_cost_micros: int
-
-
 class UsageEndpointStatistic(BaseModel):
     endpoint_id: int | None = None
     endpoint_label: str
@@ -185,7 +176,6 @@ class UsageEndpointStatistic(BaseModel):
     success_rate: float
     total_tokens: int
     total_cost_micros: int
-    models: list[UsageEndpointModelStatistic] = Field(default_factory=list)
 
 
 class UsageModelStatistic(BaseModel):

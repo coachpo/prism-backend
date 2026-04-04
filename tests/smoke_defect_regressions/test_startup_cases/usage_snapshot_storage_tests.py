@@ -451,16 +451,6 @@ class TestDEF086_UsageStatisticsStorageContract:
                 "success_rate": 100.0,
                 "total_tokens": 65,
                 "total_cost_micros": 1234,
-                "models": [
-                    {
-                        "model_id": payload["model_statistics"][0]["model_id"],
-                        "model_label": payload["model_statistics"][0]["model_label"],
-                        "request_count": 1,
-                        "success_rate": 100.0,
-                        "total_tokens": 65,
-                        "total_cost_micros": 1234,
-                    }
-                ],
             }
         ]
         assert payload["model_statistics"] == [
@@ -490,8 +480,7 @@ class TestDEF086_UsageStatisticsStorageContract:
         assert ingress_request_id.startswith("def086-ingress-")
         assert "success_count" not in payload["endpoint_statistics"][0]
         assert "failed_count" not in payload["endpoint_statistics"][0]
-        assert "success_count" not in payload["endpoint_statistics"][0]["models"][0]
-        assert "failed_count" not in payload["endpoint_statistics"][0]["models"][0]
+        assert "models" not in payload["endpoint_statistics"][0]
         assert "api_family" not in payload["model_statistics"][0]
         assert "success_count" not in payload["model_statistics"][0]
         assert "failed_count" not in payload["model_statistics"][0]
