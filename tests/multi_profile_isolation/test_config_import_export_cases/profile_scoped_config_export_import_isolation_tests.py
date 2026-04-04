@@ -59,12 +59,28 @@ from app.services.stats_service import (
     get_spending_report,
 )
 from app.services.audit_service import record_audit_log
+from app.core.crypto import encrypt_bundle_secret, get_bundle_secret_key_id
 from tests.loadbalance_strategy_helpers import (
     make_auto_recovery_disabled,
     make_auto_recovery_enabled,
     make_routing_policy_adaptive,
     make_loadbalance_strategy,
 )
+
+
+def _build_secret_payload(ref_to_value: dict[str, str]) -> dict[str, object]:
+    return {
+        "kind": "encrypted",
+        "cipher": "fernet-v1",
+        "key_id": get_bundle_secret_key_id(),
+        "entries": [
+            {
+                "ref": ref,
+                "ciphertext": encrypt_bundle_secret(value),
+            }
+            for ref, value in ref_to_value.items()
+        ],
+    }
 
 
 class TestConfigExportImportIsolation:
@@ -81,13 +97,15 @@ class TestConfigExportImportIsolation:
         profile_name = f"import-session-profile-{suffix}"
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
-                "vendors": [],
+                "version": 2,
+                "bundle_kind": "profile_config",
+                "vendor_refs": [],
                 "endpoints": [],
                 "pricing_templates": [],
                 "loadbalance_strategies": [],
                 "models": [],
                 "header_blocklist_rules": [],
+                "secret_payload": _build_secret_payload({}),
             }
         )
 
@@ -236,15 +254,14 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
-                "vendors": [
+                "version": 2,
+                "bundle_kind": "profile_config",
+                "vendor_refs": [
                     {
                         "key": "openai",
-                        "name": vendor_name,
-                        "description": vendor_description,
-                        "icon_key": vendor_icon_key,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
+                        "name_hint": vendor_name,
+                        "description_hint": vendor_description,
+                        "icon_key_hint": vendor_icon_key,
                     }
                 ],
                 "endpoints": [],
@@ -262,6 +279,7 @@ class TestConfigExportImportIsolation:
                     }
                 ],
                 "header_blocklist_rules": [],
+                "secret_payload": _build_secret_payload({}),
             }
         )
 
@@ -448,20 +466,28 @@ class TestConfigExportImportIsolation:
         payload = json.loads(bytes(config.body).decode("utf-8"))
 
         # Verify export contains profile 1 data only
-        assert payload["version"] == 1
-        assert payload["vendors"] == [
+        assert payload["version"] == 2
+        assert payload["bundle_kind"] == "profile_config"
+        assert payload["vendor_refs"] == [
             {
                 "key": "openai",
-                "name": "OpenAI",
-                "description": "OpenAI API (GPT models)",
-                "icon_key": "openai",
-                "audit_enabled": False,
-                "audit_capture_bodies": True,
+                "name_hint": "OpenAI",
+                "description_hint": "OpenAI API (GPT models)",
+                "icon_key_hint": "openai",
             }
         ]
         assert len(payload["endpoints"]) == 1
         assert len(payload["loadbalance_strategies"]) == 1
         assert len(payload["models"]) == 2
+        assert payload["profile_settings"]["timezone_preference"] is None
+        assert payload["secret_payload"]["kind"] == "encrypted"
+        assert payload["secret_payload"]["cipher"] == "fernet-v1"
+        assert len(payload["secret_payload"]["entries"]) == 1
+        assert (
+            payload["endpoints"][0]["api_key_secret_ref"]
+            == "endpoint:openai-main:api_key"
+        )
+        assert "api_key" not in payload["endpoints"][0]
         strategy_payload = payload["loadbalance_strategies"][0]
         assert strategy_payload["strategy_type"] == "adaptive"
         assert strategy_payload["legacy_strategy_type"] is None
@@ -490,6 +516,7 @@ class TestConfigExportImportIsolation:
         assert all(
             "icon_key" not in exported_model for exported_model in payload["models"]
         )
+        assert "vendors" not in payload
         assert "providers" not in payload
 
     @pytest.mark.asyncio
@@ -690,22 +717,21 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
-                "vendors": [
+                "version": 2,
+                "bundle_kind": "profile_config",
+                "vendor_refs": [
                     {
                         "key": "openrouter",
-                        "name": "OpenRouter",
-                        "description": "OpenRouter global catalog entry",
-                        "icon_key": "openrouter",
-                        "audit_enabled": True,
-                        "audit_capture_bodies": False,
+                        "name_hint": "OpenRouter",
+                        "description_hint": "OpenRouter global catalog entry",
+                        "icon_key_hint": "openrouter",
                     }
                 ],
                 "endpoints": [
                     {
                         "name": new_endpoint_name,
                         "base_url": "https://api.openai.com",
-                        "api_key": "sk-target-new",
+                        "api_key_secret_ref": f"endpoint:{new_endpoint_name}:api_key",
                     }
                 ],
                 "pricing_templates": [],
@@ -756,9 +782,10 @@ class TestConfigExportImportIsolation:
                         ],
                     }
                 ],
-                "user_settings": {
+                "profile_settings": {
                     "report_currency_code": "GBP",
                     "report_currency_symbol": "GBP",
+                    "timezone_preference": "Europe/London",
                     "endpoint_fx_mappings": [
                         {
                             "model_id": new_model_id,
@@ -775,6 +802,9 @@ class TestConfigExportImportIsolation:
                         "enabled": True,
                     }
                 ],
+                "secret_payload": _build_secret_payload(
+                    {f"endpoint:{new_endpoint_name}:api_key": "sk-target-new"}
+                ),
             }
         )
 
@@ -975,6 +1005,7 @@ class TestConfigExportImportIsolation:
 
         assert target_settings.report_currency_code == "GBP"
         assert target_settings.report_currency_symbol == "GBP"
+        assert target_settings.timezone_preference == "Europe/London"
 
         openrouter_rows = [vendor for vendor in vendors if vendor.key == "openrouter"]
         assert len(openrouter_rows) == 1
@@ -1008,7 +1039,7 @@ class TestConfigExportImportIsolation:
         assert other_settings.report_currency_symbol == "EUR"
 
     @pytest.mark.asyncio
-    async def test_import_config_conflicting_global_vendor_key_fails_before_profile_replacement(
+    async def test_import_config_reuses_existing_global_vendor_key_without_profile_replacement_conflict(
         self,
     ):
         from app.core.database import AsyncSessionLocal, get_engine
@@ -1123,22 +1154,21 @@ class TestConfigExportImportIsolation:
 
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
-                "vendors": [
+                "version": 2,
+                "bundle_kind": "profile_config",
+                "vendor_refs": [
                     {
                         "key": conflict_vendor_key,
-                        "name": f"Z.ai {suffix}",
-                        "description": "Z.ai Open Platform",
-                        "icon_key": "zhipu",
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
+                        "name_hint": f"Z.ai {suffix}",
+                        "description_hint": "Z.ai Open Platform",
+                        "icon_key_hint": "zhipu",
                     }
                 ],
                 "endpoints": [
                     {
                         "name": new_endpoint_name,
                         "base_url": "https://api.openai.com",
-                        "api_key": "sk-target-new",
+                        "api_key_secret_ref": f"endpoint:{new_endpoint_name}:api_key",
                     }
                 ],
                 "pricing_templates": [],
@@ -1161,16 +1191,21 @@ class TestConfigExportImportIsolation:
                     }
                 ],
                 "header_blocklist_rules": [],
+                "secret_payload": _build_secret_payload(
+                    {f"endpoint:{new_endpoint_name}:api_key": "sk-target-new"}
+                ),
             }
         )
 
         async with AsyncSessionLocal() as db:
-            with pytest.raises(HTTPException) as exc_info:
-                await import_config(data=payload, db=db, profile_id=target_profile_id)
-            await db.rollback()
+            response = await import_config(
+                data=payload, db=db, profile_id=target_profile_id
+            )
+            await db.commit()
 
-        assert exc_info.value.status_code == 409
-        assert conflict_vendor_key in str(exc_info.value.detail)
+        assert response.endpoints_imported == 1
+        assert response.models_imported == 1
+        assert response.connections_imported == 1
 
         async with AsyncSessionLocal() as db:
             persisted_vendor = (
@@ -1226,10 +1261,392 @@ class TestConfigExportImportIsolation:
         assert persisted_vendor.description == "Vendor metadata"
         assert persisted_vendor.icon_key is None
         assert len(target_endpoints) == 1
-        assert target_endpoints[0].name == old_target_endpoint_name
+        assert target_endpoints[0].name == new_endpoint_name
         assert len(target_models) == 1
-        assert target_models[0].model_id == old_target_model_id
+        assert target_models[0].model_id == new_model_id
         assert len(target_connections) == 1
-        assert target_connections[0].name == old_target_connection_name
-        assert len(target_rules) == 1
-        assert target_rules[0].pattern == old_target_rule_pattern
+        assert target_connections[0].endpoint_id == target_endpoints[0].id
+        assert len(target_rules) == 0
+
+    @pytest.mark.asyncio
+    async def test_import_preview_and_execute_fail_on_bundle_key_mismatch_before_profile_replacement(
+        self,
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.main import app
+        from app.routers.config import import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        target_profile_name = f"import-key-mismatch-{suffix}"
+        old_target_endpoint_name = f"target-endpoint-old-{suffix}"
+        new_endpoint_name = f"target-endpoint-new-{suffix}"
+        new_model_id = f"target-model-new-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            openai_vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if openai_vendor is None:
+                openai_vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
+                )
+                db.add(openai_vendor)
+                await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for bundle key mismatch",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(target_profile)
+            await db.flush()
+
+            target_endpoint = Endpoint(
+                profile_id=target_profile.id,
+                name=old_target_endpoint_name,
+                base_url="https://api.openai.com",
+                api_key="sk-target-old",
+                position=0,
+            )
+            db.add(target_endpoint)
+            await db.commit()
+
+            target_profile_id = target_profile.id
+
+        payload = {
+            "version": 2,
+            "bundle_kind": "profile_config",
+            "vendor_refs": [
+                {
+                    "key": "openai",
+                    "name_hint": "OpenAI",
+                    "description_hint": "OpenAI API (GPT models)",
+                    "icon_key_hint": "openai",
+                }
+            ],
+            "endpoints": [
+                {
+                    "name": new_endpoint_name,
+                    "base_url": "https://api.openai.com",
+                    "api_key_secret_ref": f"endpoint:{new_endpoint_name}:api_key",
+                }
+            ],
+            "pricing_templates": [],
+            "loadbalance_strategies": [
+                {
+                    "name": "single-primary",
+                    "strategy_type": "legacy",
+                    "legacy_strategy_type": "single",
+                    "auto_recovery": make_auto_recovery_disabled(),
+                }
+            ],
+            "models": [
+                {
+                    "vendor_key": "openai",
+                    "api_family": "openai",
+                    "model_id": new_model_id,
+                    "model_type": "native",
+                    "loadbalance_strategy_name": "single-primary",
+                    "connections": [{"endpoint_name": new_endpoint_name}],
+                }
+            ],
+            "profile_settings": {
+                "report_currency_code": "USD",
+                "report_currency_symbol": "$",
+                "timezone_preference": None,
+                "endpoint_fx_mappings": [],
+            },
+            "header_blocklist_rules": [],
+            "secret_payload": _build_secret_payload(
+                {f"endpoint:{new_endpoint_name}:api_key": "sk-target-new"}
+            ),
+        }
+        payload["secret_payload"]["key_id"] = "sha256:wrong"
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            preview_response = await client.post(
+                "/api/config/profile/import/preview",
+                headers={"X-Profile-Id": str(target_profile_id)},
+                json=payload,
+            )
+
+        assert preview_response.status_code == 200
+        assert preview_response.json()["ready"] is False
+        assert "bundle key mismatch" in preview_response.json()["blocking_errors"][0]
+
+        parsed_payload = ConfigImportRequest.model_validate(payload)
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await import_config(
+                    data=parsed_payload,
+                    db=db,
+                    profile_id=target_profile_id,
+                )
+            await db.rollback()
+
+        assert exc_info.value.status_code == 400
+        assert "bundle key mismatch" in str(exc_info.value.detail)
+
+        async with AsyncSessionLocal() as db:
+            target_endpoints = (
+                (
+                    await db.execute(
+                        select(Endpoint).where(Endpoint.profile_id == target_profile_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+
+        assert len(target_endpoints) == 1
+        assert target_endpoints[0].name == old_target_endpoint_name
+
+    @pytest.mark.asyncio
+    async def test_import_preview_and_execute_reject_plaintext_secret_payload_entries(
+        self,
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.main import app
+        from app.routers.config import import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        target_profile_name = f"import-plaintext-secret-{suffix}"
+        old_target_endpoint_name = f"target-endpoint-old-{suffix}"
+        new_endpoint_name = f"target-endpoint-new-{suffix}"
+        new_model_id = f"target-model-new-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            openai_vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if openai_vendor is None:
+                openai_vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
+                )
+                db.add(openai_vendor)
+                await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for plaintext secret rejection",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(target_profile)
+            await db.flush()
+
+            target_endpoint = Endpoint(
+                profile_id=target_profile.id,
+                name=old_target_endpoint_name,
+                base_url="https://api.openai.com",
+                api_key="sk-target-old",
+                position=0,
+            )
+            db.add(target_endpoint)
+            await db.commit()
+
+            target_profile_id = target_profile.id
+
+        payload = {
+            "version": 2,
+            "bundle_kind": "profile_config",
+            "vendor_refs": [
+                {
+                    "key": "openai",
+                    "name_hint": "OpenAI",
+                    "description_hint": "OpenAI API (GPT models)",
+                    "icon_key_hint": "openai",
+                }
+            ],
+            "endpoints": [
+                {
+                    "name": new_endpoint_name,
+                    "base_url": "https://api.openai.com",
+                    "api_key_secret_ref": f"endpoint:{new_endpoint_name}:api_key",
+                }
+            ],
+            "pricing_templates": [],
+            "loadbalance_strategies": [
+                {
+                    "name": "single-primary",
+                    "strategy_type": "legacy",
+                    "legacy_strategy_type": "single",
+                    "auto_recovery": make_auto_recovery_disabled(),
+                }
+            ],
+            "models": [
+                {
+                    "vendor_key": "openai",
+                    "api_family": "openai",
+                    "model_id": new_model_id,
+                    "model_type": "native",
+                    "loadbalance_strategy_name": "single-primary",
+                    "connections": [{"endpoint_name": new_endpoint_name}],
+                }
+            ],
+            "profile_settings": {
+                "report_currency_code": "USD",
+                "report_currency_symbol": "$",
+                "timezone_preference": None,
+                "endpoint_fx_mappings": [],
+            },
+            "header_blocklist_rules": [],
+            "secret_payload": {
+                "kind": "encrypted",
+                "cipher": "fernet-v1",
+                "key_id": get_bundle_secret_key_id(),
+                "entries": [
+                    {
+                        "ref": f"endpoint:{new_endpoint_name}:api_key",
+                        "ciphertext": "sk-target-new",
+                    }
+                ],
+            },
+        }
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            preview_response = await client.post(
+                "/api/config/profile/import/preview",
+                headers={"X-Profile-Id": str(target_profile_id)},
+                json=payload,
+            )
+
+        assert preview_response.status_code == 200
+        assert preview_response.json()["ready"] is False
+        assert "must be encrypted" in preview_response.json()["blocking_errors"][0]
+
+        parsed_payload = ConfigImportRequest.model_validate(payload)
+        async with AsyncSessionLocal() as db:
+            with pytest.raises(HTTPException) as exc_info:
+                await import_config(
+                    data=parsed_payload,
+                    db=db,
+                    profile_id=target_profile_id,
+                )
+            await db.rollback()
+
+        assert exc_info.value.status_code == 400
+        assert "must be encrypted" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_import_preview_rejects_new_vendor_key_that_collides_on_existing_vendor_name(
+        self,
+    ):
+        from httpx import ASGITransport, AsyncClient
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.main import app
+
+        await get_engine().dispose()
+
+        suffix = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+        target_profile_name = f"import-vendor-name-collision-{suffix}"
+        colliding_vendor_key = f"openai-alt-{suffix}"
+
+        async with AsyncSessionLocal() as db:
+            existing_vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == "openai")
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if existing_vendor is None:
+                existing_vendor = Vendor(
+                    key="openai",
+                    name="OpenAI",
+                    description="OpenAI API (GPT models)",
+                )
+                db.add(existing_vendor)
+                await db.flush()
+
+            target_profile = Profile(
+                name=target_profile_name,
+                description="Target profile for vendor name collision",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(target_profile)
+            await db.commit()
+            target_profile_id = target_profile.id
+
+        payload = {
+            "version": 2,
+            "bundle_kind": "profile_config",
+            "vendor_refs": [
+                {
+                    "key": colliding_vendor_key,
+                    "name_hint": "OpenAI",
+                    "description_hint": "Duplicate global vendor name",
+                    "icon_key_hint": "openai",
+                }
+            ],
+            "endpoints": [],
+            "pricing_templates": [],
+            "loadbalance_strategies": [],
+            "models": [],
+            "profile_settings": {
+                "report_currency_code": "USD",
+                "report_currency_symbol": "$",
+                "timezone_preference": None,
+                "endpoint_fx_mappings": [],
+            },
+            "header_blocklist_rules": [],
+            "secret_payload": _build_secret_payload({}),
+        }
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            preview_response = await client.post(
+                "/api/config/profile/import/preview",
+                headers={"X-Profile-Id": str(target_profile_id)},
+                json=payload,
+            )
+
+        assert preview_response.status_code == 200
+        assert preview_response.json()["ready"] is False
+        assert colliding_vendor_key in preview_response.json()["blocking_errors"][0]
+        assert "already exists" in preview_response.json()["blocking_errors"][0]

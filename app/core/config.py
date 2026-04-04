@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     failover_jitter_ratio: float = Field(default=0.2, ge=0.0, le=1.0)
     auth_jwt_secret: str = "prism-dev-jwt-secret-change-me-2026"
     secret_encryption_key: str = "prism-dev-encryption-key-change-me"
+    config_bundle_encryption_key: str = ""
     auth_access_token_ttl_seconds: int = Field(default=900, ge=60, le=86_400)
     auth_refresh_token_ttl_seconds: int = Field(default=604800, ge=300, le=31_536_000)
     auth_reset_code_ttl_seconds: int = Field(default=600, ge=60, le=86_400)

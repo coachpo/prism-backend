@@ -833,7 +833,7 @@ class TestDEF079_ProxyApiKeyMetadataManagement:
 
 class TestDEF072_SecretSanitization:
     @pytest.mark.asyncio
-    async def test_endpoint_responses_hide_raw_api_keys_but_config_export_includes_them(
+    async def test_endpoint_responses_hide_raw_api_keys_but_profile_config_export_uses_encrypted_secret_payload(
         self,
     ):
         profile_id = await _reset_auth_state()
@@ -879,7 +879,7 @@ class TestDEF072_SecretSanitization:
                 assert raw_secret not in matching_endpoint["masked_api_key"]
 
                 export_response = await client.get(
-                    "/api/config/export", headers=profile_headers
+                    "/api/config/profile/export", headers=profile_headers
                 )
                 assert export_response.status_code == 200
                 export_endpoint = next(
@@ -887,7 +887,17 @@ class TestDEF072_SecretSanitization:
                     for item in export_response.json()["endpoints"]
                     if item["name"] == endpoint_name
                 )
-                assert export_endpoint["api_key"] == raw_secret
+                assert "api_key" not in export_endpoint
+                assert (
+                    export_endpoint["api_key_secret_ref"]
+                    == f"endpoint:{endpoint_name}:api_key"
+                )
+                exported_secret = next(
+                    item
+                    for item in export_response.json()["secret_payload"]["entries"]
+                    if item["ref"] == f"endpoint:{endpoint_name}:api_key"
+                )
+                assert exported_secret["ciphertext"].startswith("enc:")
         finally:
             await _cleanup_auth_state()
 

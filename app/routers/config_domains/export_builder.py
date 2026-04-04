@@ -1,11 +1,17 @@
 import json
 from typing import Literal, cast
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.crypto import decrypt_secret
+from app.core.crypto import (
+    decrypt_secret,
+    encrypt_bundle_secret,
+    get_bundle_secret_cipher,
+    get_bundle_secret_key_id,
+)
 from app.core.time import utc_now
 from app.models.models import (
     Connection,
@@ -29,8 +35,10 @@ from app.schemas.schemas import (
     ConfigModelExport,
     ConfigProxyTargetExport,
     ConfigPricingTemplateExport,
+    ConfigSecretPayload,
+    ConfigSecretPayloadEntry,
     ConfigUserSettingsExport,
-    ConfigVendorExport,
+    ConfigVendorRef,
     HeaderBlocklistRuleExport,
 )
 from app.services.loadbalancer.policy import (
@@ -54,11 +62,14 @@ def _normalize_custom_headers_for_export(
     return None
 
 
-def _export_endpoint_api_key(api_key: str | None) -> str:
+def _export_endpoint_api_key(*, endpoint_name: str, api_key: str | None) -> str:
     try:
         return decrypt_secret(api_key)
-    except ValueError:
-        return ""
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored secret for endpoint '{endpoint_name}' could not be decrypted",
+        ) from exc
 
 
 async def build_export_payload(
@@ -131,15 +142,30 @@ async def build_export_payload(
         )
         vendors_by_id = {vendor.id: vendor for vendor in vendors}
 
-    exported_endpoints = [
-        ConfigEndpointExport(
-            name=endpoint.name,
-            base_url=endpoint.base_url,
-            api_key=_export_endpoint_api_key(endpoint.api_key),
-            position=endpoint.position,
+    secret_entries: list[ConfigSecretPayloadEntry] = []
+    exported_endpoints = []
+    for endpoint in endpoints:
+        decrypted_api_key = _export_endpoint_api_key(
+            endpoint_name=endpoint.name,
+            api_key=endpoint.api_key,
         )
-        for endpoint in endpoints
-    ]
+        secret_ref: str | None = None
+        if decrypted_api_key:
+            secret_ref = f"endpoint:{endpoint.name}:api_key"
+            secret_entries.append(
+                ConfigSecretPayloadEntry(
+                    ref=secret_ref,
+                    ciphertext=encrypt_bundle_secret(decrypted_api_key),
+                )
+            )
+        exported_endpoints.append(
+            ConfigEndpointExport(
+                name=endpoint.name,
+                base_url=endpoint.base_url,
+                api_key_secret_ref=secret_ref,
+                position=endpoint.position,
+            )
+        )
 
     endpoint_name_by_id = {endpoint.id: endpoint.name for endpoint in endpoints}
 
@@ -185,14 +211,12 @@ async def build_export_payload(
         template.id: template.name for template in pricing_templates
     }
 
-    exported_vendors = [
-        ConfigVendorExport(
+    exported_vendor_refs = [
+        ConfigVendorRef(
             key=vendor.key,
-            name=vendor.name,
-            description=vendor.description,
-            icon_key=vendor.icon_key,
-            audit_enabled=vendor.audit_enabled,
-            audit_capture_bodies=vendor.audit_capture_bodies,
+            name_hint=vendor.name,
+            description_hint=vendor.description,
+            icon_key_hint=vendor.icon_key,
         )
         for vendor in sorted(vendors_by_id.values(), key=lambda vendor: vendor.key)
     ]
@@ -243,7 +267,11 @@ async def build_export_payload(
                     ),
                     openai_probe_endpoint_variant=cast(
                         OpenAiProbeEndpointVariant,
-                        connection.openai_probe_endpoint_variant,
+                        getattr(
+                            connection,
+                            "openai_probe_endpoint_variant",
+                            "responses_minimal",
+                        ),
                     ),
                     qps_limit=connection.qps_limit,
                     max_in_flight_non_stream=connection.max_in_flight_non_stream,
@@ -323,14 +351,15 @@ async def build_export_payload(
     )
 
     return ConfigExportResponse(
-        version=1,
+        version=2,
+        bundle_kind="profile_config",
         exported_at=utc_now(),
-        vendors=exported_vendors,
+        vendor_refs=exported_vendor_refs,
         endpoints=exported_endpoints,
         pricing_templates=exported_pricing_templates,
         loadbalance_strategies=exported_loadbalance_strategies,
         models=exported_models,
-        user_settings=ConfigUserSettingsExport(
+        profile_settings=ConfigUserSettingsExport(
             report_currency_code=(
                 user_settings.report_currency_code
                 if user_settings is not None
@@ -340,6 +369,9 @@ async def build_export_payload(
                 user_settings.report_currency_symbol
                 if user_settings is not None
                 else "$"
+            ),
+            timezone_preference=(
+                user_settings.timezone_preference if user_settings is not None else None
             ),
             endpoint_fx_mappings=[
                 ConfigEndpointFxRateExport(
@@ -359,6 +391,12 @@ async def build_export_payload(
             )
             for rule in header_blocklist_rules
         ],
+        secret_payload=ConfigSecretPayload(
+            kind="encrypted",
+            cipher=cast(Literal["fernet-v1"], get_bundle_secret_cipher()),
+            key_id=get_bundle_secret_key_id(),
+            entries=secret_entries,
+        ),
     )
 
 

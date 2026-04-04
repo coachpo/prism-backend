@@ -13,9 +13,96 @@ from app.services.proxy_service import (
     build_upstream_headers,
 )
 from app.services.stats_service import log_request
+from app.core.crypto import encrypt_bundle_secret, get_bundle_secret_key_id
 from tests.loadbalance_strategy_helpers import (
     make_routing_policy_adaptive,
 )
+
+
+def _build_secret_payload(ref_to_value: dict[str, str]) -> dict[str, object]:
+    return {
+        "kind": "encrypted",
+        "cipher": "fernet-v1",
+        "key_id": get_bundle_secret_key_id(),
+        "entries": [
+            {
+                "ref": ref,
+                "ciphertext": encrypt_bundle_secret(value),
+            }
+            for ref, value in ref_to_value.items()
+        ],
+    }
+
+
+def _build_v2_profile_bundle(
+    *,
+    vendor_key: str = "openai",
+    vendor_name: str = "OpenAI",
+    endpoint_name: str = "openai-main",
+    endpoint_secret: str = "sk-test",
+    include_endpoint: bool = True,
+    models: list[dict[str, object]] | None = None,
+    loadbalance_strategies: list[dict[str, object]] | None = None,
+    profile_settings: dict[str, object] | None = None,
+) -> dict[str, object]:
+    bundle: dict[str, object] = {
+        "version": 2,
+        "bundle_kind": "profile_config",
+        "vendor_refs": [
+            {
+                "key": vendor_key,
+                "name_hint": vendor_name,
+                "description_hint": f"{vendor_name} API (GPT models)",
+                "icon_key_hint": vendor_key,
+            }
+        ],
+        "endpoints": [],
+        "pricing_templates": [],
+        "loadbalance_strategies": loadbalance_strategies
+        if loadbalance_strategies is not None
+        else [
+            {
+                "name": "single-primary",
+                "strategy_type": "adaptive",
+                "routing_policy": make_routing_policy_adaptive(),
+            }
+        ],
+        "models": models
+        if models is not None
+        else [
+            {
+                "vendor_key": vendor_key,
+                "api_family": "openai",
+                "model_id": "gpt-4o",
+                "model_type": "native",
+                "loadbalance_strategy_name": "single-primary",
+                "connections": [{"endpoint_name": endpoint_name}],
+            }
+        ],
+        "profile_settings": profile_settings
+        if profile_settings is not None
+        else {
+            "report_currency_code": "USD",
+            "report_currency_symbol": "$",
+            "timezone_preference": None,
+            "endpoint_fx_mappings": [],
+        },
+        "header_blocklist_rules": [],
+        "secret_payload": _build_secret_payload(
+            {f"endpoint:{endpoint_name}:api_key": endpoint_secret}
+            if include_endpoint
+            else {}
+        ),
+    }
+    if include_endpoint:
+        bundle["endpoints"] = [
+            {
+                "name": endpoint_name,
+                "base_url": "https://api.openai.com",
+                "api_key_secret_ref": f"endpoint:{endpoint_name}:api_key",
+            }
+        ]
+    return bundle
 
 
 class TestDEF031_StartupUserSettingsSeed:
@@ -166,6 +253,213 @@ class TestDEF080_VendorCatalogManagementSurface:
         assert "/api/vendors" in route_paths
         assert not any(path.startswith(removed_route_prefix) for path in route_paths)
 
+    @pytest.mark.asyncio
+    async def test_config_vendor_catalog_export_returns_v2_bundle(self):
+        from datetime import datetime, timezone
+
+        from app.models.models import Vendor
+        from app.routers.config_domains.import_export import export_vendor_catalog
+
+        now = datetime.now(timezone.utc)
+        result = MagicMock()
+        scalars = MagicMock()
+        scalars.all.return_value = [
+            Vendor(
+                id=1,
+                key="openai",
+                name="OpenAI",
+                description="OpenAI API (GPT models)",
+                icon_key="openai",
+                audit_enabled=False,
+                audit_capture_bodies=True,
+                created_at=now,
+                updated_at=now,
+            )
+        ]
+        result.scalars.return_value = scalars
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=result)
+
+        bundle = await export_vendor_catalog(db=mock_db)
+
+        assert bundle.version == 2
+        assert bundle.bundle_kind == "vendor_catalog"
+        assert bundle.vendors[0].key == "openai"
+
+    @pytest.mark.asyncio
+    async def test_config_vendor_catalog_preview_counts_create_and_update(self):
+        from app.models.models import Vendor
+        from app.routers.config_domains.import_export import (
+            preview_vendor_catalog_import,
+        )
+        from app.schemas.schemas import ConfigVendorCatalogImportRequest
+
+        existing_vendor = Vendor(
+            id=1,
+            key="openai",
+            name="OpenAI",
+            description="OpenAI API (GPT models)",
+            icon_key="openai",
+            audit_enabled=False,
+            audit_capture_bodies=True,
+        )
+
+        result = MagicMock()
+        scalars = MagicMock()
+        scalars.all.return_value = [existing_vendor]
+        result.scalars.return_value = scalars
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=result)
+
+        preview = await preview_vendor_catalog_import(
+            data=ConfigVendorCatalogImportRequest.model_validate(
+                {
+                    "version": 2,
+                    "bundle_kind": "vendor_catalog",
+                    "vendors": [
+                        {
+                            "key": "openai",
+                            "name": "OpenAI v2",
+                            "description": "Updated metadata",
+                            "icon_key": "openai",
+                            "audit_enabled": True,
+                            "audit_capture_bodies": False,
+                        },
+                        {
+                            "key": "anthropic",
+                            "name": "Anthropic",
+                            "description": None,
+                            "icon_key": "anthropic",
+                            "audit_enabled": False,
+                            "audit_capture_bodies": True,
+                        },
+                    ],
+                }
+            ),
+            db=mock_db,
+        )
+
+        assert preview.ready is True
+        assert preview.create_count == 1
+        assert preview.update_count == 1
+
+    @pytest.mark.asyncio
+    async def test_config_vendor_catalog_import_updates_existing_vendor_metadata(self):
+        from app.models.models import Vendor
+        from app.routers.config_domains.import_export import import_vendor_catalog
+        from app.schemas.schemas import ConfigVendorCatalogImportRequest
+
+        existing_vendor = Vendor(
+            id=1,
+            key="openai",
+            name="OpenAI",
+            description="OpenAI API (GPT models)",
+            icon_key="openai",
+            audit_enabled=False,
+            audit_capture_bodies=True,
+        )
+
+        result = MagicMock()
+        scalars = MagicMock()
+        scalars.all.return_value = [existing_vendor]
+        result.scalars.return_value = scalars
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=result)
+        mock_db.add = MagicMock()
+
+        response = await import_vendor_catalog(
+            data=ConfigVendorCatalogImportRequest.model_validate(
+                {
+                    "version": 2,
+                    "bundle_kind": "vendor_catalog",
+                    "vendors": [
+                        {
+                            "key": "openai",
+                            "name": "OpenAI Updated",
+                            "description": "Updated metadata",
+                            "icon_key": "openai",
+                            "audit_enabled": True,
+                            "audit_capture_bodies": False,
+                        }
+                    ],
+                }
+            ),
+            db=mock_db,
+        )
+
+        assert response.created_count == 0
+        assert response.updated_count == 1
+        assert existing_vendor.name == "OpenAI Updated"
+        assert existing_vendor.description == "Updated metadata"
+        assert existing_vendor.audit_enabled is True
+        assert existing_vendor.audit_capture_bodies is False
+
+    @pytest.mark.asyncio
+    async def test_config_vendor_catalog_preview_reports_name_collision_and_duplicate_key(
+        self,
+    ):
+        from app.models.models import Vendor
+        from app.routers.config_domains.import_export import (
+            preview_vendor_catalog_import,
+        )
+        from app.schemas.schemas import ConfigVendorCatalogImportRequest
+
+        existing_vendor = Vendor(
+            id=1,
+            key="openai",
+            name="OpenAI",
+            description="OpenAI API (GPT models)",
+            icon_key="openai",
+            audit_enabled=False,
+            audit_capture_bodies=True,
+        )
+
+        result = MagicMock()
+        scalars = MagicMock()
+        scalars.all.return_value = [existing_vendor]
+        result.scalars.return_value = scalars
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=result)
+
+        preview = await preview_vendor_catalog_import(
+            data=ConfigVendorCatalogImportRequest.model_validate(
+                {
+                    "version": 2,
+                    "bundle_kind": "vendor_catalog",
+                    "vendors": [
+                        {
+                            "key": "openai-alt",
+                            "name": "OpenAI",
+                            "description": None,
+                            "icon_key": "openai",
+                            "audit_enabled": False,
+                            "audit_capture_bodies": True,
+                        },
+                        {
+                            "key": "openai-alt",
+                            "name": "OpenAI Alt",
+                            "description": None,
+                            "icon_key": "openai",
+                            "audit_enabled": False,
+                            "audit_capture_bodies": True,
+                        },
+                    ],
+                }
+            ),
+            db=mock_db,
+        )
+
+        assert preview.ready is False
+        assert any(
+            "duplicate vendor key 'openai-alt'" in error
+            for error in preview.blocking_errors
+        )
+        assert any("already exists" in error for error in preview.blocking_errors)
+
 
 class TestDEF006_ConfigExportImportFieldCoverage:
     """DEF-006 (P0): config export/import must preserve all mutable fields including custom_headers."""
@@ -177,7 +471,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         expected = {
             "name",
             "base_url",
-            "api_key",
+            "api_key_secret_ref",
             "position",
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
@@ -214,16 +508,46 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         }
         assert expected.issubset(fields), f"Missing fields: {expected - fields}"
 
-    def test_config_export_schema_defaults_to_version_1(self):
+    def test_config_export_schema_defaults_to_version_2(self):
         from app.schemas.schemas import ConfigExportResponse
 
-        assert ConfigExportResponse.model_fields["version"].default == 1
+        assert ConfigExportResponse.model_fields["version"].default == 2
 
-    def test_export_schema_includes_top_level_vendors_field(self):
+    def test_profile_config_export_schema_exposes_v2_bundle_fields(self):
         from app.schemas.schemas import ConfigExportResponse
 
         fields = set(ConfigExportResponse.model_fields.keys())
-        assert "vendors" in fields
+        expected = {
+            "version",
+            "bundle_kind",
+            "exported_at",
+            "vendor_refs",
+            "endpoints",
+            "pricing_templates",
+            "loadbalance_strategies",
+            "models",
+            "profile_settings",
+            "header_blocklist_rules",
+            "secret_payload",
+        }
+        assert ConfigExportResponse.model_fields["version"].default == 2
+        assert expected.issubset(fields), f"Missing fields: {expected - fields}"
+        assert "vendors" not in fields
+        assert "user_settings" not in fields
+
+    def test_profile_endpoint_export_schema_uses_secret_ref_not_plaintext_api_key(self):
+        from app.schemas.schemas import ConfigEndpointExport
+
+        fields = set(ConfigEndpointExport.model_fields.keys())
+        assert "api_key_secret_ref" in fields
+        assert "api_key" not in fields
+
+    def test_export_schema_uses_top_level_vendor_refs_field(self):
+        from app.schemas.schemas import ConfigExportResponse
+
+        fields = set(ConfigExportResponse.model_fields.keys())
+        assert "vendor_refs" in fields
+        assert "vendors" not in fields
 
     def test_export_schema_includes_all_model_fields(self):
         from app.schemas.schemas import ConfigModelExport
@@ -310,27 +634,29 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             ConfigImportRequest,
             ConfigLoadbalanceStrategyExport,
             ConfigModelExport,
-            ConfigVendorExport,
+            ConfigSecretPayload,
+            ConfigSecretPayloadEntry,
+            ConfigVendorRef,
         )
         from datetime import datetime, timezone
 
         config = ConfigExportResponse(
+            version=2,
+            bundle_kind="profile_config",
             exported_at=datetime.now(timezone.utc),
-            vendors=[
-                ConfigVendorExport(
+            vendor_refs=[
+                ConfigVendorRef(
                     key="openai",
-                    name="OpenAI",
-                    description="OpenAI API (GPT models)",
-                    icon_key="openai",
-                    audit_enabled=False,
-                    audit_capture_bodies=True,
+                    name_hint="OpenAI",
+                    description_hint="OpenAI API (GPT models)",
+                    icon_key_hint="openai",
                 )
             ],
             endpoints=[
                 ConfigEndpointExport(
                     name="openai-main",
                     base_url="https://api.openai.com",
-                    api_key="sk-test",
+                    api_key_secret_ref="endpoint:openai-main:api_key",
                     position=0,
                 )
             ],
@@ -372,6 +698,16 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                     ],
                 )
             ],
+            profile_settings=None,
+            secret_payload=ConfigSecretPayload(
+                key_id=get_bundle_secret_key_id(),
+                entries=[
+                    ConfigSecretPayloadEntry(
+                        ref="endpoint:openai-main:api_key",
+                        ciphertext=encrypt_bundle_secret("sk-test"),
+                    )
+                ],
+            ),
         )
         exported = config.model_dump(mode="json")
         reimported = ConfigImportRequest(**exported)
@@ -400,35 +736,16 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         assert connection.openai_probe_endpoint_variant == "responses_reasoning_none"
         assert connection.priority == 0
         assert connection.endpoint_name == "openai-main"
-        assert reimported.vendors[0].key == "openai"
-        assert reimported.vendors[0].icon_key == "openai"
+        assert reimported.vendor_refs[0].key == "openai"
+        assert reimported.vendor_refs[0].icon_key_hint == "openai"
         assert "icon_key" not in exported["models"][0]
 
-    def test_version_1_import_schema_accepts_fill_first_strategy(self):
+    def test_version_2_import_schema_accepts_v2_profile_bundle(self):
         from app.schemas.schemas import ConfigImportRequest
 
         validation = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": "OpenAI API (GPT models)",
-                        "icon_key": "openai",
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
-                    {
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
-                    }
-                ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
+            _build_v2_profile_bundle(
+                loadbalance_strategies=[
                     {
                         "name": "adaptive-availability",
                         "strategy_type": "adaptive",
@@ -446,7 +763,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         ),
                     }
                 ],
-                "models": [
+                models=[
                     {
                         "vendor_key": "openai",
                         "api_family": "openai",
@@ -456,7 +773,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                         "connections": [{"endpoint_name": "openai-main"}],
                     }
                 ],
-            }
+            )
         )
 
         strategy = validation.loadbalance_strategies[0]
@@ -468,37 +785,26 @@ class TestDEF006_ConfigExportImportFieldCoverage:
     def test_config_import_schema_accepts_nullable_vendor_icon_key(self):
         from app.schemas.schemas import ConfigImportRequest
 
+        payload = ConfigImportRequest.model_validate(_build_v2_profile_bundle())
+
+        assert payload.vendor_refs[0].icon_key_hint == "openai"
+
+    def test_config_import_schema_accepts_vendor_refs_that_omit_icon_key_hint(self):
+        from app.schemas.schemas import ConfigImportRequest
+
         payload = ConfigImportRequest.model_validate(
             {
-                "version": 1,
-                "vendors": [
+                **_build_v2_profile_bundle(),
+                "vendor_refs": [
                     {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": "OpenAI API (GPT models)",
-                        "icon_key": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
-                    {
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
-                    }
-                ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
-                    {
-                        "name": "single-primary",
-                        "strategy_type": "adaptive",
-                        "routing_policy": make_routing_policy_adaptive(),
+                        "key": "openrouter",
+                        "name_hint": "OpenRouter",
+                        "description_hint": None,
                     }
                 ],
                 "models": [
                     {
-                        "vendor_key": "openai",
+                        "vendor_key": "openrouter",
                         "api_family": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
@@ -509,97 +815,23 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             }
         )
 
-        assert payload.vendors[0].icon_key is None
-
-    def test_config_import_schema_rejects_vendor_objects_that_omit_icon_key(self):
-        from app.schemas.schemas import ConfigImportRequest
-
-        with pytest.raises(ValidationError, match="icon_key"):
-            ConfigImportRequest.model_validate(
-                {
-                    "version": 1,
-                    "vendors": [
-                        {
-                            "key": "openrouter",
-                            "name": "OpenRouter",
-                            "description": None,
-                            "audit_enabled": False,
-                            "audit_capture_bodies": True,
-                        }
-                    ],
-                    "endpoints": [
-                        {
-                            "name": "openai-main",
-                            "base_url": "https://api.openai.com",
-                            "api_key": "sk-test",
-                        }
-                    ],
-                    "pricing_templates": [],
-                    "loadbalance_strategies": [
-                        {
-                            "name": "single-primary",
-                            "routing_policy": make_routing_policy_adaptive(),
-                        }
-                    ],
-                    "models": [
-                        {
-                            "vendor_key": "openrouter",
-                            "api_family": "openai",
-                            "model_id": "gpt-4o",
-                            "model_type": "native",
-                            "loadbalance_strategy_name": "single-primary",
-                            "connections": [{"endpoint_name": "openai-main"}],
-                        }
-                    ],
-                }
-            )
+        assert payload.vendor_refs[0].icon_key_hint is None
 
     def test_config_import_schema_rejects_unsupported_version_numbers(self):
         from app.schemas.schemas import ConfigImportRequest
 
-        with pytest.raises(ValidationError, match="1"):
+        with pytest.raises(ValidationError, match="2"):
             ConfigImportRequest.model_validate(
                 {
-                    "version": 2,
-                    "vendors": [
-                        {
-                            "key": "openai",
-                            "name": "OpenAI",
-                            "description": "OpenAI API (GPT models)",
-                            "icon_key": "openai",
-                            "audit_enabled": False,
-                            "audit_capture_bodies": True,
-                        }
-                    ],
-                    "endpoints": [
-                        {
-                            "name": "openai-main",
-                            "base_url": "https://api.openai.com",
-                            "api_key": "sk-test",
-                        }
-                    ],
-                    "pricing_templates": [],
-                    "loadbalance_strategies": [
-                        {
-                            "name": "single-primary",
-                            "routing_policy": make_routing_policy_adaptive(),
-                        }
-                    ],
-                    "models": [
-                        {
-                            "vendor_key": "openai",
-                            "api_family": "openai",
-                            "model_id": "gpt-4o",
-                            "model_type": "native",
-                            "loadbalance_strategy_name": "single-primary",
-                            "connections": [{"endpoint_name": "openai-main"}],
-                        }
-                    ],
+                    **_build_v2_profile_bundle(),
+                    "version": 1,
                 }
             )
 
     @pytest.mark.asyncio
-    async def test_import_route_rejects_version_two_with_literal_error_detail(self):
+    async def test_import_route_rejects_legacy_version_one_with_literal_error_detail(
+        self,
+    ):
         from httpx import ASGITransport, AsyncClient
 
         from app.core.database import AsyncSessionLocal, get_engine
@@ -628,15 +860,11 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             base_url="http://testserver",
         ) as client:
             response = await client.post(
-                "/api/config/import",
+                "/api/config/profile/import",
                 headers={"X-Profile-Id": str(profile_id)},
                 json={
-                    "version": 2,
-                    "vendors": [],
-                    "endpoints": [],
-                    "pricing_templates": [],
-                    "loadbalance_strategies": [],
-                    "models": [],
+                    **_build_v2_profile_bundle(include_endpoint=False, models=[]),
+                    "version": 1,
                 },
             )
 
@@ -645,9 +873,9 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             {
                 "type": "literal_error",
                 "loc": ["body", "version"],
-                "msg": "Input should be 1",
-                "input": 2,
-                "ctx": {"expected": "1"},
+                "msg": "Input should be 2",
+                "input": 1,
+                "ctx": {"expected": "2"},
             }
         ]
 
@@ -660,31 +888,14 @@ class TestDEF023_ConfigImportReferenceValidation:
         with pytest.raises(ValidationError) as exc_info:
             ConfigImportRequest.model_validate(
                 {
-                    "version": 1,
-                    "vendors": [
-                        {
-                            "key": "openai",
-                            "name": "OpenAI",
-                            "description": "OpenAI API (GPT models)",
-                            "icon_key": "openai",
-                            "audit_enabled": False,
-                            "audit_capture_bodies": True,
-                        }
-                    ],
+                    **_build_v2_profile_bundle(),
                     "endpoints": [
                         {
                             "endpoint_id": 1,
                             "name": "openai-main",
                             "base_url": "https://api.openai.com",
-                            "api_key": "sk-test",
+                            "api_key_secret_ref": "endpoint:openai-main:api_key",
                             "position": 0,
-                        }
-                    ],
-                    "pricing_templates": [],
-                    "loadbalance_strategies": [
-                        {
-                            "name": "single-primary",
-                            "routing_policy": make_routing_policy_adaptive(),
                         }
                     ],
                     "models": [
@@ -702,7 +913,10 @@ class TestDEF023_ConfigImportReferenceValidation:
                             ],
                         }
                     ],
-                    "user_settings": {
+                    "profile_settings": {
+                        "report_currency_code": "USD",
+                        "report_currency_symbol": "$",
+                        "timezone_preference": None,
                         "endpoint_fx_mappings": [
                             {
                                 "model_id": "gpt-4o",
@@ -710,7 +924,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                                 "endpoint_name": "openai-main",
                                 "fx_rate": "1",
                             }
-                        ]
+                        ],
                     },
                 }
             )
@@ -722,45 +936,15 @@ class TestDEF023_ConfigImportReferenceValidation:
         from app.schemas.schemas import ConfigImportRequest
 
         data = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": "OpenAI API (GPT models)",
-                        "icon_key": "openai",
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
-                    {
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
-                    }
-                ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
-                    {
-                        "name": "single-primary",
-                        "strategy_type": "adaptive",
-                        "routing_policy": make_routing_policy_adaptive(),
-                    }
-                ],
-                "models": [
+            _build_v2_profile_bundle(
+                models=[
                     {
                         "vendor_key": "openai",
                         "api_family": "openai",
                         "model_id": "gpt-4o",
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
-                        "connections": [
-                            {
-                                "endpoint_name": "openai-main",
-                            }
-                        ],
+                        "connections": [{"endpoint_name": "openai-main"}],
                     },
                     {
                         "vendor_key": "openai",
@@ -768,14 +952,10 @@ class TestDEF023_ConfigImportReferenceValidation:
                         "model_id": "gpt-4.1",
                         "model_type": "native",
                         "loadbalance_strategy_name": "single-primary",
-                        "connections": [
-                            {
-                                "endpoint_name": "openai-main",
-                            }
-                        ],
+                        "connections": [{"endpoint_name": "openai-main"}],
                     },
-                ],
-            }
+                ]
+            )
         )
 
         _validate_import(data)
@@ -785,57 +965,20 @@ class TestDEF023_ConfigImportReferenceValidation:
         from app.schemas.schemas import ConfigImportRequest
 
         data = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": "openai",
-                        "name": "OpenAI",
-                        "description": "OpenAI API (GPT models)",
-                        "icon_key": "openai",
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
-                    {
-                        "name": "openai-main",
-                        "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
-                    }
-                ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
-                    {
-                        "name": "single-primary",
-                        "strategy_type": "adaptive",
-                        "routing_policy": make_routing_policy_adaptive(),
-                    }
-                ],
-                "models": [
-                    {
-                        "vendor_key": "openai",
-                        "api_family": "openai",
-                        "model_id": "gpt-4o",
-                        "model_type": "native",
-                        "loadbalance_strategy_name": "single-primary",
-                        "connections": [
-                            {
-                                "endpoint_name": "openai-main",
-                            }
-                        ],
-                    }
-                ],
-                "user_settings": {
+            _build_v2_profile_bundle(
+                profile_settings={
+                    "report_currency_code": "USD",
+                    "report_currency_symbol": "$",
+                    "timezone_preference": None,
                     "endpoint_fx_mappings": [
                         {
                             "model_id": "gpt-4o",
                             "endpoint_name": "openai-main",
                             "fx_rate": "1",
                         }
-                    ]
-                },
-            }
+                    ],
+                }
+            )
         )
 
         _validate_import(data)

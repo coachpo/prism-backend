@@ -84,7 +84,7 @@ def _resolve_pricing_template_reference_name(
 
 def validate_import_payload(data: ConfigImportRequest) -> None:
     vendor_keys_in_file: set[str] = set()
-    for vendor in data.vendors:
+    for vendor in data.vendor_refs:
         if vendor.key in vendor_keys_in_file:
             raise HTTPException(
                 status_code=400,
@@ -93,6 +93,7 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
         vendor_keys_in_file.add(vendor.key)
 
     endpoint_names_in_file: set[str] = set()
+    endpoint_secret_refs_in_file: set[str] = set()
     for endpoint in data.endpoints:
         endpoint_name = endpoint.name.strip()
         if not endpoint_name:
@@ -120,6 +121,43 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                 status_code=400,
                 detail=f"Endpoint '{endpoint_name}' has invalid position '{endpoint_position}'",
             )
+
+        if endpoint.api_key_secret_ref is None:
+            continue
+
+        secret_ref = endpoint.api_key_secret_ref.strip()
+        if not secret_ref:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Endpoint '{endpoint_name}' has invalid api_key_secret_ref",
+            )
+        if secret_ref in endpoint_secret_refs_in_file:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate endpoint api_key_secret_ref: '{secret_ref}'",
+            )
+        endpoint_secret_refs_in_file.add(secret_ref)
+
+    seen_secret_refs: set[str] = set()
+    secret_refs_in_payload: set[str] = set()
+    for entry in data.secret_payload.entries:
+        if entry.ref in seen_secret_refs:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate secret ref: '{entry.ref}'",
+            )
+        seen_secret_refs.add(entry.ref)
+        secret_refs_in_payload.add(entry.ref)
+
+    missing_secret_refs = sorted(endpoint_secret_refs_in_file - secret_refs_in_payload)
+    if missing_secret_refs:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Import is missing encrypted secret payload entries for refs: "
+                f"{', '.join(missing_secret_refs)}"
+            ),
+        )
 
     pricing_template_names_in_file: set[str] = set()
     for template in data.pricing_templates:
@@ -280,9 +318,9 @@ def validate_import_payload(data: ConfigImportRequest) -> None:
                     ),
                 )
 
-    if data.user_settings is not None:
+    if data.profile_settings is not None:
         seen_fx: set[tuple[str, str]] = set()
-        for mapping in data.user_settings.endpoint_fx_mappings:
+        for mapping in data.profile_settings.endpoint_fx_mappings:
             resolved_endpoint_name = _resolve_endpoint_reference_name(
                 context="FX mapping",
                 endpoint_name=mapping.endpoint_name,

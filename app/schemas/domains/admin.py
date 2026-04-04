@@ -47,14 +47,22 @@ class _ConfigLoadbalanceStrategyBase(BaseModel):
 class ConfigEndpointExport(BaseModel):
     name: str
     base_url: str
-    api_key: str
+    api_key_secret_ref: str | None = None
     position: int | None = Field(default=None, ge=0)
+
+    @field_validator("api_key_secret_ref")
+    @classmethod
+    def validate_api_key_secret_ref(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("api_key_secret_ref must not be empty")
+        return normalized
 
 
 class ConfigEndpointImport(ConfigEndpointExport):
     model_config = ConfigDict(extra="forbid")
-
-    pass
 
 
 class ConfigPricingTemplateExport(BaseModel):
@@ -94,6 +102,47 @@ class ConfigVendorExport(BaseModel):
     icon_key: str | None
     audit_enabled: bool = False
     audit_capture_bodies: bool = True
+
+
+class ConfigVendorRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name_hint: str | None = None
+    description_hint: str | None = None
+    icon_key_hint: str | None = None
+
+    @field_validator("key")
+    @classmethod
+    def validate_ref_key(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("key must not be empty")
+        return normalized
+
+    @field_validator("name_hint")
+    @classmethod
+    def validate_name_hint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("description_hint")
+    @classmethod
+    def validate_description_hint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    @field_validator("icon_key_hint")
+    @classmethod
+    def validate_icon_key_hint(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
 
 
 class ConfigVendorImport(BaseModel):
@@ -226,6 +275,7 @@ class ConfigEndpointFxRateImport(BaseModel):
 class ConfigUserSettingsExport(BaseModel):
     report_currency_code: str = "USD"
     report_currency_symbol: str = "$"
+    timezone_preference: str | None = None
     endpoint_fx_mappings: list[ConfigEndpointFxRateExport] = Field(default_factory=list)
 
 
@@ -234,37 +284,74 @@ class ConfigUserSettingsImport(BaseModel):
 
     report_currency_code: str = "USD"
     report_currency_symbol: str = "$"
+    timezone_preference: str | None = None
     endpoint_fx_mappings: list[ConfigEndpointFxRateImport] = Field(default_factory=list)
 
 
+class ConfigSecretPayloadEntry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ref: str
+    ciphertext: str
+
+    @field_validator("ref", "ciphertext")
+    @classmethod
+    def validate_non_empty_value(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("value must not be empty")
+        return normalized
+
+
+class ConfigSecretPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["encrypted"] = "encrypted"
+    cipher: Literal["fernet-v1"] = "fernet-v1"
+    key_id: str
+    entries: list[ConfigSecretPayloadEntry] = Field(default_factory=list)
+
+    @field_validator("key_id")
+    @classmethod
+    def validate_key_id(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("key_id must not be empty")
+        return normalized
+
+
 class ConfigExportResponse(BaseModel):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
+    bundle_kind: Literal["profile_config"] = "profile_config"
     exported_at: datetime
-    vendors: list[ConfigVendorExport] = Field(default_factory=list)
+    vendor_refs: list[ConfigVendorRef] = Field(default_factory=list)
     endpoints: list[ConfigEndpointExport]
     pricing_templates: list[ConfigPricingTemplateExport]
     loadbalance_strategies: list[ConfigLoadbalanceStrategyExport]
     models: list[ConfigModelExport]
-    user_settings: ConfigUserSettingsExport | None = None
+    profile_settings: ConfigUserSettingsExport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(
         default_factory=list
     )
+    secret_payload: ConfigSecretPayload
 
 
 class ConfigImportRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    version: Literal[1] = 1
+    version: Literal[2] = 2
+    bundle_kind: Literal["profile_config"] = "profile_config"
     exported_at: datetime | None = None
-    vendors: list[ConfigVendorImport] = Field(default_factory=list)
+    vendor_refs: list[ConfigVendorRef] = Field(default_factory=list)
     endpoints: list[ConfigEndpointImport]
     pricing_templates: list[ConfigPricingTemplateImport]
     loadbalance_strategies: list[ConfigLoadbalanceStrategyImport]
     models: list[ConfigModelImport]
-    user_settings: ConfigUserSettingsImport | None = None
+    profile_settings: ConfigUserSettingsImport | None = None
     header_blocklist_rules: list["HeaderBlocklistRuleExport"] = Field(
         default_factory=list
     )
+    secret_payload: ConfigSecretPayload
 
 
 class ConfigImportResponse(BaseModel):
@@ -273,6 +360,59 @@ class ConfigImportResponse(BaseModel):
     strategies_imported: int
     models_imported: int
     connections_imported: int
+
+
+class ConfigImportVendorResolution(BaseModel):
+    vendor_key: str
+    resolution: Literal["reuse", "create"]
+    warning: str | None = None
+
+
+class ConfigImportPreviewResponse(BaseModel):
+    ready: bool
+    version: Literal[2] = 2
+    bundle_kind: Literal["profile_config"] = "profile_config"
+    endpoints_imported: int
+    pricing_templates_imported: int
+    strategies_imported: int
+    models_imported: int
+    connections_imported: int
+    vendor_resolutions: list[ConfigImportVendorResolution] = Field(default_factory=list)
+    secret_key_id: str
+    decryptable_secret_refs: list[str] = Field(default_factory=list)
+    blocking_errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ConfigVendorCatalogExportResponse(BaseModel):
+    version: Literal[2] = 2
+    bundle_kind: Literal["vendor_catalog"] = "vendor_catalog"
+    exported_at: datetime
+    vendors: list[ConfigVendorExport] = Field(default_factory=list)
+
+
+class ConfigVendorCatalogImportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[2] = 2
+    bundle_kind: Literal["vendor_catalog"] = "vendor_catalog"
+    exported_at: datetime | None = None
+    vendors: list[ConfigVendorImport] = Field(default_factory=list)
+
+
+class ConfigVendorCatalogImportPreviewResponse(BaseModel):
+    ready: bool
+    version: Literal[2] = 2
+    bundle_kind: Literal["vendor_catalog"] = "vendor_catalog"
+    create_count: int
+    update_count: int
+    blocking_errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ConfigVendorCatalogImportResponse(BaseModel):
+    created_count: int
+    updated_count: int
 
 
 # --- Audit Log Schemas ---

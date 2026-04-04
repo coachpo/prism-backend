@@ -8,6 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from fastapi import HTTPException
 
+from app.core.crypto import encrypt_bundle_secret, get_bundle_secret_key_id
 from tests.loadbalance_strategy_helpers import (
     make_auto_recovery_disabled,
     make_routing_policy_adaptive,
@@ -18,6 +19,64 @@ from app.services.proxy_service import (
 )
 from app.services.stats_service import log_request
 from app.main import app, lifespan
+
+
+def _build_secret_payload(ref_to_value: dict[str, str]) -> dict[str, object]:
+    return {
+        "kind": "encrypted",
+        "cipher": "fernet-v1",
+        "key_id": get_bundle_secret_key_id(),
+        "entries": [
+            {
+                "ref": ref,
+                "ciphertext": encrypt_bundle_secret(value),
+            }
+            for ref, value in ref_to_value.items()
+        ],
+    }
+
+
+def _build_v2_profile_payload(
+    *,
+    vendor_key: str,
+    vendor_name: str,
+    endpoints: list[dict[str, object]],
+    loadbalance_strategies: list[dict[str, object]],
+    models: list[dict[str, object]],
+    profile_settings: dict[str, object] | None = None,
+    header_blocklist_rules: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    secret_values = {
+        endpoint["api_key_secret_ref"]: endpoint.pop("_secret_value")
+        for endpoint in endpoints
+        if "_secret_value" in endpoint
+    }
+    return {
+        "version": 2,
+        "bundle_kind": "profile_config",
+        "vendor_refs": [
+            {
+                "key": vendor_key,
+                "name_hint": vendor_name,
+                "description_hint": None,
+                "icon_key_hint": None,
+            }
+        ],
+        "endpoints": endpoints,
+        "pricing_templates": [],
+        "loadbalance_strategies": loadbalance_strategies,
+        "models": models,
+        "profile_settings": profile_settings
+        if profile_settings is not None
+        else {
+            "report_currency_code": "USD",
+            "report_currency_symbol": "$",
+            "timezone_preference": None,
+            "endpoint_fx_mappings": [],
+        },
+        "header_blocklist_rules": header_blocklist_rules or [],
+        "secret_payload": _build_secret_payload(secret_values),
+    }
 
 
 class TestDEF024_ConfigImportExportRefRoundtrip:
@@ -183,34 +242,25 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             await db.commit()
             profile_id = profile.id
 
-        payload = {
-            "version": 1,
-            "vendors": [
-                {
-                    "key": vendor_key,
-                    "name": f"DEF024 Import OpenAI {suffix}",
-                    "description": None,
-                    "icon_key": None,
-                    "audit_enabled": False,
-                    "audit_capture_bodies": True,
-                }
-            ],
-            "endpoints": [
+        payload = _build_v2_profile_payload(
+            vendor_key=vendor_key,
+            vendor_name=f"DEF024 Import OpenAI {suffix}",
+            endpoints=[
                 {
                     "name": endpoint_name,
                     "base_url": "https://api.openai.com",
-                    "api_key": "sk-import-probe-test",
+                    "api_key_secret_ref": f"endpoint:{endpoint_name}:api_key",
+                    "_secret_value": "sk-import-probe-test",
                 }
             ],
-            "pricing_templates": [],
-            "loadbalance_strategies": [
+            loadbalance_strategies=[
                 {
                     "name": "single-primary",
                     "strategy_type": "adaptive",
                     "routing_policy": make_routing_policy_adaptive(),
                 }
             ],
-            "models": [
+            models=[
                 {
                     "vendor_key": vendor_key,
                     "api_family": "openai",
@@ -240,8 +290,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     ],
                 },
             ],
-            "header_blocklist_rules": [],
-        }
+        )
 
         probe_mock = AsyncMock(
             return_value=ProbeCheckOutcome(
@@ -267,7 +316,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                     base_url="http://testserver",
                 ) as client:
                     response = await client.post(
-                        "/api/config/import",
+                        "/api/config/profile/import",
                         headers={"X-Profile-Id": str(profile_id)},
                         json=payload,
                     )
@@ -295,7 +344,9 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
             in imported_connection_ids
         ]
         assert len(matching_probe_calls) == 2
-        assert sorted(call.kwargs["openai_variant"] for call in matching_probe_calls) == [
+        assert sorted(
+            call.kwargs["openai_variant"] for call in matching_probe_calls
+        ) == [
             "chat_completions_reasoning_none",
             "responses_reasoning_none",
         ]
@@ -443,34 +494,25 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         model_id = f"def024-model-{suffix}"
         connection_name = f"def024-connection-{suffix}"
         payload = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": vendor_key,
-                        "name": vendor_name,
-                        "description": None,
-                        "icon_key": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
+            _build_v2_profile_payload(
+                vendor_key=vendor_key,
+                vendor_name=vendor_name,
+                endpoints=[
                     {
                         "name": endpoint_name,
                         "base_url": "https://api.openai.com",
-                        "api_key": "sk-test",
+                        "api_key_secret_ref": f"endpoint:{endpoint_name}:api_key",
+                        "_secret_value": "sk-test",
                     }
                 ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
+                loadbalance_strategies=[
                     {
                         "name": "single-primary",
                         "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
-                "models": [
+                models=[
                     {
                         "vendor_key": vendor_key,
                         "api_family": "openai",
@@ -489,9 +531,10 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         ],
                     }
                 ],
-                "user_settings": {
+                profile_settings={
                     "report_currency_code": "USD",
                     "report_currency_symbol": "$",
+                    "timezone_preference": None,
                     "endpoint_fx_mappings": [
                         {
                             "model_id": model_id,
@@ -500,7 +543,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         }
                     ],
                 },
-            }
+            )
         )
 
         async with AsyncSessionLocal() as db:
@@ -606,7 +649,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
 
         exported_mapping = next(
             m
-            for m in exported["user_settings"]["endpoint_fx_mappings"]
+            for m in exported["profile_settings"]["endpoint_fx_mappings"]
             if m["model_id"] == model_id
         )
         assert "endpoint_id" not in exported_mapping
@@ -630,6 +673,112 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         assert created_endpoint.id > endpoint.id
 
     @pytest.mark.asyncio
+    async def test_import_export_roundtrip_supports_endpoint_without_api_key(self):
+        from sqlalchemy import select
+
+        from app.core.database import AsyncSessionLocal, get_engine
+        from app.models.models import Endpoint, Profile, Vendor
+        from app.routers.config import export_config, import_config
+        from app.schemas.schemas import ConfigImportRequest
+
+        await get_engine().dispose()
+
+        suffix = str(int(asyncio.get_running_loop().time() * 1_000_000))
+        vendor_key = f"def024-noauth-vendor-{suffix}"
+        endpoint_name = f"def024-noauth-endpoint-{suffix}"
+        model_id = f"def024-noauth-model-{suffix}"
+
+        payload = ConfigImportRequest.model_validate(
+            _build_v2_profile_payload(
+                vendor_key=vendor_key,
+                vendor_name=f"DEF024 NoAuth Vendor {suffix}",
+                endpoints=[
+                    {
+                        "name": endpoint_name,
+                        "base_url": "https://example.com/public",
+                        "api_key_secret_ref": None,
+                    }
+                ],
+                loadbalance_strategies=[
+                    {
+                        "name": "single-primary",
+                        "strategy_type": "adaptive",
+                        "routing_policy": make_routing_policy_adaptive(),
+                    }
+                ],
+                models=[
+                    {
+                        "vendor_key": vendor_key,
+                        "api_family": "openai",
+                        "model_id": model_id,
+                        "model_type": "native",
+                        "loadbalance_strategy_name": "single-primary",
+                        "connections": [{"endpoint_name": endpoint_name}],
+                    }
+                ],
+            )
+        )
+
+        async with AsyncSessionLocal() as db:
+            profile = Profile(
+                name=f"DEF024 NoAuth Profile {suffix}",
+                is_active=False,
+                is_default=False,
+                is_editable=True,
+                version=0,
+            )
+            db.add(profile)
+            await db.flush()
+            profile_id = profile.id
+
+            vendor = (
+                await db.execute(
+                    select(Vendor)
+                    .where(Vendor.key == vendor_key)
+                    .order_by(Vendor.id.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if vendor is None:
+                db.add(
+                    Vendor(
+                        key=vendor_key,
+                        name=f"DEF024 NoAuth Vendor {suffix}",
+                        description=None,
+                        icon_key=None,
+                        audit_enabled=False,
+                        audit_capture_bodies=True,
+                    )
+                )
+                await db.flush()
+
+            response = await import_config(data=payload, db=db, profile_id=profile_id)
+            await db.commit()
+            assert response.endpoints_imported == 1
+
+        async with AsyncSessionLocal() as db:
+            endpoint = (
+                await db.execute(
+                    select(Endpoint).where(
+                        Endpoint.profile_id == profile_id,
+                        Endpoint.name == endpoint_name,
+                    )
+                )
+            ).scalar_one()
+            assert endpoint.api_key == ""
+
+            export_response = await export_config(db=db, profile_id=profile_id)
+            exported = json.loads(bytes(export_response.body).decode("utf-8"))
+
+        exported_endpoint = next(
+            endpoint
+            for endpoint in exported["endpoints"]
+            if endpoint["name"] == endpoint_name
+        )
+        assert exported_endpoint["api_key_secret_ref"] is None
+        assert exported["secret_payload"]["entries"] == []
+
+    @pytest.mark.asyncio
     async def test_import_allocates_unique_connection_ids_with_name_based_payload(self):
         from sqlalchemy import select
 
@@ -649,39 +798,31 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
         connection_a_name = f"def024-duplicate-id-connection-a-{suffix}"
         connection_b_name = f"def024-duplicate-id-connection-b-{suffix}"
         payload = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": vendor_key,
-                        "name": vendor_name,
-                        "description": None,
-                        "icon_key": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [
+            _build_v2_profile_payload(
+                vendor_key=vendor_key,
+                vendor_name=vendor_name,
+                endpoints=[
                     {
                         "name": endpoint_a_name,
                         "base_url": "https://api.openai.com",
-                        "api_key": "sk-test-a",
+                        "api_key_secret_ref": f"endpoint:{endpoint_a_name}:api_key",
+                        "_secret_value": "sk-test-a",
                     },
                     {
                         "name": endpoint_b_name,
                         "base_url": "https://api.openai.com",
-                        "api_key": "sk-test-b",
+                        "api_key_secret_ref": f"endpoint:{endpoint_b_name}:api_key",
+                        "_secret_value": "sk-test-b",
                     },
                 ],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
+                loadbalance_strategies=[
                     {
                         "name": "single-primary",
                         "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
-                "models": [
+                models=[
                     {
                         "vendor_key": vendor_key,
                         "api_family": "openai",
@@ -706,7 +847,7 @@ class TestDEF024_ConfigImportExportRefRoundtrip:
                         ],
                     }
                 ],
-            }
+            )
         )
 
         async with AsyncSessionLocal() as db:
@@ -835,15 +976,17 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
             await db.flush()
             payload = ConfigImportRequest.model_validate(
                 {
-                    "version": 1,
+                    "version": 2,
+                    "bundle_kind": "profile_config",
                     "endpoints": [],
-                    "vendors": [],
+                    "vendor_refs": [],
                     "models": [],
                     "pricing_templates": [],
                     "loadbalance_strategies": [],
-                    "user_settings": {
+                    "profile_settings": {
                         "report_currency_code": "USD",
                         "report_currency_symbol": "$",
+                        "timezone_preference": None,
                         "endpoint_fx_mappings": [],
                     },
                     "header_blocklist_rules": [
@@ -854,6 +997,7 @@ class TestDEF026_ConfigImportSystemRuleTimestamp:
                             "enabled": True,
                         }
                     ],
+                    "secret_payload": _build_secret_payload({}),
                 }
             )
 
@@ -887,28 +1031,18 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
         proxy_model_id = f"def082-proxy-model-{suffix}"
 
         payload = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": vendor_key,
-                        "name": vendor_name,
-                        "description": None,
-                        "icon_key": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [],
-                "pricing_templates": [],
-                "loadbalance_strategies": [
+            _build_v2_profile_payload(
+                vendor_key=vendor_key,
+                vendor_name=vendor_name,
+                endpoints=[],
+                loadbalance_strategies=[
                     {
                         "name": "single-primary",
                         "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
-                "models": [
+                models=[
                     {
                         "vendor_key": vendor_key,
                         "api_family": "openai",
@@ -937,7 +1071,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                         "connections": [],
                     },
                 ],
-            }
+            )
         )
 
         async with AsyncSessionLocal() as db:
@@ -1016,22 +1150,12 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
         proxy_model_id = f"def082-empty-proxy-model-{suffix}"
 
         payload = ConfigImportRequest.model_validate(
-            {
-                "version": 1,
-                "vendors": [
-                    {
-                        "key": vendor_key,
-                        "name": vendor_name,
-                        "description": None,
-                        "icon_key": None,
-                        "audit_enabled": False,
-                        "audit_capture_bodies": True,
-                    }
-                ],
-                "endpoints": [],
-                "pricing_templates": [],
-                "loadbalance_strategies": [],
-                "models": [
+            _build_v2_profile_payload(
+                vendor_key=vendor_key,
+                vendor_name=vendor_name,
+                endpoints=[],
+                loadbalance_strategies=[],
+                models=[
                     {
                         "vendor_key": vendor_key,
                         "api_family": "openai",
@@ -1042,7 +1166,7 @@ class TestDEF082_ProxyTargetConfigRoundtrip:
                         "connections": [],
                     }
                 ],
-            }
+            )
         )
 
         async with AsyncSessionLocal() as db:

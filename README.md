@@ -140,6 +140,7 @@ uv run pytest tests/services/test_loadbalancer_planner.py -v
 - `PORT` - Server port for `prism-backend` (default: `8000`)
 - `PRISM_BACKEND_WORKERS` - Worker count when `--reload` is off (default: `4`)
 - `DATABASE_URL` - PostgreSQL DSN for direct backend runs
+- `CONFIG_BUNDLE_ENCRYPTION_KEY` - Optional config-bundle encryption key; when unset, the backend falls back to `SECRET_ENCRYPTION_KEY`
 
 For direct runs, other common settings come from `../.env.example`, especially `HOST`, `CORS_ALLOWED_ORIGINS`, auth or WebAuthn settings, and SMTP settings for email verification or password reset flows.
 
@@ -166,7 +167,8 @@ The checked-in compose file exposes PostgreSQL on `localhost:15432`. The root la
 - `GET /api/stats/requests`, `GET /api/stats/summary`, `GET /api/stats/connection-success-rates`
 - `GET /api/audit/logs`, `GET /api/audit/logs/{id}`
 - `GET /api/loadbalance/current-state`, `GET /api/loadbalance/events`
-- `GET /api/config/export`, `POST /api/config/import`
+- `GET /api/config/profile/export`, `POST /api/config/profile/import/preview`, `POST /api/config/profile/import`
+- `GET /api/config/vendors/export`, `POST /api/config/vendors/import/preview`, `POST /api/config/vendors/import`
 - `GET /health` and `/api/realtime/ws` round out the live backend surface for health checks and dashboard updates
 
 ### Proxy API
@@ -186,11 +188,11 @@ Prism accepts API-family-native path families only: OpenAI models on `/v1/*`, An
 - **Native**: real models with their own connection configurations and load balancing
 - **Proxy**: models that forward requests to native targets while keeping their own routing metadata
 
-### Adaptive routing policies
+### Loadbalance strategies
 
-- Native models attach one reusable adaptive `routing_policy`
-- Routing policies control objective, deadline budget, circuit-breaker recovery, admission limits, and monitoring influence
-- Runtime retries and failover behavior are derived from that adaptive policy instead of retired named strategy types
+- Native models attach one reusable loadbalance strategy from the `legacy` or `adaptive` families
+- Legacy strategies use `legacy_strategy_type` plus `auto_recovery`; adaptive strategies use `routing_policy`
+- Runtime retries and failover behavior are derived from the selected strategy family rather than from retired inline model settings
 
 ### Audit logging
 

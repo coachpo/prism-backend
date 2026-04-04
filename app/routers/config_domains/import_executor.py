@@ -6,7 +6,11 @@ from fastapi import HTTPException
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.crypto import encrypt_secret
+from app.core.crypto import (
+    decrypt_bundle_secret,
+    encrypt_secret,
+    get_bundle_secret_key_id,
+)
 from app.models.models import (
     Connection,
     Endpoint,
@@ -20,7 +24,12 @@ from app.models.models import (
     Vendor,
 )
 from app.routers.shared import lock_profile_row
-from app.schemas.schemas import ConfigImportRequest, ConfigImportResponse
+from app.schemas.schemas import (
+    ConfigImportPreviewResponse,
+    ConfigImportRequest,
+    ConfigImportResponse,
+    ConfigImportVendorResolution,
+)
 from app.services.loadbalancer.policy import (
     canonicalize_auto_recovery_document,
     canonicalize_routing_policy_document,
@@ -113,31 +122,41 @@ def _normalize_icon_key(value: str | None) -> str | None:
     return normalized or None
 
 
-def _get_vendor_conflicting_fields(
-    *, existing_vendor: Vendor, imported_vendor
+def _get_vendor_hint_conflicting_fields(
+    *, existing_vendor: Vendor, imported_vendor_ref
 ) -> list[str]:
     conflicting_fields: list[str] = []
-    if existing_vendor.name != imported_vendor.name:
-        conflicting_fields.append("name")
     if (
-        _normalize_optional_text(existing_vendor.description)
-        != imported_vendor.description
+        imported_vendor_ref.name_hint is not None
+        and existing_vendor.name != imported_vendor_ref.name_hint
     ):
-        conflicting_fields.append("description")
-    if existing_vendor.audit_enabled != imported_vendor.audit_enabled:
-        conflicting_fields.append("audit_enabled")
-    if existing_vendor.audit_capture_bodies != imported_vendor.audit_capture_bodies:
-        conflicting_fields.append("audit_capture_bodies")
-    if _normalize_icon_key(existing_vendor.icon_key) != imported_vendor.icon_key:
-        conflicting_fields.append("icon_key")
+        conflicting_fields.append("name_hint")
+    if (
+        imported_vendor_ref.description_hint is not None
+        and _normalize_optional_text(existing_vendor.description)
+        != imported_vendor_ref.description_hint
+    ):
+        conflicting_fields.append("description_hint")
+    if (
+        imported_vendor_ref.icon_key_hint is not None
+        and _normalize_icon_key(existing_vendor.icon_key)
+        != imported_vendor_ref.icon_key_hint
+    ):
+        conflicting_fields.append("icon_key_hint")
     return conflicting_fields
 
 
-async def _preflight_import_vendors(
+def _resolve_new_vendor_name(imported_vendor_ref) -> str:
+    return (imported_vendor_ref.name_hint or imported_vendor_ref.key).strip()
+
+
+async def _preview_import_vendors(
     db: AsyncSession, *, vendor_payloads_by_key: dict[str, Any]
-) -> dict[str, Vendor]:
+) -> tuple[dict[str, Vendor], list[ConfigImportVendorResolution], list[str]]:
     if not vendor_payloads_by_key:
-        return {}
+        return {}, [], []
+
+    imported_vendor_refs = list(vendor_payloads_by_key.values())
 
     existing_vendors = (
         (
@@ -149,26 +168,139 @@ async def _preflight_import_vendors(
         .all()
     )
     existing_vendors_by_key = {vendor.key: vendor for vendor in existing_vendors}
+    proposed_new_vendor_names = [
+        _resolve_new_vendor_name(vendor_ref)
+        for vendor_ref in imported_vendor_refs
+        if vendor_ref.key not in existing_vendors_by_key
+    ]
+    existing_name_vendors = []
+    if proposed_new_vendor_names:
+        existing_name_vendors = (
+            (
+                await db.execute(
+                    select(Vendor).where(Vendor.name.in_(proposed_new_vendor_names))
+                )
+            )
+            .scalars()
+            .all()
+        )
+    existing_vendors_by_name = {vendor.name: vendor for vendor in existing_name_vendors}
+    resolutions: list[ConfigImportVendorResolution] = []
+    blocking_errors: list[str] = []
+    proposed_name_to_key: dict[str, str] = {}
 
     for vendor_key, imported_vendor in vendor_payloads_by_key.items():
         existing_vendor = existing_vendors_by_key.get(vendor_key)
         if existing_vendor is None:
+            proposed_name = _resolve_new_vendor_name(imported_vendor)
+            duplicate_key = proposed_name_to_key.get(proposed_name)
+            if duplicate_key is not None and duplicate_key != vendor_key:
+                blocking_errors.append(
+                    f"Config import would create duplicate global vendor name '{proposed_name}' for keys '{duplicate_key}' and '{vendor_key}'"
+                )
+            else:
+                proposed_name_to_key[proposed_name] = vendor_key
+
+            existing_name_vendor = existing_vendors_by_name.get(proposed_name)
+            if (
+                existing_name_vendor is not None
+                and existing_name_vendor.key != vendor_key
+            ):
+                blocking_errors.append(
+                    f"Config import vendor '{vendor_key}' would create global vendor name '{proposed_name}' that already exists on key '{existing_name_vendor.key}'"
+                )
+
+            resolutions.append(
+                ConfigImportVendorResolution(
+                    vendor_key=vendor_key,
+                    resolution="create",
+                )
+            )
             continue
 
-        conflicting_fields = _get_vendor_conflicting_fields(
+        conflicting_fields = _get_vendor_hint_conflicting_fields(
             existing_vendor=existing_vendor,
-            imported_vendor=imported_vendor,
+            imported_vendor_ref=imported_vendor,
         )
-        if conflicting_fields:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"Config import vendor '{vendor_key}' conflicts with existing global vendor metadata "
+        resolutions.append(
+            ConfigImportVendorResolution(
+                vendor_key=vendor_key,
+                resolution="reuse",
+                warning=(
+                    "Imported vendor hints differ from existing global vendor metadata "
                     f"for fields: {', '.join(conflicting_fields)}"
+                    if conflicting_fields
+                    else None
                 ),
             )
+        )
 
-    return existing_vendors_by_key
+    return existing_vendors_by_key, resolutions, blocking_errors
+
+
+def _decrypt_import_secret_payload(data: ConfigImportRequest) -> dict[str, str]:
+    expected_key_id = get_bundle_secret_key_id()
+    if data.secret_payload.key_id != expected_key_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Config import bundle key mismatch: "
+                f"bundle key_id '{data.secret_payload.key_id}' does not match server key_id '{expected_key_id}'"
+            ),
+        )
+
+    decrypted_by_ref: dict[str, str] = {}
+    for entry in data.secret_payload.entries:
+        try:
+            if not entry.ciphertext.startswith("enc:"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Config import secret ref '{entry.ref}' must be encrypted",
+                )
+            decrypted_value = decrypt_bundle_secret(entry.ciphertext)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Config import could not decrypt secret ref '{entry.ref}'",
+            ) from exc
+
+        if not decrypted_value:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Config import secret ref '{entry.ref}' resolved to an empty value",
+            )
+        decrypted_by_ref[entry.ref] = decrypted_value
+    return decrypted_by_ref
+
+
+async def build_import_preview(
+    db: AsyncSession, *, data: ConfigImportRequest
+) -> ConfigImportPreviewResponse:
+    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendor_refs}
+    _, vendor_resolutions, blocking_errors = await _preview_import_vendors(
+        db, vendor_payloads_by_key=vendor_payloads_by_key
+    )
+    decrypted_by_ref = _decrypt_import_secret_payload(data)
+    warnings = [
+        resolution.warning
+        for resolution in vendor_resolutions
+        if resolution.warning is not None
+    ]
+    return ConfigImportPreviewResponse(
+        ready=len(blocking_errors) == 0,
+        version=2,
+        bundle_kind="profile_config",
+        endpoints_imported=len(data.endpoints),
+        pricing_templates_imported=len(data.pricing_templates),
+        strategies_imported=len(data.loadbalance_strategies),
+        models_imported=len(data.models),
+        connections_imported=sum(len(model.connections) for model in data.models),
+        vendor_resolutions=vendor_resolutions,
+        secret_key_id=data.secret_payload.key_id,
+        decryptable_secret_refs=sorted(decrypted_by_ref.keys()),
+        blocking_errors=blocking_errors,
+        warnings=warnings,
+    )
 
 
 def _resolve_endpoint_name(
@@ -223,10 +355,13 @@ async def execute_import_payload(
 ) -> ExecuteImportPayloadResult:
     await lock_profile_row(db, profile_id=profile_id)
     await _lock_import_target_tables(db)
-    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendors}
-    existing_vendors_by_key = await _preflight_import_vendors(
+    vendor_payloads_by_key = {vendor.key: vendor for vendor in data.vendor_refs}
+    existing_vendors_by_key, _, blocking_errors = await _preview_import_vendors(
         db, vendor_payloads_by_key=vendor_payloads_by_key
     )
+    if blocking_errors:
+        raise HTTPException(status_code=400, detail=blocking_errors[0])
+    decrypted_secrets_by_ref = _decrypt_import_secret_payload(data)
     await clear_profile_runtime_state(session=db, profile_id=profile_id)
     profile_model_ids = select(ModelConfig.id).where(
         ModelConfig.profile_id == profile_id
@@ -266,11 +401,11 @@ async def execute_import_payload(
             if existing_vendor is None:
                 existing_vendor = Vendor(
                     key=vendor_data.key,
-                    name=vendor_data.name,
-                    description=vendor_data.description,
-                    icon_key=vendor_data.icon_key,
-                    audit_enabled=vendor_data.audit_enabled,
-                    audit_capture_bodies=vendor_data.audit_capture_bodies,
+                    name=vendor_data.name_hint or vendor_data.key,
+                    description=vendor_data.description_hint,
+                    icon_key=vendor_data.icon_key_hint,
+                    audit_enabled=False,
+                    audit_capture_bodies=True,
                 )
                 db.add(existing_vendor)
                 await db.flush()
@@ -303,7 +438,13 @@ async def execute_import_payload(
             profile_id=profile_id,
             name=endpoint_name,
             base_url=normalize_base_url(endpoint_data.base_url),
-            api_key=encrypt_secret(endpoint_data.api_key),
+            api_key=(
+                encrypt_secret(
+                    decrypted_secrets_by_ref[endpoint_data.api_key_secret_ref]
+                )
+                if endpoint_data.api_key_secret_ref is not None
+                else ""
+            ),
             position=normalized_position,
         )
         db.add(endpoint)
@@ -478,10 +619,13 @@ async def execute_import_payload(
         )
         db.add(user_settings)
 
-    if data.user_settings is not None:
-        user_settings.report_currency_code = data.user_settings.report_currency_code
-        user_settings.report_currency_symbol = data.user_settings.report_currency_symbol
-        for mapping in data.user_settings.endpoint_fx_mappings:
+    if data.profile_settings is not None:
+        user_settings.report_currency_code = data.profile_settings.report_currency_code
+        user_settings.report_currency_symbol = (
+            data.profile_settings.report_currency_symbol
+        )
+        user_settings.timezone_preference = data.profile_settings.timezone_preference
+        for mapping in data.profile_settings.endpoint_fx_mappings:
             resolved_endpoint_name = _resolve_endpoint_name(
                 context=f"FX mapping for model '{mapping.model_id}'",
                 endpoint_name=mapping.endpoint_name,
@@ -507,6 +651,7 @@ async def execute_import_payload(
     else:
         user_settings.report_currency_code = "USD"
         user_settings.report_currency_symbol = "$"
+        user_settings.timezone_preference = None
 
     for rule_data in sorted(
         data.header_blocklist_rules,
@@ -548,4 +693,9 @@ async def execute_import_payload(
     )
 
 
-__all__ = ["ExecuteImportPayloadResult", "execute_import_payload"]
+__all__ = [
+    "ConfigImportPreviewResponse",
+    "ExecuteImportPayloadResult",
+    "build_import_preview",
+    "execute_import_payload",
+]
