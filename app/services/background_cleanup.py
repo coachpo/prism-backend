@@ -7,7 +7,7 @@ from sqlalchemy.sql.dml import Delete
 
 from app.core.database import AsyncSessionLocal
 from app.core.time import utc_now
-from app.models.models import AuditLog, LoadbalanceEvent, RequestLog
+from app.models.models import AuditLog, LoadbalanceEvent, RequestLog, UsageRequestEvent
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +80,33 @@ async def delete_audit_logs_in_background(
     await _run_delete(
         stmt=stmt,
         task_name=f"background audit-log delete for profile_id={profile_id}",
+    )
+
+
+async def delete_statistics_in_background(
+    *,
+    profile_id: int,
+    older_than_days: int | None,
+    delete_all: bool,
+) -> None:
+    if delete_all:
+        stmt = delete(UsageRequestEvent).where(UsageRequestEvent.profile_id == profile_id)
+    else:
+        if older_than_days is None:
+            logger.debug(
+                "Skipping background statistics delete for profile_id=%d without criteria",
+                profile_id,
+            )
+            return
+        cutoff = utc_now() - timedelta(days=older_than_days)
+        stmt = delete(UsageRequestEvent).where(
+            UsageRequestEvent.profile_id == profile_id,
+            UsageRequestEvent.created_at < cutoff,
+        )
+
+    await _run_delete(
+        stmt=stmt,
+        task_name=f"background statistics delete for profile_id={profile_id}",
     )
 
 

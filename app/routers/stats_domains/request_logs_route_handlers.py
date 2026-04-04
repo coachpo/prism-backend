@@ -10,7 +10,10 @@ from app.schemas.schemas import (
     RequestLogListItemResponse,
     RequestLogListResponse,
 )
-from app.services.background_cleanup import delete_request_logs_in_background
+from app.services.background_cleanup import (
+    delete_request_logs_in_background,
+    delete_statistics_in_background,
+)
 from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import get_request_logs
 
@@ -75,6 +78,34 @@ async def delete_request_logs(
 
     background_tasks.add_task(
         delete_request_logs_in_background_fn,
+        profile_id=profile_id,
+        older_than_days=older_than_days,
+        delete_all=delete_all,
+    )
+    return BatchDeleteResponse(accepted=True)
+
+
+async def delete_statistics_data(
+    background_tasks: BackgroundTasks,
+    profile_id: int,
+    older_than_days: int | None = None,
+    delete_all: bool = False,
+    *,
+    delete_statistics_in_background_fn=delete_statistics_in_background,
+):
+    if delete_all and older_than_days is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'older_than_days' or 'delete_all', not both",
+        )
+    if not delete_all and older_than_days is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either 'older_than_days' (integer >= 1) or 'delete_all=true'",
+        )
+
+    background_tasks.add_task(
+        delete_statistics_in_background_fn,
         profile_id=profile_id,
         older_than_days=older_than_days,
         delete_all=delete_all,

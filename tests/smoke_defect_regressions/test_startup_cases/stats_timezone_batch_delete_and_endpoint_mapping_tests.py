@@ -593,6 +593,88 @@ class TestBatchDeleteValidation:
         assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_statistics_delete_custom_days(self):
+        """Statistics delete accepts any integer >= 1 for older_than_days."""
+        from app.routers.stats import delete_statistics_data
+
+        background_tasks = BackgroundTasks()
+
+        with patch(
+            "app.routers.stats.delete_statistics_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_statistics:
+            response = await delete_statistics_data(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=45,
+                delete_all=False,
+            )
+            await background_tasks()
+
+        assert response.accepted is True
+        mock_delete_statistics.assert_awaited_once_with(
+            profile_id=1,
+            older_than_days=45,
+            delete_all=False,
+        )
+
+    @pytest.mark.asyncio
+    async def test_statistics_delete_all(self):
+        """Statistics delete_all=true deletes all persisted statistics rows."""
+        from app.routers.stats import delete_statistics_data
+
+        background_tasks = BackgroundTasks()
+
+        with patch(
+            "app.routers.stats.delete_statistics_in_background",
+            new_callable=AsyncMock,
+        ) as mock_delete_statistics:
+            response = await delete_statistics_data(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=None,
+                delete_all=True,
+            )
+            await background_tasks()
+
+        assert response.accepted is True
+        mock_delete_statistics.assert_awaited_once_with(
+            profile_id=1,
+            older_than_days=None,
+            delete_all=True,
+        )
+
+    @pytest.mark.asyncio
+    async def test_statistics_delete_rejects_both_modes(self):
+        """Statistics delete rejects older_than_days + delete_all=true."""
+        from app.routers.stats import delete_statistics_data
+
+        background_tasks = BackgroundTasks()
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_statistics_data(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=7,
+                delete_all=True,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_statistics_delete_rejects_neither_mode(self):
+        """Statistics delete rejects when neither mode is provided."""
+        from app.routers.stats import delete_statistics_data
+
+        background_tasks = BackgroundTasks()
+        with pytest.raises(HTTPException) as exc_info:
+            await delete_statistics_data(
+                background_tasks=background_tasks,
+                profile_id=1,
+                older_than_days=None,
+                delete_all=False,
+            )
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_audit_delete_custom_days(self):
         """Audit delete accepts any integer >= 1 for older_than_days."""
         from app.routers.audit import delete_audit_logs
