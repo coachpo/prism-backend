@@ -39,6 +39,3 @@ alembic/
 - Do not describe ORM models as the source of truth for schema state.
 - Do not move migration execution details into startup code when `../core/migrations.py` already owns the seam.
 - Do not add application feature logic to the Alembic package.
-ations.py` already owns the seam.
-- Do not add application feature logic to the Alembic package.
-n feature logic to the Alembic package.
