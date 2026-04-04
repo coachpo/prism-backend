@@ -1,10 +1,11 @@
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, cast
+from typing import Any, cast, get_args
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import delete
 from unittest.mock import patch
 
 from app.core.database import AsyncSessionLocal
@@ -24,6 +25,7 @@ from app.schemas.domains.usage_statistics import (
     UsageProxyApiKeyStatistic,
     UsageServiceHealth,
     UsageSnapshotResponse,
+    UsageSnapshotTimeRange,
 )
 from app.services import stats_service
 from app.services.stats import usage_snapshot as usage_snapshot_module
@@ -409,12 +411,40 @@ class TestUsageSnapshotService:
             "cells",
         }
 
-    def test_resolve_time_preset_supports_last_seven_hours(self):
+    def test_usage_snapshot_time_range_schema_exposes_public_preset_contract(self):
+        assert get_args(UsageSnapshotTimeRange.model_fields["preset"].annotation) == (
+            "1h",
+            "6h",
+            "24h",
+            "7d",
+            "30d",
+            "all",
+        )
+
+    @pytest.mark.parametrize(
+        ("preset", "expected_window"),
+        [
+            ("1h", timedelta(hours=1)),
+            ("6h", timedelta(hours=6)),
+            ("24h", timedelta(days=1)),
+            ("7d", timedelta(days=7)),
+            ("30d", timedelta(days=30)),
+            ("all", None),
+        ],
+    )
+    def test_resolve_time_preset_supports_statistics_public_presets(
+        self,
+        preset: str,
+        expected_window: timedelta | None,
+    ):
         fixed_end = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
 
-        from_time, to_time = resolve_time_preset("7h", None, fixed_end)
+        from_time, to_time = resolve_time_preset(preset, None, fixed_end)
 
-        assert from_time == fixed_end - timedelta(hours=7)
+        if expected_window is None:
+            assert from_time is None
+        else:
+            assert from_time == fixed_end - expected_window
         assert to_time == fixed_end
 
     def test_latest_service_health_bucket_uses_live_interval_when_now_not_on_boundary(
@@ -450,13 +480,13 @@ class TestUsageSnapshotService:
                     await get_usage_snapshot(
                         session,
                         profile_id=seed.profile_id,
-                        preset="7h",
+                        preset="6h",
                     ),
                 )
 
         assert snapshot["time_range"] == {
-            "preset": "7h",
-            "start_at": fixed_now - timedelta(hours=7),
+            "preset": "6h",
+            "start_at": fixed_now - timedelta(hours=6),
             "end_at": fixed_now,
         }
         assert snapshot["currency"] == {"code": "USD", "symbol": "$"}
@@ -470,8 +500,8 @@ class TestUsageSnapshotService:
             "output_tokens": 70,
             "cached_tokens": 25,
             "reasoning_tokens": 10,
-            "average_rpm": 0.005,
-            "average_tpm": 0.583,
+            "average_rpm": 0.006,
+            "average_tpm": 0.681,
             "total_cost_micros": 4200,
             "rolling_window_minutes": 30,
             "rolling_request_count": 1,
@@ -612,10 +642,6 @@ class TestUsageSnapshotService:
             "unpriced_request_count": 0,
             "hourly": [
                 {
-                    "bucket_start": datetime(2026, 3, 27, 5, 0, tzinfo=timezone.utc),
-                    "total_cost_micros": 0,
-                },
-                {
                     "bucket_start": datetime(2026, 3, 27, 6, 0, tzinfo=timezone.utc),
                     "total_cost_micros": 0,
                 },
@@ -689,6 +715,127 @@ class TestUsageSnapshotService:
         ]
 
     @pytest.mark.asyncio
+    async def test_get_usage_snapshot_defaults_to_one_hour_window(self):
+        get_usage_snapshot = cast(
+            Callable[..., Awaitable[dict[str, object]]] | None,
+            getattr(stats_service, "get_usage_snapshot", None),
+        )
+        assert callable(get_usage_snapshot), (
+            "stats_service.get_usage_snapshot must exist"
+        )
+
+        fixed_now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        seed = await _seed_usage_snapshot_dataset(fixed_now)
+
+        with patch("app.services.stats.usage_snapshot.utc_now", return_value=fixed_now):
+            async with AsyncSessionLocal() as session:
+                snapshot = cast(
+                    dict[str, Any],
+                    await get_usage_snapshot(
+                        session,
+                        profile_id=seed.profile_id,
+                    ),
+                )
+
+        assert snapshot["time_range"] == {
+            "preset": "1h",
+            "start_at": fixed_now - timedelta(hours=1),
+            "end_at": fixed_now,
+        }
+        assert snapshot["overview"] == {
+            "total_requests": 1,
+            "success_requests": 1,
+            "failed_requests": 0,
+            "success_rate": 100.0,
+            "total_tokens": 185,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_tokens": 25,
+            "reasoning_tokens": 10,
+            "average_rpm": 0.017,
+            "average_tpm": 3.083,
+            "total_cost_micros": 4200,
+            "rolling_window_minutes": 30,
+            "rolling_request_count": 1,
+            "rolling_token_count": 185,
+            "rolling_rpm": 0.033,
+            "rolling_tpm": 6.167,
+        }
+        assert snapshot["endpoint_statistics"] == [
+            {
+                "endpoint_id": seed.primary_endpoint_id,
+                "endpoint_label": snapshot["endpoint_statistics"][0]["endpoint_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 185,
+                "total_cost_micros": 4200,
+            }
+        ]
+        assert snapshot["endpoint_statistics"][0]["endpoint_label"].startswith(
+            "Primary Endpoint"
+        )
+        assert snapshot["model_statistics"] == [
+            {
+                "model_id": seed.primary_model_id,
+                "model_label": snapshot["model_statistics"][0]["model_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 185,
+                "total_cost_micros": 4200,
+            }
+        ]
+        assert snapshot["model_statistics"][0]["model_label"].startswith("GPT 4o")
+        assert snapshot["proxy_api_key_statistics"] == [
+            {
+                "proxy_api_key_id": seed.primary_key_id,
+                "proxy_api_key_label": "Snapshot Primary Key",
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 185,
+                "total_cost_micros": 4200,
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_get_endpoint_model_statistics_defaults_to_one_hour_window(self):
+        get_endpoint_model_statistics = cast(
+            Callable[..., Awaitable[list[dict[str, object]]]] | None,
+            getattr(stats_service, "get_endpoint_model_statistics", None),
+        )
+        assert callable(get_endpoint_model_statistics), (
+            "stats_service.get_endpoint_model_statistics must exist"
+        )
+
+        fixed_now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        seed = await _seed_usage_snapshot_dataset(fixed_now)
+
+        with patch(
+            "app.services.stats.endpoint_model_statistics.utc_now",
+            return_value=fixed_now,
+        ):
+            async with AsyncSessionLocal() as session:
+                rows = cast(
+                    list[dict[str, object]],
+                    await get_endpoint_model_statistics(
+                        session,
+                        profile_id=seed.profile_id,
+                        endpoint_id=seed.primary_endpoint_id,
+                    ),
+                )
+
+        assert rows == [
+            {
+                "model_id": seed.primary_model_id,
+                "model_label": rows[0]["model_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 185,
+                "total_cost_micros": 4200,
+            }
+        ]
+        assert rows[0]["model_label"].startswith("GPT 4o")
+
+    @pytest.mark.asyncio
     async def test_get_endpoint_model_statistics_groups_models_for_one_endpoint(self):
         get_endpoint_model_statistics = cast(
             Callable[..., Awaitable[list[dict[str, object]]]] | None,
@@ -744,7 +891,7 @@ class TestUsageSnapshotService:
                         session,
                         profile_id=seed.profile_id,
                         endpoint_id=seed.primary_endpoint_id,
-                        preset="7h",
+                        preset="6h",
                     ),
                 )
 
@@ -788,9 +935,14 @@ class TestUsageSnapshotService:
         seed = await _seed_usage_snapshot_dataset(fixed_now)
 
         async with AsyncSessionLocal() as session:
-            endpoint = await session.get(Endpoint, seed.primary_endpoint_id)
-            assert endpoint is not None
-            await session.delete(endpoint)
+            await session.execute(
+                delete(Connection).where(
+                    Connection.endpoint_id == seed.primary_endpoint_id
+                )
+            )
+            await session.execute(
+                delete(Endpoint).where(Endpoint.id == seed.primary_endpoint_id)
+            )
             await session.commit()
 
         async with AsyncSessionLocal() as session:

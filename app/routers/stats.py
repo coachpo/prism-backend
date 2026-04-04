@@ -234,7 +234,7 @@ async def get_throughput(
 async def usage_snapshot(
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
-    preset: Literal["all", "7h", "24h", "7d"] = "24h",
+    preset: Literal["1h", "6h", "24h", "7d", "30d", "all"] = "1h",
 ):
     return await _stats_impl.usage_snapshot(
         db,
@@ -249,7 +249,7 @@ async def endpoint_model_statistics(
     endpoint_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     profile_id: Annotated[int, Depends(get_effective_profile_id)],
-    preset: Literal["all", "7h", "24h", "7d"] | None = None,
+    preset: Literal["1h", "6h", "24h", "7d", "30d", "all"] = "1h",
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ):

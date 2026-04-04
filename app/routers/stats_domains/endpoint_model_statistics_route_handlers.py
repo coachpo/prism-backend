@@ -10,7 +10,7 @@ async def endpoint_model_statistics(
     db: AsyncSession,
     profile_id: int,
     endpoint_id: int,
-    preset: str | None = None,
+    preset: str = "1h",
     from_time: datetime | None = None,
     to_time: datetime | None = None,
     *,

@@ -7,7 +7,7 @@ from app.services.stats_service import get_usage_snapshot
 async def usage_snapshot(
     db: AsyncSession,
     profile_id: int,
-    preset: str = "24h",
+    preset: str = "1h",
     *,
     get_usage_snapshot_fn=get_usage_snapshot,
 ):
