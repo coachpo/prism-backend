@@ -20,7 +20,10 @@ from app.schemas.schemas import (
     UsageModelStatistic,
     UsageSnapshotResponse,
 )
-from app.services.background_cleanup import delete_request_logs_in_background
+from app.services.background_cleanup import (
+    delete_request_logs_in_background,
+    delete_statistics_in_background,
+)
 from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import (
     get_connection_success_rates,
@@ -184,6 +187,22 @@ async def delete_request_logs(
         older_than_days=older_than_days,
         delete_all=delete_all,
         delete_request_logs_in_background_fn=delete_request_logs_in_background,
+    )
+
+
+@router.delete("/statistics", response_model=BatchDeleteResponse)
+async def delete_statistics_data(
+    background_tasks: BackgroundTasks,
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    older_than_days: int | None = Query(default=None, ge=1),
+    delete_all: bool = Query(default=False),
+):
+    return await _stats_impl.delete_statistics_data(
+        background_tasks,
+        profile_id,
+        older_than_days=older_than_days,
+        delete_all=delete_all,
+        delete_statistics_in_background_fn=delete_statistics_in_background,
     )
 
 
