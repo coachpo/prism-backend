@@ -47,7 +47,7 @@ def _build_preview_connection(
         openai_probe_endpoint_variant=(
             body.openai_probe_endpoint_variant
             if api_family == "openai"
-            else "responses"
+            else "responses_minimal"
         ),
     )
 

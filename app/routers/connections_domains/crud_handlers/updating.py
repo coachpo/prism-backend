@@ -36,7 +36,7 @@ async def update_connection_record(
         "openai_probe_endpoint_variant" in update_data
         and getattr(model_config, "api_family", None) != "openai"
     ):
-        update_data["openai_probe_endpoint_variant"] = "responses"
+        update_data["openai_probe_endpoint_variant"] = "responses_minimal"
     clear_recovery_state = should_clear_recovery_state(connection, update_data)
     clear_round_robin_state = (
         "is_active" in update_data and update_data["is_active"] != connection.is_active
