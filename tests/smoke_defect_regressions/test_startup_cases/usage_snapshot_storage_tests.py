@@ -331,7 +331,7 @@ class TestDEF086_UsageStatisticsStorageContract:
             assert "proxy_api_key_name_snapshot" in request_log_columns
             assert usage_request_event_columns
             assert "routing_policy" in strategy_columns
-            assert "auto_recovery" not in strategy_columns
+            assert "auto_recovery" in strategy_columns
             assert (
                 await _fetch_table_persistence(
                     migration_database_url, "usage_request_events"
