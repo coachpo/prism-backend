@@ -9,6 +9,7 @@ tests/
 ├── conftest.py
 ├── loadbalance_strategy_helpers.py
 ├── test_backend_version_metadata.py
+├── test_dependencies.py
 ├── test_smoke_defect_regressions.py
 ├── test_multi_profile_isolation.py
 ├── test_realtime_broadcast.py
@@ -35,6 +36,7 @@ tests/
 - PostgreSQL bootstrap: `conftest.py`
 - Smoke export surface: `test_smoke_defect_regressions.py`
 - Multi-profile isolation: `test_multi_profile_isolation.py`
+- Dependency boundary coverage: `test_dependencies.py`
 - Realtime websocket behavior: `test_realtime_broadcast.py`
 - Focused service coverage: `services/AGENTS.md`
 - Focused smoke clusters: `smoke_defect_regressions/test_config_cases/AGENTS.md`, `smoke_defect_regressions/test_costing_cases/AGENTS.md`, `smoke_defect_regressions/test_proxy_cases/AGENTS.md`, `smoke_defect_regressions/test_startup_cases/AGENTS.md`
@@ -43,6 +45,7 @@ tests/
 - `test_smoke_defect_regressions.py` is the top-level DEF aggregator and now includes grouped config, costing, startup, and proxy leaves.
 - `test_multi_profile_isolation.py` is the top-level aggregator for lifecycle, scoping, runtime, observability, and config export or import isolation.
 - `test_backend_version_metadata.py` covers the backend-local version metadata contract outside the smoke and isolation hierarchies.
+- `test_dependencies.py` covers dependency boundary behavior outside the smoke, isolation, and realtime hierarchies.
 - `services/` holds focused backend tests that do not fit the smoke or isolation hierarchies.
 - These tests are grounded in PostgreSQL semantics through the shared testcontainer bootstrap in `conftest.py`.
 

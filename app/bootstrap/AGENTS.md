@@ -30,5 +30,4 @@ bootstrap/
 
 - Do not bypass lifespan-owned bootstrap timing with extra startup-event handlers.
 - Do not push session-cookie or proxy-key enforcement into routers; middleware already owns that contract.
-- Do not bypass startup seeds for vendors, profile invariants, auth settings, or system header blocklist rules.
-t legacy/adaptive loadbalance strategies, auth settings, or system header blocklist rules.
+- Do not bypass startup seeds for vendors, profile invariants, auth settings, legacy/adaptive loadbalance strategies, or system header blocklist rules.
