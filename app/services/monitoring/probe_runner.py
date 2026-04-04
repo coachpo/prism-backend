@@ -112,18 +112,23 @@ def _build_monitoring_conversation_request(
     api_family: str,
     model_id: str,
     *,
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
     if api_family == "openai":
-        if openai_variant == "chat_completions":
-            return "/v1/chat/completions", {
+        if openai_variant in {
+            "chat_completions_minimal",
+            "chat_completions_reasoning_none",
+        }:
+            body: dict[str, object] = {
                 "model": model_id,
                 "messages": [{"role": "user", "content": "."}],
                 "max_tokens": 1,
-                "reasoning_effort": "none",
             }
+            if openai_variant == "chat_completions_reasoning_none":
+                body["reasoning_effort"] = "none"
+            return "/v1/chat/completions", body
 
-        return "/v1/responses", {
+        body = {
             "model": model_id,
             "input": [
                 {
@@ -138,10 +143,10 @@ def _build_monitoring_conversation_request(
                 }
             ],
             "max_output_tokens": 1,
-            "reasoning": {"effort": "none"},
-            "store": False,
-            "stream": True,
         }
+        if openai_variant == "responses_reasoning_none":
+            body["reasoning"] = {"effort": "none"}
+        return "/v1/responses", body
     if api_family == "anthropic":
         return "/v1/messages", {
             "model": model_id,
@@ -165,14 +170,8 @@ def _build_monitoring_endpoint_ping_request(
     api_family: str,
     model_id: str,
     *,
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
-    if api_family == "openai" and openai_variant == "responses":
-        return _build_monitoring_conversation_request(
-            api_family,
-            model_id,
-            openai_variant="responses",
-        )
     return _build_monitoring_conversation_request(
         api_family,
         model_id,
@@ -246,11 +245,15 @@ def _resolve_openai_probe_endpoint_variant(
     connection: Connection, *, api_family: str
 ) -> str:
     if api_family != "openai":
-        return "responses"
-    variant = getattr(connection, "openai_probe_endpoint_variant", "responses")
-    if variant == "chat_completions":
-        return "chat_completions"
-    return "responses"
+        return "responses_minimal"
+    variant = getattr(connection, "openai_probe_endpoint_variant", "responses_minimal")
+    if variant in {
+        "responses_reasoning_none",
+        "chat_completions_minimal",
+        "chat_completions_reasoning_none",
+    }:
+        return variant
+    return "responses_minimal"
 
 
 def _classify_probe_failure_kind(detail: str) -> str:
@@ -370,7 +373,7 @@ async def _execute_monitoring_probe_checks(
     api_family: str,
     model_id: str,
     headers: dict[str, str],
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
     execute_probe_request_fn=_execute_health_check_request,
 ) -> ProbeCheckOutcome:
     endpoint_ping_path, endpoint_ping_body = _build_monitoring_endpoint_ping_request(
@@ -454,7 +457,7 @@ async def probe_connection_health(
     endpoint,
     api_family: str,
     model_id: str,
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
     load_blocklist_rules_fn=_load_enabled_blocklist_rules,
     build_upstream_headers_fn=build_upstream_headers,
     execute_probe_request_fn=_execute_health_check_request,
@@ -519,6 +522,9 @@ async def run_connection_probe(
         db,
         profile_id=profile_id,
         connection_id=connection_id,
+    )
+    interval_seconds = resolve_monitoring_probe_interval_seconds(
+        getattr(connection, "monitoring_probe_interval_seconds", None)
     )
     if acquire_probe_lease:
         state_row = await _load_runtime_state(

@@ -48,6 +48,14 @@ class TestMonitoringProbeRunner:
         )
 
         primary_session = SimpleNamespace(poisoned=False)
+        runtime_state_result = SimpleNamespace(scalar_one_or_none=lambda: None)
+
+        async def execute_fn(*args, **kwargs):
+            _ = args
+            _ = kwargs
+            return runtime_state_result
+
+        primary_session.execute = execute_fn
         recovery_sessions: list[_RecoverySession] = []
         released_sessions: list[object] = []
 
@@ -151,6 +159,13 @@ class TestMonitoringProbeRunner:
         )
 
         primary_session = SimpleNamespace(poisoned=False)
+        runtime_state_result = SimpleNamespace(scalar_one_or_none=lambda: None)
+        async def execute_fn(*args, **kwargs):
+            _ = args
+            _ = kwargs
+            return runtime_state_result
+
+        primary_session.execute = execute_fn
         recovery_sessions: list[_RecoverySession] = []
 
         def fake_session_factory() -> _RecoverySession:
