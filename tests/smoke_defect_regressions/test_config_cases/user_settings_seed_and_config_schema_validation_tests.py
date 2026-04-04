@@ -194,6 +194,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             "name",
             "auth_type",
             "custom_headers",
+            "openai_probe_endpoint_variant",
             "qps_limit",
             "max_in_flight_non_stream",
             "max_in_flight_stream",
@@ -206,6 +207,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         fields = set(ConnectionResponse.model_fields.keys())
         expected = {
             "monitoring_probe_interval_seconds",
+            "openai_probe_endpoint_variant",
             "qps_limit",
             "max_in_flight_non_stream",
             "max_in_flight_stream",
@@ -336,6 +338,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
             loadbalance_strategies=[
                 ConfigLoadbalanceStrategyExport(
                     name="failover-primary",
+                    strategy_type="adaptive",
                     routing_policy=make_routing_policy_adaptive(
                         routing_objective="maximize_availability",
                         failure_status_codes=[503, 429],
@@ -364,6 +367,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                             name="Primary",
                             auth_type="openai",
                             custom_headers={"X-Org": "my-org"},
+                            openai_probe_endpoint_variant="responses_reasoning_none",
                         )
                     ],
                 )
@@ -393,6 +397,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
         connection = m.connections[0]
         assert connection.custom_headers == {"X-Org": "my-org"}
         assert connection.auth_type == "openai"
+        assert connection.openai_probe_endpoint_variant == "responses_reasoning_none"
         assert connection.priority == 0
         assert connection.endpoint_name == "openai-main"
         assert reimported.vendors[0].key == "openai"
@@ -426,6 +431,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 "loadbalance_strategies": [
                     {
                         "name": "adaptive-availability",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(
                             routing_objective="maximize_availability",
                             failure_status_codes=[503, 429],
@@ -486,6 +492,7 @@ class TestDEF006_ConfigExportImportFieldCoverage:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
@@ -738,6 +745,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
@@ -800,6 +808,7 @@ class TestDEF023_ConfigImportReferenceValidation:
                 "loadbalance_strategies": [
                     {
                         "name": "single-primary",
+                        "strategy_type": "adaptive",
                         "routing_policy": make_routing_policy_adaptive(),
                     }
                 ],
