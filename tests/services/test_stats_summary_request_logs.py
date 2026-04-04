@@ -1,3 +1,4 @@
+import inspect
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -14,8 +15,10 @@ def _request_log(
     profile_id: int,
     response_time_ms: int,
     created_at: datetime,
+    model_id: str = "gpt-test",
     status_code: int = 200,
     api_family: str = "openai",
+    endpoint_id: int | None = None,
     resolved_target_model_id: str | None = None,
     ingress_request_id: str | None = None,
     attempt_number: int | None = None,
@@ -27,10 +30,10 @@ def _request_log(
 ) -> RequestLog:
     return RequestLog(
         profile_id=profile_id,
-        model_id="gpt-test",
+        model_id=model_id,
         api_family=api_family,
         resolved_target_model_id=resolved_target_model_id,
-        endpoint_id=None,
+        endpoint_id=endpoint_id,
         connection_id=None,
         ingress_request_id=ingress_request_id,
         attempt_number=attempt_number,
@@ -155,10 +158,32 @@ def test_operations_request_logs_contract_is_absent_from_stats_services() -> Non
     assert not hasattr(stats_service, removed_name)
 
 
+def test_get_request_logs_signature_keeps_only_simplified_browse_filters() -> None:
+    from app.services.stats.request_logs import get_request_logs
+
+    parameter_names = set(inspect.signature(get_request_logs).parameters)
+
+    assert {
+        "db",
+        "profile_id",
+        "ingress_request_id",
+        "model_id",
+        "status_family",
+        "from_time",
+        "endpoint_id",
+        "limit",
+        "offset",
+    }.issubset(parameter_names)
+    assert "request_id" not in parameter_names
+    assert "api_family" not in parameter_names
+    assert "status_code" not in parameter_names
+    assert "success" not in parameter_names
+    assert "to_time" not in parameter_names
+    assert "connection_id" not in parameter_names
+
+
 @pytest.mark.asyncio
-async def test_get_request_logs_filters_by_status_family_and_preserves_failure_filter() -> (
-    None
-):
+async def test_get_request_logs_filters_by_status_family() -> None:
     from app.services.stats.request_logs import get_request_logs
 
     created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
@@ -217,7 +242,6 @@ async def test_get_request_logs_filters_by_status_family_and_preserves_failure_f
             db,
             profile_id=primary_profile.id,
             status_family="4xx",
-            success=False,
             limit=50,
             offset=0,
         )
@@ -385,14 +409,14 @@ async def test_get_request_log_detail_returns_none_outside_profile_scope() -> No
 
 
 @pytest.mark.asyncio
-async def test_get_request_logs_filters_by_api_family() -> None:
+async def test_get_request_logs_filters_by_model_id_and_endpoint_id() -> None:
     from app.services.stats.request_logs import get_request_logs
 
     created_at = datetime(2026, 3, 20, 12, 0, 0, tzinfo=timezone.utc)
 
     async with AsyncSessionLocal() as db:
         profile = Profile(
-            name=f"api-family-filter-profile-{uuid4()}",
+            name=f"request-log-model-endpoint-profile-{uuid4()}",
             is_active=False,
             is_default=False,
         )
@@ -405,13 +429,22 @@ async def test_get_request_logs_filters_by_api_family() -> None:
                     profile_id=profile.id,
                     response_time_ms=100,
                     created_at=created_at,
-                    api_family="openai",
+                    model_id="gpt-5.4",
+                    endpoint_id=1,
                 ),
                 _request_log(
                     profile_id=profile.id,
                     response_time_ms=110,
                     created_at=created_at,
-                    api_family="anthropic",
+                    model_id="gpt-5.4",
+                    endpoint_id=2,
+                ),
+                _request_log(
+                    profile_id=profile.id,
+                    response_time_ms=120,
+                    created_at=created_at,
+                    model_id="claude-3.7-sonnet",
+                    endpoint_id=1,
                 ),
             ]
         )
@@ -420,13 +453,15 @@ async def test_get_request_logs_filters_by_api_family() -> None:
         items, total = await get_request_logs(
             db,
             profile_id=profile.id,
-            api_family="openai",
+            model_id="gpt-5.4",
+            endpoint_id=1,
             limit=50,
             offset=0,
         )
 
     assert total == 1
-    assert [item.api_family for item in items] == ["openai"]
+    assert [item.model_id for item in items] == ["gpt-5.4"]
+    assert [item.endpoint_id for item in items] == [1]
 
 
 @pytest.mark.asyncio
