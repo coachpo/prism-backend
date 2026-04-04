@@ -17,12 +17,14 @@ from app.schemas.schemas import (
     SpendingReportResponse,
     StatsSummaryResponse,
     ThroughputStatsResponse,
+    UsageModelStatistic,
     UsageSnapshotResponse,
 )
 from app.services.background_cleanup import delete_request_logs_in_background
 from app.services.stats.request_logs import get_request_log_detail
 from app.services.stats_service import (
     get_connection_success_rates,
+    get_endpoint_model_statistics,
     get_model_metrics_batch,
     get_request_logs,
     get_spending_report,
@@ -223,9 +225,30 @@ async def usage_snapshot(
     )
 
 
+@router.get("/endpoints/{endpoint_id}/models", response_model=list[UsageModelStatistic])
+async def endpoint_model_statistics(
+    endpoint_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    profile_id: Annotated[int, Depends(get_effective_profile_id)],
+    preset: Literal["all", "7h", "24h", "7d"] | None = None,
+    from_time: datetime | None = None,
+    to_time: datetime | None = None,
+):
+    return await _stats_impl.endpoint_model_statistics(
+        db,
+        profile_id,
+        endpoint_id=endpoint_id,
+        preset=preset,
+        from_time=from_time,
+        to_time=to_time,
+        get_endpoint_model_statistics_fn=get_endpoint_model_statistics,
+    )
+
+
 __all__ = [
     "connection_success_rates",
     "delete_request_logs",
+    "endpoint_model_statistics",
     "get_throughput",
     "list_request_logs",
     "model_metrics_batch",
