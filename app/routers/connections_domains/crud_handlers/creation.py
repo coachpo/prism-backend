@@ -54,7 +54,7 @@ async def create_connection_record(
         openai_probe_endpoint_variant=(
             body.openai_probe_endpoint_variant
             if getattr(model_config, "api_family", None) == "openai"
-            else "responses"
+            else "responses_minimal"
         ),
         pricing_template_id=pricing_template_id,
         **build_connection_limiter_data(body=body, exclude_unset=False),

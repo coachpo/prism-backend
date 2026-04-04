@@ -36,9 +36,34 @@ def _expected_openai_responses_probe_body(model_id: str) -> dict[str, object]:
             }
         ],
         "max_output_tokens": 1,
+    }
+
+
+def _expected_openai_responses_reasoning_none_probe_body(
+    model_id: str,
+) -> dict[str, object]:
+    return {
+        **_expected_openai_responses_probe_body(model_id),
         "reasoning": {"effort": "none"},
-        "store": False,
-        "stream": True,
+    }
+
+
+def _expected_openai_chat_completions_probe_body(
+    model_id: str,
+) -> dict[str, object]:
+    return {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "."}],
+        "max_tokens": 1,
+    }
+
+
+def _expected_openai_chat_completions_reasoning_none_probe_body(
+    model_id: str,
+) -> dict[str, object]:
+    return {
+        **_expected_openai_chat_completions_probe_body(model_id),
+        "reasoning_effort": "none",
     }
 
 
@@ -52,7 +77,7 @@ class TestDEF059_HealthCheckRequestBuilder:
 
         expected_request = (
             "/monitoring/probe",
-            {"probe": "request", "variant": "chat_completions"},
+            {"probe": "request", "variant": "chat_completions_reasoning_none"},
         )
 
         with patch.object(
@@ -64,17 +89,17 @@ class TestDEF059_HealthCheckRequestBuilder:
             request = health_check_builders._build_health_check_request(
                 "openai",
                 "gpt-5.4-mini",
-                openai_variant="chat_completions",
+                openai_variant="chat_completions_reasoning_none",
             )
 
         assert request == expected_request
         monitoring_builder.assert_called_once_with(
             "openai",
             "gpt-5.4-mini",
-            openai_variant="chat_completions",
+            openai_variant="chat_completions_reasoning_none",
         )
 
-    def test_openai_health_check_uses_responses_endpoint(self):
+    def test_openai_health_check_uses_responses_minimal_endpoint_by_default(self):
         from app.routers.connections import _build_health_check_request
 
         path, body = _build_health_check_request("openai", "gpt-4o-mini")
@@ -82,15 +107,23 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert path == "/v1/responses"
         assert body == _expected_openai_responses_probe_body("gpt-4o-mini")
 
-    def test_openai_health_check_keeps_gpt5_responses_probe_minimal(self):
+    def test_openai_health_check_supports_responses_reasoning_none_variant(self):
         from app.routers.connections import _build_health_check_request
 
-        path, body = _build_health_check_request("openai", "gpt-5.4-mini")
+        path, body = _build_health_check_request(
+            "openai",
+            "gpt-5.4-mini",
+            openai_variant="responses_reasoning_none",
+        )
 
         assert path == "/v1/responses"
-        assert body == _expected_openai_responses_probe_body("gpt-5.4-mini")
+        assert body == _expected_openai_responses_reasoning_none_probe_body(
+            "gpt-5.4-mini"
+        )
 
-    def test_openai_chat_completions_health_check_uses_chat_completions_endpoint(self):
+    def test_openai_chat_completions_health_check_uses_chat_completions_minimal_endpoint(
+        self,
+    ):
         from app.routers.connections import (
             _build_openai_chat_completions_health_check_request,
         )
@@ -98,27 +131,23 @@ class TestDEF059_HealthCheckRequestBuilder:
         path, body = _build_openai_chat_completions_health_check_request("gpt-4o-mini")
 
         assert path == "/v1/chat/completions"
-        assert body == {
-            "model": "gpt-4o-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
+        assert body == _expected_openai_chat_completions_probe_body("gpt-4o-mini")
 
-    def test_openai_chat_completions_health_check_keeps_gpt5_probe_minimal(self):
-        from app.routers.connections import (
-            _build_openai_chat_completions_health_check_request,
+    def test_openai_health_check_supports_chat_completions_reasoning_none_variant(
+        self,
+    ):
+        from app.routers.connections import _build_health_check_request
+
+        path, body = _build_health_check_request(
+            "openai",
+            "gpt-5.4-mini",
+            openai_variant="chat_completions_reasoning_none",
         )
 
-        path, body = _build_openai_chat_completions_health_check_request("gpt-5.4-mini")
-
         assert path == "/v1/chat/completions"
-        assert body == {
-            "model": "gpt-5.4-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
+        assert body == _expected_openai_chat_completions_reasoning_none_probe_body(
+            "gpt-5.4-mini"
+        )
 
     def test_openai_responses_fallback_uses_minimal_generation_request(self):
         from app.routers.connections import (
@@ -181,7 +210,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         connection.id = 1001
         connection.profile_id = 1
         connection.endpoint_id = 501
-        connection.openai_probe_endpoint_variant = "responses"
+        connection.openai_probe_endpoint_variant = "responses_minimal"
         connection.endpoint_rel = endpoint
         connection.model_config_rel = MagicMock(
             id=301,
@@ -226,7 +255,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         )
 
     @pytest.mark.asyncio
-    async def test_probe_runner_uses_openai_chat_completions_variant_for_both_probe_legs(
+    async def test_probe_runner_uses_openai_chat_completions_reasoning_none_variant_for_both_probe_legs(
         self,
     ):
         from app.services.monitoring_service import run_connection_probe
@@ -243,7 +272,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         connection.id = 2002
         connection.profile_id = 1
         connection.endpoint_id = 777
-        connection.openai_probe_endpoint_variant = "chat_completions"
+        connection.openai_probe_endpoint_variant = "chat_completions_reasoning_none"
         connection.endpoint_rel = endpoint
         connection.model_config_rel = MagicMock(
             id=401,
@@ -288,18 +317,12 @@ class TestDEF059_HealthCheckRequestBuilder:
             .kwargs["upstream_url"]
             .endswith("/v1/chat/completions")
         )
-        assert execute_probe_request_fn.await_args_list[0].kwargs["body"] == {
-            "model": "gpt-5.4-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
-        assert execute_probe_request_fn.await_args_list[1].kwargs["body"] == {
-            "model": "gpt-5.4-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
+        assert execute_probe_request_fn.await_args_list[0].kwargs["body"] == (
+            _expected_openai_chat_completions_reasoning_none_probe_body("gpt-5.4-mini")
+        )
+        assert execute_probe_request_fn.await_args_list[1].kwargs["body"] == (
+            _expected_openai_chat_completions_reasoning_none_probe_body("gpt-5.4-mini")
+        )
 
     @pytest.mark.asyncio
     async def test_probe_runner_caps_scheduled_probe_jitter_at_configured_max(
@@ -319,7 +342,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         connection.id = 3003
         connection.profile_id = 1
         connection.endpoint_id = 801
-        connection.openai_probe_endpoint_variant = "responses"
+        connection.openai_probe_endpoint_variant = "responses_minimal"
         connection.endpoint_rel = endpoint
         connection.model_config_rel = MagicMock(
             id=501,
@@ -358,9 +381,13 @@ class TestDEF059_HealthCheckRequestBuilder:
             return_value=SimpleNamespace(admitted=True, lease_token="lease-1")
         )
         release_probe_lease_fn = AsyncMock()
+        runtime_state_result = MagicMock()
+        runtime_state_result.scalar_one_or_none.return_value = None
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=runtime_state_result)
 
         result = await run_connection_probe(
-            db=AsyncMock(),
+            db=mock_db,
             client=AsyncMock(),
             profile_id=1,
             connection_id=connection.id,
@@ -400,7 +427,7 @@ class TestDEF059_HealthCheckRequestBuilder:
         connection.id = 3004
         connection.profile_id = 1
         connection.endpoint_id = 802
-        connection.openai_probe_endpoint_variant = "responses"
+        connection.openai_probe_endpoint_variant = "responses_minimal"
         connection.endpoint_rel = endpoint
         connection.model_config_rel = MagicMock(
             id=502,
@@ -573,7 +600,7 @@ class TestMonitoringManualHealthChecksAndPersistence:
                     api_key="sk-inline-preview",
                 ),
                 custom_headers={"X-Test": "preview"},
-                openai_probe_endpoint_variant="chat_completions",
+                openai_probe_endpoint_variant="chat_completions_reasoning_none",
             ),
             request=request,
             db=mock_db,
@@ -593,12 +620,12 @@ class TestMonitoringManualHealthChecksAndPersistence:
         assert probe_kwargs["connection"].profile_id == 1
         assert probe_kwargs["api_family"] == "openai"
         assert probe_kwargs["model_id"] == "gpt-5.4-mini"
-        assert probe_kwargs["openai_variant"] == "chat_completions"
+        assert probe_kwargs["openai_variant"] == "chat_completions_reasoning_none"
         assert probe_kwargs["endpoint"].name == "Preview Endpoint"
         assert probe_kwargs["endpoint"].base_url == "https://api.openai.com"
         assert "headers" not in probe_kwargs
         assert probe_kwargs["connection"].openai_probe_endpoint_variant == (
-            "chat_completions"
+            "chat_completions_reasoning_none"
         )
         mock_db.add.assert_not_called()
         assert mock_db.flush.await_count == 0
@@ -644,7 +671,7 @@ class TestMonitoringManualHealthChecksAndPersistence:
                 model_config_id=9,
                 body=ConnectionCreate(
                     endpoint_id=endpoint.id,
-                    openai_probe_endpoint_variant="chat_completions",
+                    openai_probe_endpoint_variant="chat_completions_reasoning_none",
                 ),
                 db=mock_db,
                 profile_id=1,
@@ -652,7 +679,10 @@ class TestMonitoringManualHealthChecksAndPersistence:
             )
 
         created_connection = mock_db.add.call_args.args[0]
-        assert created_connection.openai_probe_endpoint_variant == "chat_completions"
+        assert (
+            created_connection.openai_probe_endpoint_variant
+            == "chat_completions_reasoning_none"
+        )
 
     @pytest.mark.asyncio
     async def test_update_connection_record_persists_openai_probe_endpoint_variant(
@@ -698,18 +728,138 @@ class TestMonitoringManualHealthChecksAndPersistence:
         with patch(
             "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
             AsyncMock(
-                return_value={"openai_probe_endpoint_variant": "chat_completions"}
+                return_value={
+                    "openai_probe_endpoint_variant": "chat_completions_reasoning_none"
+                }
             ),
         ):
             await update_connection_record(
                 connection_id=connection.id,
-                body=ConnectionUpdate(openai_probe_endpoint_variant="chat_completions"),
+                body=ConnectionUpdate(
+                    openai_probe_endpoint_variant="chat_completions_reasoning_none"
+                ),
                 db=mock_db,
                 profile_id=1,
                 deps=deps,
             )
 
-        assert connection.openai_probe_endpoint_variant == "chat_completions"
+        assert (
+            connection.openai_probe_endpoint_variant
+            == "chat_completions_reasoning_none"
+        )
+
+    @pytest.mark.asyncio
+    async def test_create_connection_record_normalizes_non_openai_probe_endpoint_variant(
+        self,
+    ):
+        from app.routers.connections_domains.crud_dependencies import (
+            ConnectionCrudDependencies,
+        )
+        from app.routers.connections_domains.crud_handlers.creation import (
+            create_connection_record,
+        )
+        from app.schemas.schemas import ConnectionCreate
+
+        endpoint = SimpleNamespace(id=88)
+        mock_db = AsyncMock()
+        mock_db.add = MagicMock()
+        mock_db.flush = AsyncMock()
+        deps = ConnectionCrudDependencies(
+            clear_connection_state_fn=AsyncMock(),
+            clear_round_robin_state_for_model_fn=AsyncMock(),
+            create_endpoint_from_inline_fn=AsyncMock(),
+            ensure_model_config_ids_exist_fn=AsyncMock(),
+            list_ordered_connections_fn=AsyncMock(return_value=[]),
+            list_ordered_connections_for_models_fn=AsyncMock(),
+            load_connection_or_404_fn=AsyncMock(return_value=SimpleNamespace(id=3)),
+            load_model_or_404_fn=AsyncMock(
+                return_value=SimpleNamespace(api_family="anthropic")
+            ),
+            lock_profile_row_fn=AsyncMock(),
+            normalize_connection_priorities_fn=MagicMock(),
+            serialize_custom_headers_fn=MagicMock(return_value=None),
+            validate_pricing_template_id_fn=AsyncMock(return_value=None),
+        )
+
+        with patch(
+            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
+            AsyncMock(return_value=endpoint),
+        ):
+            await create_connection_record(
+                model_config_id=10,
+                body=ConnectionCreate(
+                    endpoint_id=endpoint.id,
+                    openai_probe_endpoint_variant="chat_completions_reasoning_none",
+                ),
+                db=mock_db,
+                profile_id=1,
+                deps=deps,
+            )
+
+        created_connection = mock_db.add.call_args.args[0]
+        assert created_connection.openai_probe_endpoint_variant == "responses_minimal"
+
+    @pytest.mark.asyncio
+    async def test_update_connection_record_normalizes_non_openai_probe_endpoint_variant(
+        self,
+    ):
+        from app.routers.connections_domains.crud_dependencies import (
+            ConnectionCrudDependencies,
+        )
+        from app.routers.connections_domains.crud_handlers.updating import (
+            update_connection_record,
+        )
+        from app.schemas.schemas import ConnectionUpdate
+
+        connection = SimpleNamespace(
+            id=57,
+            profile_id=1,
+            endpoint_id=11,
+            model_config_id=10,
+            is_active=True,
+            auth_type=None,
+            custom_headers=None,
+            updated_at=None,
+            openai_probe_endpoint_variant="chat_completions_reasoning_none",
+        )
+        deps = ConnectionCrudDependencies(
+            clear_connection_state_fn=AsyncMock(),
+            clear_round_robin_state_for_model_fn=AsyncMock(),
+            create_endpoint_from_inline_fn=AsyncMock(),
+            ensure_model_config_ids_exist_fn=AsyncMock(),
+            list_ordered_connections_fn=AsyncMock(),
+            list_ordered_connections_for_models_fn=AsyncMock(),
+            load_connection_or_404_fn=AsyncMock(return_value=connection),
+            load_model_or_404_fn=AsyncMock(
+                return_value=SimpleNamespace(api_family="anthropic")
+            ),
+            lock_profile_row_fn=AsyncMock(),
+            normalize_connection_priorities_fn=MagicMock(),
+            serialize_custom_headers_fn=MagicMock(),
+            validate_pricing_template_id_fn=AsyncMock(),
+        )
+        mock_db = AsyncMock()
+        mock_db.flush = AsyncMock()
+
+        with patch(
+            "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
+            AsyncMock(
+                return_value={
+                    "openai_probe_endpoint_variant": "chat_completions_reasoning_none"
+                }
+            ),
+        ):
+            await update_connection_record(
+                connection_id=connection.id,
+                body=ConnectionUpdate(
+                    openai_probe_endpoint_variant="chat_completions_reasoning_none"
+                ),
+                db=mock_db,
+                profile_id=1,
+                deps=deps,
+            )
+
+        assert connection.openai_probe_endpoint_variant == "responses_minimal"
 
     @pytest.mark.asyncio
     async def test_create_connection_record_persists_monitoring_probe_interval_seconds(
@@ -871,7 +1021,7 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
         )
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_supports_explicit_chat_completions_variant(
+    async def test_openai_health_check_supports_explicit_chat_completions_reasoning_none_variant(
         self,
     ):
         from types import SimpleNamespace
@@ -898,7 +1048,7 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
                 api_family="openai",
                 model_id="gpt-5.4-mini",
                 headers={},
-                openai_variant="chat_completions",
+                openai_variant="chat_completions_reasoning_none",
             )
 
         assert health_status == "healthy"
@@ -906,21 +1056,15 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
         assert response_time_ms == 5
         assert log_url == "https://api.openai.com/v1/chat/completions"
         assert execute_mock.await_count == 2
-        assert execute_mock.await_args_list[0].kwargs["body"] == {
-            "model": "gpt-5.4-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
-        assert execute_mock.await_args_list[1].kwargs["body"] == {
-            "model": "gpt-5.4-mini",
-            "messages": [{"role": "user", "content": "."}],
-            "max_tokens": 1,
-            "reasoning_effort": "none",
-        }
+        assert execute_mock.await_args_list[0].kwargs["body"] == (
+            _expected_openai_chat_completions_reasoning_none_probe_body("gpt-5.4-mini")
+        )
+        assert execute_mock.await_args_list[1].kwargs["body"] == (
+            _expected_openai_chat_completions_reasoning_none_probe_body("gpt-5.4-mini")
+        )
 
     @pytest.mark.asyncio
-    async def test_openai_health_check_does_not_fall_back_when_responses_probe_fails(
+    async def test_openai_health_check_does_not_fall_back_when_selected_probe_preset_fails(
         self,
     ):
         from types import SimpleNamespace
@@ -946,6 +1090,7 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
                 api_family="openai",
                 model_id="gpt-4o-mini",
                 headers={},
+                openai_variant="responses_reasoning_none",
             )
 
         assert health_status == "unhealthy"
@@ -959,7 +1104,7 @@ class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:
             .endswith("/v1/responses")
         )
         assert execute_mock.await_args_list[0].kwargs["body"] == (
-            _expected_openai_responses_probe_body("gpt-4o-mini")
+            _expected_openai_responses_reasoning_none_probe_body("gpt-4o-mini")
         )
 
     @pytest.mark.asyncio
@@ -1169,9 +1314,9 @@ class TestDEF060_ProxyApiFamilyPathValidation:
         model_config.api_family = "anthropic"
         model_config.model_id = "claude-sonnet-4-5"
         model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="single",
-            failover_recovery_enabled=False,
-            failover_status_codes=[403, 422, 429, 500, 502, 503, 504, 529],
+            strategy_type="legacy",
+            legacy_strategy_type="single",
+            auto_recovery={"mode": "disabled"},
         )
 
         mock_rules_result = MagicMock()

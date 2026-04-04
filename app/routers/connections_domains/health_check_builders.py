@@ -19,7 +19,7 @@ def _build_health_check_request(
     api_family: str,
     model_id: str,
     *,
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
     return _build_monitoring_conversation_request(
         api_family,
@@ -34,7 +34,7 @@ def _build_openai_chat_completions_health_check_request(
     return _build_monitoring_conversation_request(
         "openai",
         model_id,
-        openai_variant="chat_completions",
+        openai_variant="chat_completions_minimal",
     )
 
 
@@ -44,7 +44,7 @@ def _build_openai_responses_basic_health_check_request(
     return _build_monitoring_conversation_request(
         "openai",
         model_id,
-        openai_variant="responses",
+        openai_variant="responses_minimal",
     )
 
 
@@ -52,7 +52,7 @@ def _build_endpoint_ping_request(
     api_family: str,
     model_id: str,
     *,
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
     return _build_monitoring_endpoint_ping_request(
         api_family,
@@ -69,7 +69,7 @@ async def _probe_connection_health(
     api_family: str,
     model_id: str,
     headers: dict[str, str],
-    openai_variant: str = "responses",
+    openai_variant: str = "responses_minimal",
     execute_health_check_request_fn=_execute_health_check_request,
 ) -> tuple[str, str, int, str]:
     result = await _execute_monitoring_probe_checks(
