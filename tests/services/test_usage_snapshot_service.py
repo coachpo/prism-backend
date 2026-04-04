@@ -687,3 +687,132 @@ class TestUsageSnapshotService:
                 "total_cost_micros": 4200,
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_get_endpoint_model_statistics_groups_models_for_one_endpoint(self):
+        get_endpoint_model_statistics = cast(
+            Callable[..., Awaitable[list[dict[str, object]]]] | None,
+            getattr(stats_service, "get_endpoint_model_statistics", None),
+        )
+        assert callable(get_endpoint_model_statistics), (
+            "stats_service.get_endpoint_model_statistics must exist"
+        )
+
+        fixed_now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        seed = await _seed_usage_snapshot_dataset(fixed_now)
+
+        async with AsyncSessionLocal() as session:
+            session.add(
+                UsageRequestEvent(
+                    profile_id=seed.profile_id,
+                    ingress_request_id=f"ingress-endpoint-model-{uuid4().hex[:8]}",
+                    model_id=seed.alt_model_id,
+                    resolved_target_model_id=seed.alt_model_id,
+                    api_family="anthropic",
+                    endpoint_id=seed.primary_endpoint_id,
+                    connection_id=None,
+                    proxy_api_key_id=None,
+                    proxy_api_key_name_snapshot=None,
+                    status_code=200,
+                    success_flag=True,
+                    input_tokens=15,
+                    output_tokens=5,
+                    total_tokens=20,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    reasoning_tokens=0,
+                    total_cost_original_micros=200,
+                    total_cost_user_currency_micros=200,
+                    currency_code_original="USD",
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    attempt_count=1,
+                    request_path="/v1/messages",
+                    created_at=fixed_now - timedelta(minutes=10),
+                )
+            )
+            await session.commit()
+
+        with patch(
+            "app.services.stats.endpoint_model_statistics.utc_now",
+            return_value=fixed_now,
+        ):
+            async with AsyncSessionLocal() as session:
+                rows = cast(
+                    list[dict[str, object]],
+                    await get_endpoint_model_statistics(
+                        session,
+                        profile_id=seed.profile_id,
+                        endpoint_id=seed.primary_endpoint_id,
+                        preset="7h",
+                    ),
+                )
+
+        row_by_model = {row["model_id"]: row for row in rows}
+
+        assert set(row_by_model) == {seed.primary_model_id, seed.alt_model_id}
+        assert row_by_model[seed.primary_model_id] == {
+            "model_id": seed.primary_model_id,
+            "model_label": row_by_model[seed.primary_model_id]["model_label"],
+            "request_count": 1,
+            "success_rate": 100.0,
+            "total_tokens": 185,
+            "total_cost_micros": 4200,
+        }
+        assert row_by_model[seed.primary_model_id]["model_label"].startswith("GPT 4o")
+        assert row_by_model[seed.alt_model_id] == {
+            "model_id": seed.alt_model_id,
+            "model_label": seed.alt_model_id,
+            "request_count": 1,
+            "success_rate": 100.0,
+            "total_tokens": 20,
+            "total_cost_micros": 200,
+        }
+        assert all("api_family" not in row for row in rows)
+        assert all("success_count" not in row for row in rows)
+        assert all("failed_count" not in row for row in rows)
+
+    @pytest.mark.asyncio
+    async def test_get_endpoint_model_statistics_supports_snapshot_window_for_historical_endpoint_rows(
+        self,
+    ):
+        get_endpoint_model_statistics = cast(
+            Callable[..., Awaitable[list[dict[str, object]]]] | None,
+            getattr(stats_service, "get_endpoint_model_statistics", None),
+        )
+        assert callable(get_endpoint_model_statistics), (
+            "stats_service.get_endpoint_model_statistics must exist"
+        )
+
+        fixed_now = datetime(2026, 3, 27, 12, 0, tzinfo=timezone.utc)
+        seed = await _seed_usage_snapshot_dataset(fixed_now)
+
+        async with AsyncSessionLocal() as session:
+            endpoint = await session.get(Endpoint, seed.primary_endpoint_id)
+            assert endpoint is not None
+            await session.delete(endpoint)
+            await session.commit()
+
+        async with AsyncSessionLocal() as session:
+            rows = cast(
+                list[dict[str, object]],
+                await get_endpoint_model_statistics(
+                    session,
+                    profile_id=seed.profile_id,
+                    endpoint_id=seed.primary_endpoint_id,
+                    from_time=fixed_now - timedelta(hours=7),
+                    to_time=fixed_now,
+                ),
+            )
+
+        assert rows == [
+            {
+                "model_id": seed.primary_model_id,
+                "model_label": rows[0]["model_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 185,
+                "total_cost_micros": 4200,
+            }
+        ]
+        assert rows[0]["model_label"].startswith("GPT 4o")

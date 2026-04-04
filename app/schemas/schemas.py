@@ -153,6 +153,7 @@ from app.schemas.domains.stats import (
     ThroughputStatsResponse,
 )
 from app.schemas.domains.usage_statistics import (
+    UsageModelStatistic,
     UsageProxyApiKeyStatistic,
     UsageRequestEventResponse,
     UsageSnapshotResponse,
@@ -297,6 +298,7 @@ __all__ = [
     "TimezonePreferenceUpdate",
     "ThroughputBucket",
     "ThroughputStatsResponse",
+    "UsageModelStatistic",
     "UsageRequestEventResponse",
     "UsageProxyApiKeyStatistic",
     "UsageSnapshotResponse",

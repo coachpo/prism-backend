@@ -67,7 +67,9 @@ from app.services.audit_service import record_audit_log
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
-async def _seed_usage_snapshot_profiles_for_scope_test() -> tuple[int, int, str, str]:
+async def _seed_usage_snapshot_profiles_for_scope_test() -> tuple[
+    int, int, int, int, str, str
+]:
     suffix = utc_now().strftime("%H%M%S%f")
     created_at = utc_now() - timedelta(hours=1)
 
@@ -244,7 +246,14 @@ async def _seed_usage_snapshot_profiles_for_scope_test() -> tuple[int, int, str,
         )
         await session.commit()
 
-        return profile_a.id, profile_b.id, model_a.model_id, model_b.model_id
+        return (
+            profile_a.id,
+            profile_b.id,
+            endpoint_a.id,
+            endpoint_b.id,
+            model_a.model_id,
+            model_b.model_id,
+        )
 
 
 class TestCostingAndSettingsIsolation:
@@ -451,6 +460,8 @@ class TestObservabilityAttribution:
         (
             profile_a_id,
             profile_b_id,
+            _,
+            _,
             model_a_id,
             model_b_id,
         ) = await _seed_usage_snapshot_profiles_for_scope_test()
@@ -485,6 +496,40 @@ class TestObservabilityAttribution:
         assert payload_b["model_statistics"][0]["model_id"] != model_a_id
         assert "request_events" not in payload_a
         assert "request_events" not in payload_b
+
+    @pytest.mark.asyncio
+    async def test_endpoint_model_statistics_route_rejects_other_profile_endpoint(self):
+        await get_engine().dispose()
+        (
+            profile_a_id,
+            profile_b_id,
+            endpoint_a_id,
+            endpoint_b_id,
+            model_a_id,
+            _,
+        ) = await _seed_usage_snapshot_profiles_for_scope_test()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response_a = await client.get(
+                f"/api/stats/endpoints/{endpoint_a_id}/models",
+                params={"preset": "24h"},
+                headers={"X-Profile-Id": str(profile_a_id)},
+            )
+            response_cross = await client.get(
+                f"/api/stats/endpoints/{endpoint_b_id}/models",
+                params={"preset": "24h"},
+                headers={"X-Profile-Id": str(profile_a_id)},
+            )
+
+        assert response_a.status_code == 200
+        assert response_cross.status_code == 404
+
+        payload_a = response_a.json()
+        assert payload_a[0]["model_id"] == model_a_id
 
 
 class TestHeaderBlocklistScoping:

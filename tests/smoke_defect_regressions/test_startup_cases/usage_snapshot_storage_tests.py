@@ -240,6 +240,128 @@ async def _seed_usage_snapshot_route_fixture() -> tuple[int, str, str]:
         return profile.id, ingress_request_id, proxy_key.key_prefix
 
 
+async def _seed_endpoint_model_statistics_route_fixture() -> tuple[int, int, str, str]:
+    suffix = uuid4().hex[:8]
+    created_at = utc_now() - timedelta(hours=1)
+
+    async with AsyncSessionLocal() as session:
+        profile = Profile(
+            name=f"DEF086 Endpoint Models {suffix}",
+            is_active=False,
+            is_default=False,
+            version=0,
+        )
+        vendor = Vendor(
+            key=f"def086-endpoint-model-vendor-{suffix}",
+            name=f"DEF086 Endpoint Model Vendor {suffix}",
+            audit_enabled=False,
+            audit_capture_bodies=False,
+        )
+        strategy = make_loadbalance_strategy(profile=profile, strategy_type="failover")
+        primary_model = ModelConfig(
+            profile=profile,
+            vendor=vendor,
+            api_family="openai",
+            model_id=f"def086-primary-model-{suffix}",
+            display_name=f"DEF086 Primary Model {suffix}",
+            model_type="native",
+            loadbalance_strategy=strategy,
+            is_enabled=True,
+        )
+        secondary_model = ModelConfig(
+            profile=profile,
+            vendor=vendor,
+            api_family="anthropic",
+            model_id=f"def086-secondary-model-{suffix}",
+            display_name=None,
+            model_type="native",
+            loadbalance_strategy=strategy,
+            is_enabled=True,
+        )
+        endpoint = Endpoint(
+            profile=profile,
+            name=f"DEF086 Endpoint Models {suffix}",
+            base_url=f"https://def086-endpoint-models-{suffix}.example.com/v1",
+            api_key=f"sk-def086-endpoint-models-{suffix}",
+            position=0,
+        )
+
+        session.add_all(
+            [
+                profile,
+                vendor,
+                strategy,
+                primary_model,
+                secondary_model,
+                endpoint,
+                UserSetting(profile=profile),
+            ]
+        )
+        await session.flush()
+
+        session.add_all(
+            [
+                UsageRequestEvent(
+                    profile_id=profile.id,
+                    ingress_request_id=f"def086-endpoint-model-primary-{suffix}",
+                    model_id=primary_model.model_id,
+                    resolved_target_model_id=primary_model.model_id,
+                    api_family="openai",
+                    endpoint_id=endpoint.id,
+                    connection_id=None,
+                    proxy_api_key_id=None,
+                    proxy_api_key_name_snapshot=None,
+                    status_code=200,
+                    success_flag=True,
+                    input_tokens=34,
+                    output_tokens=21,
+                    total_tokens=55,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    reasoning_tokens=0,
+                    total_cost_original_micros=1200,
+                    total_cost_user_currency_micros=1200,
+                    currency_code_original="USD",
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    attempt_count=1,
+                    request_path="/v1/chat/completions",
+                    created_at=created_at,
+                ),
+                UsageRequestEvent(
+                    profile_id=profile.id,
+                    ingress_request_id=f"def086-endpoint-model-secondary-{suffix}",
+                    model_id=secondary_model.model_id,
+                    resolved_target_model_id=secondary_model.model_id,
+                    api_family="anthropic",
+                    endpoint_id=endpoint.id,
+                    connection_id=None,
+                    proxy_api_key_id=None,
+                    proxy_api_key_name_snapshot=None,
+                    status_code=200,
+                    success_flag=True,
+                    input_tokens=11,
+                    output_tokens=9,
+                    total_tokens=20,
+                    cache_read_input_tokens=0,
+                    cache_creation_input_tokens=0,
+                    reasoning_tokens=0,
+                    total_cost_original_micros=300,
+                    total_cost_user_currency_micros=300,
+                    currency_code_original="USD",
+                    report_currency_code="USD",
+                    report_currency_symbol="$",
+                    attempt_count=1,
+                    request_path="/v1/messages",
+                    created_at=created_at,
+                ),
+            ]
+        )
+        await session.commit()
+
+        return profile.id, endpoint.id, primary_model.model_id, secondary_model.model_id
+
+
 class TestDEF086_UsageStatisticsStorageContract:
     def test_schema_and_model_exports_include_usage_snapshot_contract_and_proxy_key_request_log_fields(
         self,
@@ -487,3 +609,87 @@ class TestDEF086_UsageStatisticsStorageContract:
         assert "key_prefix" not in payload["proxy_api_key_statistics"][0]
         assert "success_count" not in payload["proxy_api_key_statistics"][0]
         assert "failed_count" not in payload["proxy_api_key_statistics"][0]
+
+    @pytest.mark.asyncio
+    async def test_endpoint_model_statistics_route_returns_lazy_detail_rows(self):
+        await get_engine().dispose()
+        (
+            profile_id,
+            endpoint_id,
+            primary_model_id,
+            secondary_model_id,
+        ) = await _seed_endpoint_model_statistics_route_fixture()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get(
+                f"/api/stats/endpoints/{endpoint_id}/models",
+                params={"preset": "7h"},
+                headers={"X-Profile-Id": str(profile_id)},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload == [
+            {
+                "model_id": primary_model_id,
+                "model_label": payload[0]["model_label"],
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 55,
+                "total_cost_micros": 1200,
+            },
+            {
+                "model_id": secondary_model_id,
+                "model_label": secondary_model_id,
+                "request_count": 1,
+                "success_rate": 100.0,
+                "total_tokens": 20,
+                "total_cost_micros": 300,
+            },
+        ]
+        assert payload[0]["model_label"].startswith("DEF086 Primary Model")
+        assert all("api_family" not in row for row in payload)
+        assert all("success_count" not in row for row in payload)
+        assert all("failed_count" not in row for row in payload)
+
+    @pytest.mark.asyncio
+    async def test_endpoint_model_statistics_route_supports_snapshot_window_for_historical_endpoints(
+        self,
+    ):
+        await get_engine().dispose()
+        (
+            profile_id,
+            endpoint_id,
+            primary_model_id,
+            _,
+        ) = await _seed_endpoint_model_statistics_route_fixture()
+
+        async with AsyncSessionLocal() as session:
+            endpoint = await session.get(Endpoint, endpoint_id)
+            assert endpoint is not None
+            await session.delete(endpoint)
+            await session.commit()
+
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            response = await client.get(
+                f"/api/stats/endpoints/{endpoint_id}/models",
+                params={
+                    "from_time": "2026-03-27T11:00:00Z",
+                    "to_time": "2026-03-27T12:00:00Z",
+                },
+                headers={"X-Profile-Id": str(profile_id)},
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload[0]["model_id"] == primary_model_id
