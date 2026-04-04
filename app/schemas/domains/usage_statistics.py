@@ -53,7 +53,7 @@ class UsageRequestEventResponse(BaseModel):
 
 
 class UsageSnapshotTimeRange(BaseModel):
-    preset: Literal["all", "7h", "24h", "7d"]
+    preset: Literal["1h", "6h", "24h", "7d", "30d", "all"]
     start_at: datetime | None = None
     end_at: datetime
 

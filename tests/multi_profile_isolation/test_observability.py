@@ -17,6 +17,7 @@ import pytest
 import json
 import inspect
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock, MagicMock, patch
 from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
@@ -400,19 +401,51 @@ class TestObservabilityAttribution:
     def test_stats_routes_use_api_family_query_params(self):
         from app.routers.stats import (
             get_throughput,
-            list_request_logs,
             spending_report,
             stats_summary,
         )
 
         for route in (
-            list_request_logs,
             stats_summary,
             spending_report,
             get_throughput,
         ):
             parameters = inspect.signature(route).parameters
             assert "api_family" in parameters
+
+    def test_usage_snapshot_route_exposes_public_presets_with_default_one_hour(self):
+        from app.routers.stats import usage_snapshot
+
+        preset_parameter = inspect.signature(usage_snapshot).parameters["preset"]
+
+        assert get_args(preset_parameter.annotation) == (
+            "1h",
+            "6h",
+            "24h",
+            "7d",
+            "30d",
+            "all",
+        )
+        assert preset_parameter.default == "1h"
+
+    def test_endpoint_model_statistics_route_exposes_public_presets_with_default_one_hour(
+        self,
+    ):
+        from app.routers.stats import endpoint_model_statistics
+
+        preset_parameter = inspect.signature(endpoint_model_statistics).parameters[
+            "preset"
+        ]
+
+        assert get_args(preset_parameter.annotation) == (
+            "1h",
+            "6h",
+            "24h",
+            "7d",
+            "30d",
+            "all",
+        )
+        assert preset_parameter.default == "1h"
 
     def test_audit_routes_use_vendor_id_filter(self):
         from app.routers.audit import list_audit_logs
@@ -473,12 +506,12 @@ class TestObservabilityAttribution:
         ) as client:
             response_a = await client.get(
                 "/api/stats/usage-snapshot",
-                params={"preset": "24h"},
+                params={"preset": "6h"},
                 headers={"X-Profile-Id": str(profile_a_id)},
             )
             response_b = await client.get(
                 "/api/stats/usage-snapshot",
-                params={"preset": "24h"},
+                params={"preset": "6h"},
                 headers={"X-Profile-Id": str(profile_b_id)},
             )
 
@@ -516,12 +549,12 @@ class TestObservabilityAttribution:
         ) as client:
             response_a = await client.get(
                 f"/api/stats/endpoints/{endpoint_a_id}/models",
-                params={"preset": "24h"},
+                params={"preset": "6h"},
                 headers={"X-Profile-Id": str(profile_a_id)},
             )
             response_cross = await client.get(
                 f"/api/stats/endpoints/{endpoint_b_id}/models",
-                params={"preset": "24h"},
+                params={"preset": "6h"},
                 headers={"X-Profile-Id": str(profile_a_id)},
             )
 

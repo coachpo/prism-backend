@@ -11,7 +11,7 @@ from app.core.time import utc_now
 from app.models.models import Endpoint, ModelConfig, UsageRequestEvent
 from app.services.stats.time_presets import resolve_time_preset
 
-EndpointModelStatisticsPreset = Literal["all", "7h", "24h", "7d"]
+EndpointModelStatisticsPreset = Literal["1h", "6h", "24h", "7d", "30d", "all"]
 
 
 def _normalize_datetime(value: datetime) -> datetime:
@@ -31,7 +31,7 @@ async def get_endpoint_model_statistics(
     *,
     profile_id: int,
     endpoint_id: int,
-    preset: EndpointModelStatisticsPreset | None = None,
+    preset: EndpointModelStatisticsPreset = "1h",
     from_time: datetime | None = None,
     to_time: datetime | None = None,
 ) -> list[dict[str, object]]:
@@ -42,8 +42,11 @@ async def get_endpoint_model_statistics(
     normalized_to_time = (
         _normalize_datetime(to_time) if to_time is not None else generated_at
     )
+    effective_preset = None if from_time is not None or to_time is not None else preset
     start_at, end_at = resolve_time_preset(
-        preset, normalized_from_time, normalized_to_time
+        effective_preset,
+        normalized_from_time,
+        normalized_to_time,
     )
     normalized_start_at = (
         _normalize_datetime(start_at) if start_at is not None else None

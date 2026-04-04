@@ -12,9 +12,10 @@ def resolve_time_preset(
         return from_time, to_time
 
     reference_time = to_time or utc_now()
-    if preset == "today":
-        today_start = reference_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        return today_start, to_time
+    if preset == "1h":
+        return reference_time - timedelta(hours=1), to_time
+    if preset == "6h":
+        return reference_time - timedelta(hours=6), to_time
     if preset == "7h":
         return reference_time - timedelta(hours=7), to_time
     if preset == "24h":

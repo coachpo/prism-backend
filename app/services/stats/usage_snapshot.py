@@ -13,7 +13,7 @@ from app.models.models import Endpoint, ModelConfig, ProxyApiKey, UsageRequestEv
 from app.services.stats.time_presets import resolve_time_preset
 from app.services.user_settings import get_report_currency_preferences
 
-UsageSnapshotPreset = Literal["all", "7h", "24h", "7d"]
+UsageSnapshotPreset = Literal["1h", "6h", "24h", "7d", "30d", "all"]
 
 ROLLING_WINDOW_MINUTES = 30
 SERVICE_HEALTH_BUCKET_COUNT = 12 * 56
@@ -782,7 +782,7 @@ async def get_usage_snapshot(
     db: AsyncSession,
     *,
     profile_id: int,
-    preset: UsageSnapshotPreset = "24h",
+    preset: UsageSnapshotPreset = "1h",
 ) -> dict[str, object]:
     generated_at = _normalize_datetime(utc_now())
     start_at, end_at = resolve_time_preset(preset, None, generated_at)
