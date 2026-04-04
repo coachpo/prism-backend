@@ -1,3 +1,4 @@
+import inspect
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import cast
@@ -90,7 +91,6 @@ class TestDEF058_StatsTimezoneFilterNormalization:
 
         mock_db = AsyncMock()
         aware_from = self._aware_utc_datetime()
-        aware_to = self._aware_utc_datetime()
 
         with patch(
             "app.routers.stats.get_request_logs", new_callable=AsyncMock
@@ -100,7 +100,6 @@ class TestDEF058_StatsTimezoneFilterNormalization:
                 db=mock_db,
                 profile_id=7,
                 from_time=aware_from,
-                to_time=aware_to,
                 limit=50,
                 offset=0,
             )
@@ -111,36 +110,32 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             mock_get_request_logs.await_args_list[0],
         )
         from_time: datetime = cast(datetime, call_kwargs["from_time"])
-        to_time: datetime = cast(datetime, call_kwargs["to_time"])
         assert from_time == aware_from
-        assert to_time == aware_to
         assert from_time.tzinfo is not None
-        assert to_time.tzinfo is not None
+        assert "to_time" not in call_kwargs
 
-    @pytest.mark.asyncio
-    async def test_requests_route_passes_request_id_filter_to_service(self):
+    def test_requests_route_signature_keeps_only_simplified_browse_query_params(self):
         from app.routers.stats import list_request_logs
 
-        mock_db = AsyncMock()
+        parameter_names = set(inspect.signature(list_request_logs).parameters)
 
-        with patch(
-            "app.routers.stats.get_request_logs", new_callable=AsyncMock
-        ) as mock_get_request_logs:
-            mock_get_request_logs.return_value = ([], 0)
-            response = await list_request_logs(
-                db=mock_db,
-                profile_id=7,
-                request_id=321,
-                limit=50,
-                offset=0,
-            )
-
-        assert response.total == 0
-        _, call_kwargs = cast(
-            tuple[tuple[object, ...], dict[str, object]],
-            mock_get_request_logs.await_args_list[0],
-        )
-        assert call_kwargs["request_id"] == 321
+        assert {
+            "db",
+            "profile_id",
+            "ingress_request_id",
+            "model_id",
+            "status_family",
+            "from_time",
+            "endpoint_id",
+            "limit",
+            "offset",
+        }.issubset(parameter_names)
+        assert "request_id" not in parameter_names
+        assert "api_family" not in parameter_names
+        assert "status_code" not in parameter_names
+        assert "success" not in parameter_names
+        assert "to_time" not in parameter_names
+        assert "connection_id" not in parameter_names
 
     @pytest.mark.asyncio
     async def test_requests_route_passes_status_family_filter_to_service(self):
@@ -166,6 +161,16 @@ class TestDEF058_StatsTimezoneFilterNormalization:
             mock_get_request_logs.await_args_list[0],
         )
         assert call_kwargs["status_family"] == "4xx"
+        assert set(call_kwargs) == {
+            "ingress_request_id",
+            "model_id",
+            "profile_id",
+            "status_family",
+            "from_time",
+            "endpoint_id",
+            "limit",
+            "offset",
+        }
 
     @pytest.mark.asyncio
     async def test_requests_route_serializes_slim_list_items(self):
