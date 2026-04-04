@@ -311,7 +311,7 @@ class Connection(Base):
         Index("idx_connections_profile_id", "profile_id"),
         Index("idx_connections_pricing_template_id", "pricing_template_id"),
         CheckConstraint(
-            "openai_probe_endpoint_variant IN ('responses', 'chat_completions')",
+            "openai_probe_endpoint_variant IN ('responses_minimal', 'responses_reasoning_none', 'chat_completions_minimal', 'chat_completions_reasoning_none')",
             name="ck_connections_openai_probe_endpoint_variant",
         ),
         Index(
@@ -350,8 +350,8 @@ class Connection(Base):
         Text, nullable=True
     )  # JSON object of custom HTTP headers
     openai_probe_endpoint_variant: Mapped[str] = mapped_column(
-        String(30),
-        default="responses",
+        String(40),
+        default="responses_minimal",
         nullable=False,
     )
     health_status: Mapped[str] = mapped_column(
