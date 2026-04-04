@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+import httpx
 from fastapi import HTTPException
 
 from app.models.models import Connection, Endpoint

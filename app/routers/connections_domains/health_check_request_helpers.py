@@ -52,7 +52,7 @@ async def _execute_health_check_request(
             upstream_url,
             headers=headers,
             json=body,
-            timeout=15.0,
+            timeout=30.0,
         )
         response_time_ms = int((time.monotonic() - start) * 1000)
         health_status, detail = _map_health_check_response(response)
