@@ -249,6 +249,13 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
                     .scalars()
                     .all()
                 )
+                connection_probe_variant_constraint = (
+                    await conn.execute(
+                        text(
+                            "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'connections'::regclass AND conname = 'ck_connections_openai_probe_endpoint_variant'"
+                        )
+                    )
+                ).scalar_one()
             await engine.dispose()
 
             assert version == [current_head_revision]
@@ -262,6 +269,12 @@ class TestDEF075_LoadbalancePrimaryKeyContract:
             assert "auto_recovery" in strategy_columns
             assert "monitoring_probe_interval_seconds" in connection_columns
             assert "openai_probe_endpoint_variant" in connection_columns
+            assert "responses_minimal" in connection_probe_variant_constraint
+            assert "responses_reasoning_none" in connection_probe_variant_constraint
+            assert "chat_completions_minimal" in connection_probe_variant_constraint
+            assert (
+                "chat_completions_reasoning_none" in connection_probe_variant_constraint
+            )
         finally:
             await _drop_database(drift_database_url)
 

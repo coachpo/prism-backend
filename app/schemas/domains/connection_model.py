@@ -28,6 +28,13 @@ from .endpoint_pricing import (
 )
 from .profile_vendor import VendorResponse
 
+OpenAiProbeEndpointVariant = Literal[
+    "responses_minimal",
+    "responses_reasoning_none",
+    "chat_completions_minimal",
+    "chat_completions_reasoning_none",
+]
+
 
 DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS = 300
 MIN_MONITORING_PROBE_INTERVAL_SECONDS = 30
@@ -48,8 +55,8 @@ class ConnectionBase(BaseModel):
         ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
         le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
     )
-    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
-        "responses"
+    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant = (
+        "responses_minimal"
     )
 
 
@@ -88,9 +95,7 @@ class ConnectionUpdate(BaseModel):
         ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
         le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
     )
-    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] | None = (
-        None
-    )
+    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant | None = None
 
     @model_validator(mode="after")
     def validate_update(self):
@@ -119,8 +124,8 @@ class ConnectionResponse(BaseModel):
     max_in_flight_non_stream: int | None = None
     max_in_flight_stream: int | None = None
     monitoring_probe_interval_seconds: int
-    openai_probe_endpoint_variant: Literal["responses", "chat_completions"] = (
-        "responses"
+    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant = (
+        "responses_minimal"
     )
     pricing_template: ConnectionPricingTemplateSummary | None = Field(
         default=None,
@@ -147,10 +152,14 @@ class ConnectionResponse(BaseModel):
     @classmethod
     def normalize_openai_probe_endpoint_variant(
         cls, value: str | None
-    ) -> Literal["responses", "chat_completions"]:
-        if value == "chat_completions":
-            return "chat_completions"
-        return "responses"
+    ) -> OpenAiProbeEndpointVariant:
+        if value == "responses_reasoning_none":
+            return "responses_reasoning_none"
+        if value == "chat_completions_minimal":
+            return "chat_completions_minimal"
+        if value == "chat_completions_reasoning_none":
+            return "chat_completions_reasoning_none"
+        return "responses_minimal"
 
 
 class HealthCheckResponse(BaseModel):
