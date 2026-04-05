@@ -115,16 +115,6 @@ def _build_candidate_score_input(
         last_live_success_at=ensure_utc_datetime(
             getattr(current_state, "last_live_success_at", None)
         ),
-        last_probe_status=getattr(current_state, "last_probe_status", None),
-        last_probe_at=ensure_utc_datetime(
-            getattr(current_state, "last_probe_at", None)
-        ),
-        endpoint_ping_ewma_ms=_as_float(
-            getattr(current_state, "endpoint_ping_ewma_ms", None)
-        ),
-        conversation_delay_ewma_ms=_as_float(
-            getattr(current_state, "conversation_delay_ewma_ms", None)
-        ),
     )
 
 

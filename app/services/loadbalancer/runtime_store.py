@@ -118,10 +118,6 @@ def _state_row_is_empty_after_compaction(
         and state_row.last_live_failure_kind is None
         and state_row.last_live_failure_at is None
         and state_row.last_live_success_at is None
-        and state_row.last_probe_status is None
-        and state_row.last_probe_at is None
-        and state_row.endpoint_ping_ewma_ms is None
-        and state_row.conversation_delay_ewma_ms is None
     )
 
 
@@ -156,10 +152,6 @@ async def upsert_and_lock_runtime_state(
             last_live_failure_kind=None,
             last_live_failure_at=None,
             last_live_success_at=None,
-            last_probe_status=None,
-            last_probe_at=None,
-            endpoint_ping_ewma_ms=None,
-            conversation_delay_ewma_ms=None,
             created_at=normalized_now,
             updated_at=normalized_now,
         )
@@ -526,96 +518,6 @@ async def acquire_half_open_probe_lease(
     return RuntimeLeaseAcquireResult(admitted=True, lease_token=lease_token)
 
 
-async def acquire_monitoring_probe_lease(
-    *,
-    session: AsyncSession,
-    profile_id: int,
-    connection_id: int,
-    lease_ttl_seconds: int,
-    interval_seconds: int | None = None,
-    now_at: datetime | None = None,
-) -> RuntimeLeaseAcquireResult:
-    normalized_now = ensure_utc_datetime(now_at) or utc_now()
-    state_row = await upsert_and_lock_runtime_state(
-        session=session,
-        profile_id=profile_id,
-        connection_id=connection_id,
-        now_at=normalized_now,
-    )
-
-    _ = await _release_expired_leases_for_state(
-        session=session,
-        state_row=state_row,
-        now_at=normalized_now,
-    )
-    blocked_until_at = ensure_utc_datetime(state_row.blocked_until_at)
-    probe_available_at = ensure_utc_datetime(state_row.probe_available_at)
-    if probe_available_at is None:
-        probe_available_at = blocked_until_at
-
-    active_probe = (
-        await session.execute(
-            select(RoutingConnectionRuntimeLease)
-            .where(
-                RoutingConnectionRuntimeLease.profile_id == profile_id,
-                RoutingConnectionRuntimeLease.connection_id == connection_id,
-                RoutingConnectionRuntimeLease.lease_kind == "half_open_probe",
-                RoutingConnectionRuntimeLease.expires_at > normalized_now,
-            )
-            .with_for_update()
-        )
-    ).scalar_one_or_none()
-    if active_probe is not None:
-        return RuntimeLeaseAcquireResult(
-            admitted=False,
-            deny_reason="probe_in_progress",
-        )
-
-    if interval_seconds is not None and state_row.circuit_state == "closed":
-        last_probe_at = ensure_utc_datetime(state_row.last_probe_at)
-        if (
-            last_probe_at is not None
-            and last_probe_at.timestamp() + interval_seconds
-            > normalized_now.timestamp()
-        ):
-            return RuntimeLeaseAcquireResult(
-                admitted=False,
-                deny_reason="probe_not_due",
-            )
-
-    if state_row.circuit_state == "open":
-        if blocked_until_at is not None and blocked_until_at > normalized_now:
-            return RuntimeLeaseAcquireResult(
-                admitted=False,
-                deny_reason="probe_not_ready",
-            )
-        if probe_available_at is not None and probe_available_at > normalized_now:
-            return RuntimeLeaseAcquireResult(
-                admitted=False,
-                deny_reason="probe_not_ready",
-            )
-        state_row.circuit_state = "half_open"
-        state_row.probe_available_at = normalized_now + timedelta(
-            seconds=lease_ttl_seconds
-        )
-        state_row.updated_at = normalized_now
-
-    lease_token = uuid4().hex
-    session.add(
-        RoutingConnectionRuntimeLease(
-            lease_token=lease_token,
-            profile_id=profile_id,
-            connection_id=connection_id,
-            lease_kind="half_open_probe",
-            expires_at=normalized_now + timedelta(seconds=lease_ttl_seconds),
-            heartbeat_at=normalized_now,
-            created_at=normalized_now,
-            updated_at=normalized_now,
-        )
-    )
-    return RuntimeLeaseAcquireResult(admitted=True, lease_token=lease_token)
-
-
 async def mark_probe_eligible_logged(
     *,
     session: AsyncSession,
@@ -761,15 +663,11 @@ async def record_connection_recovery_state(
     return snapshot
 
 
-async def apply_fused_monitoring_update(
+async def apply_live_runtime_observation_update(
     *,
     session: AsyncSession,
     profile_id: int,
     connection_id: int,
-    last_probe_status: str | None,
-    last_probe_at: datetime | None,
-    endpoint_ping_ewma_ms: float | None,
-    conversation_delay_ewma_ms: float | None,
     live_p95_latency_ms: int | None,
     last_live_failure_kind: str | None,
     last_live_failure_at: datetime | None,
@@ -783,10 +681,6 @@ async def apply_fused_monitoring_update(
         connection_id=connection_id,
         now_at=normalized_now,
     )
-    current_state.last_probe_status = last_probe_status
-    current_state.last_probe_at = ensure_utc_datetime(last_probe_at)
-    current_state.endpoint_ping_ewma_ms = endpoint_ping_ewma_ms
-    current_state.conversation_delay_ewma_ms = conversation_delay_ewma_ms
     current_state.live_p95_latency_ms = live_p95_latency_ms
     current_state.last_live_failure_kind = last_live_failure_kind
     current_state.last_live_failure_at = ensure_utc_datetime(last_live_failure_at)
@@ -1032,8 +926,7 @@ async def reconcile_all_connection_runtime_state(
 __all__ = [
     "acquire_connection_lease",
     "acquire_half_open_probe_lease",
-    "acquire_monitoring_probe_lease",
-    "apply_fused_monitoring_update",
+    "apply_live_runtime_observation_update",
     "clear_connection_runtime_state",
     "clear_connection_runtime_states",
     "clear_model_runtime_state",

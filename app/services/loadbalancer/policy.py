@@ -15,10 +15,6 @@ RoutingObjective = Literal["minimize_latency", "maximize_availability"]
 _DEFAULT_DEADLINE_BUDGET_MS = 30_000
 _DEFAULT_HEDGE_DELAY_MS = 1_500
 _DEFAULT_MAX_ADDITIONAL_ATTEMPTS = 1
-_DEFAULT_MONITORING_STALE_AFTER_SECONDS = 300
-_DEFAULT_MONITORING_ENDPOINT_PING_WEIGHT = 1.0
-_DEFAULT_MONITORING_CONVERSATION_DELAY_WEIGHT = 1.0
-_DEFAULT_MONITORING_FAILURE_PENALTY_WEIGHT = 2.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -42,11 +38,6 @@ class EffectiveLoadbalancePolicy:
     failover_ban_duration_seconds: int
     admission_respect_qps_limit: bool
     admission_respect_in_flight_limits: bool
-    monitoring_enabled: bool
-    monitoring_stale_after_seconds: int
-    monitoring_endpoint_ping_weight: float
-    monitoring_conversation_delay_weight: float
-    monitoring_failure_penalty_weight: float
 
     @property
     def kind(self) -> str:
@@ -262,7 +253,6 @@ def canonicalize_routing_policy_document(
     hedge = _get_object_member(routing_policy, "hedge", {})
     circuit_breaker = _get_object_member(routing_policy, "circuit_breaker", {})
     admission = _get_object_member(routing_policy, "admission", {})
-    monitoring = _get_object_member(routing_policy, "monitoring", {})
     normalized_ban_mode = _resolve_ban_mode(
         _get_object_member(circuit_breaker, "ban_mode", None),
         default="off",
@@ -345,28 +335,6 @@ def canonicalize_routing_policy_document(
                 default=True,
             ),
         },
-        "monitoring": {
-            "enabled": _resolve_bool(
-                _get_object_member(monitoring, "enabled", None),
-                default=True,
-            ),
-            "stale_after_seconds": _resolve_int(
-                _get_object_member(monitoring, "stale_after_seconds", None),
-                default=_DEFAULT_MONITORING_STALE_AFTER_SECONDS,
-            ),
-            "endpoint_ping_weight": _resolve_float(
-                _get_object_member(monitoring, "endpoint_ping_weight", None),
-                default=_DEFAULT_MONITORING_ENDPOINT_PING_WEIGHT,
-            ),
-            "conversation_delay_weight": _resolve_float(
-                _get_object_member(monitoring, "conversation_delay_weight", None),
-                default=_DEFAULT_MONITORING_CONVERSATION_DELAY_WEIGHT,
-            ),
-            "failure_penalty_weight": _resolve_float(
-                _get_object_member(monitoring, "failure_penalty_weight", None),
-                default=_DEFAULT_MONITORING_FAILURE_PENALTY_WEIGHT,
-            ),
-        },
     }
 
 
@@ -427,13 +395,6 @@ def serialize_routing_policy(policy: EffectiveLoadbalancePolicy) -> dict[str, ob
             "respect_qps_limit": policy.admission_respect_qps_limit,
             "respect_in_flight_limits": policy.admission_respect_in_flight_limits,
         },
-        "monitoring": {
-            "enabled": policy.monitoring_enabled,
-            "stale_after_seconds": policy.monitoring_stale_after_seconds,
-            "endpoint_ping_weight": policy.monitoring_endpoint_ping_weight,
-            "conversation_delay_weight": policy.monitoring_conversation_delay_weight,
-            "failure_penalty_weight": policy.monitoring_failure_penalty_weight,
-        },
     }
 
 
@@ -465,11 +426,6 @@ def _build_legacy_policy(
             failover_ban_duration_seconds=0,
             admission_respect_qps_limit=True,
             admission_respect_in_flight_limits=True,
-            monitoring_enabled=False,
-            monitoring_stale_after_seconds=_DEFAULT_MONITORING_STALE_AFTER_SECONDS,
-            monitoring_endpoint_ping_weight=0.0,
-            monitoring_conversation_delay_weight=0.0,
-            monitoring_failure_penalty_weight=0.0,
         )
 
     cooldown = cast(dict[str, Any], auto_recovery["cooldown"])
@@ -497,11 +453,6 @@ def _build_legacy_policy(
         failover_ban_duration_seconds=cast(int, ban.get("ban_duration_seconds", 0)),
         admission_respect_qps_limit=True,
         admission_respect_in_flight_limits=True,
-        monitoring_enabled=False,
-        monitoring_stale_after_seconds=_DEFAULT_MONITORING_STALE_AFTER_SECONDS,
-        monitoring_endpoint_ping_weight=0.0,
-        monitoring_conversation_delay_weight=0.0,
-        monitoring_failure_penalty_weight=0.0,
     )
 
 
@@ -521,7 +472,6 @@ def resolve_effective_loadbalance_policy(
     hedge = cast(dict[str, Any], routing_policy["hedge"])
     circuit_breaker = cast(dict[str, Any], routing_policy["circuit_breaker"])
     admission = cast(dict[str, Any], routing_policy["admission"])
-    monitoring = cast(dict[str, Any], routing_policy["monitoring"])
 
     return EffectiveLoadbalancePolicy(
         strategy_type="adaptive",
@@ -554,13 +504,6 @@ def resolve_effective_loadbalance_policy(
             bool,
             admission["respect_in_flight_limits"],
         ),
-        monitoring_enabled=cast(bool, monitoring["enabled"]),
-        monitoring_stale_after_seconds=cast(int, monitoring["stale_after_seconds"]),
-        monitoring_endpoint_ping_weight=float(monitoring["endpoint_ping_weight"]),
-        monitoring_conversation_delay_weight=float(
-            monitoring["conversation_delay_weight"]
-        ),
-        monitoring_failure_penalty_weight=float(monitoring["failure_penalty_weight"]),
     )
 
 
@@ -578,15 +521,6 @@ def build_default_routing_policy_document() -> dict[str, object]:
                 "enabled": False,
                 "delay_ms": _DEFAULT_HEDGE_DELAY_MS,
                 "max_additional_attempts": _DEFAULT_MAX_ADDITIONAL_ATTEMPTS,
-            },
-            monitoring={
-                "enabled": True,
-                "stale_after_seconds": _DEFAULT_MONITORING_STALE_AFTER_SECONDS,
-                "endpoint_ping_weight": _DEFAULT_MONITORING_ENDPOINT_PING_WEIGHT,
-                "conversation_delay_weight": (
-                    _DEFAULT_MONITORING_CONVERSATION_DELAY_WEIGHT
-                ),
-                "failure_penalty_weight": _DEFAULT_MONITORING_FAILURE_PENALTY_WEIGHT,
             },
             circuit_breaker={
                 "failure_status_codes": list(DEFAULT_FAILOVER_STATUS_CODES),

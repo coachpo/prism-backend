@@ -9,10 +9,9 @@ from .types import AttemptCandidate, AttemptCandidateScoreInput
 
 _OPEN_CIRCUIT_PENALTY = 4_000.0
 _HALF_OPEN_CIRCUIT_PENALTY = 2_000.0
-_STALE_STATE_PENALTY = 6_000.0
-_UNHEALTHY_PROBE_PENALTY = 10_000.0
 _RECENT_FAILURE_BASE_PENALTY = 8_000.0
 _SATURATION_BASE_PENALTY = 10_000.0
+_LIVE_OBSERVATION_FRESHNESS_SECONDS = 300.0
 
 
 def _connection_priority(score_input: AttemptCandidateScoreInput) -> int:
@@ -41,45 +40,6 @@ def _objective_failure_multiplier(policy: EffectiveLoadbalancePolicy) -> float:
 
 def _objective_saturation_multiplier(policy: EffectiveLoadbalancePolicy) -> float:
     return 1.0 if policy.routing_objective == "minimize_latency" else 1.25
-
-
-def _latest_live_observation_at(
-    score_input: AttemptCandidateScoreInput,
-) -> datetime | None:
-    observed_at_values = [
-        ensure_utc_datetime(score_input.last_live_failure_at),
-        ensure_utc_datetime(score_input.last_live_success_at),
-    ]
-    present = [value for value in observed_at_values if value is not None]
-    if not present:
-        return None
-    return max(present)
-
-
-def _has_fresh_live_observation(
-    policy: EffectiveLoadbalancePolicy,
-    score_input: AttemptCandidateScoreInput,
-    *,
-    now_at: datetime,
-) -> bool:
-    latest_observation_at = _latest_live_observation_at(score_input)
-    if latest_observation_at is None:
-        return False
-    age_seconds = (now_at - latest_observation_at).total_seconds()
-    return age_seconds <= float(policy.monitoring_stale_after_seconds)
-
-
-def _has_fresh_probe_observation(
-    policy: EffectiveLoadbalancePolicy,
-    score_input: AttemptCandidateScoreInput,
-    *,
-    now_at: datetime,
-) -> bool:
-    last_probe_at = ensure_utc_datetime(score_input.last_probe_at)
-    if last_probe_at is None:
-        return False
-    age_seconds = (now_at - last_probe_at).total_seconds()
-    return age_seconds <= float(policy.monitoring_stale_after_seconds)
 
 
 def _circuit_penalty(score_input: AttemptCandidateScoreInput) -> float:
@@ -121,20 +81,10 @@ def _saturation_penalty(
 def _latency_penalty(
     policy: EffectiveLoadbalancePolicy,
     score_input: AttemptCandidateScoreInput,
-    *,
-    use_probe_fallback: bool,
 ) -> float:
-    latency_penalty = float(score_input.live_p95_latency_ms or 0.0)
-    if policy.monitoring_enabled and use_probe_fallback:
-        if score_input.endpoint_ping_ewma_ms is not None:
-            latency_penalty += policy.monitoring_endpoint_ping_weight * float(
-                score_input.endpoint_ping_ewma_ms
-            )
-        if score_input.conversation_delay_ewma_ms is not None:
-            latency_penalty += policy.monitoring_conversation_delay_weight * float(
-                score_input.conversation_delay_ewma_ms
-            )
-    return _objective_latency_multiplier(policy) * latency_penalty
+    return _objective_latency_multiplier(policy) * float(
+        score_input.live_p95_latency_ms or 0.0
+    )
 
 
 def _recent_failure_penalty(
@@ -151,36 +101,15 @@ def _recent_failure_penalty(
         return 0.0
 
     age_seconds = max((now_at - failure_at).total_seconds(), 0.0)
-    freshness_window = max(float(policy.monitoring_stale_after_seconds), 1.0)
-    freshness_ratio = max(0.0, 1.0 - (age_seconds / freshness_window))
+    freshness_ratio = max(
+        0.0,
+        1.0 - (age_seconds / _LIVE_OBSERVATION_FRESHNESS_SECONDS),
+    )
     return (
         _objective_failure_multiplier(policy)
-        * policy.monitoring_failure_penalty_weight
         * _RECENT_FAILURE_BASE_PENALTY
         * freshness_ratio
     )
-
-
-def _probe_penalty(
-    policy: EffectiveLoadbalancePolicy,
-    score_input: AttemptCandidateScoreInput,
-    *,
-    fallback_active: bool,
-    fresh_probe_available: bool,
-) -> float:
-    if not policy.monitoring_enabled:
-        return 0.0
-    if not fallback_active:
-        return 0.0
-    if not fresh_probe_available:
-        return _objective_failure_multiplier(policy) * _STALE_STATE_PENALTY
-    if score_input.last_probe_status == "unhealthy":
-        return (
-            _objective_failure_multiplier(policy)
-            * policy.monitoring_failure_penalty_weight
-            * _UNHEALTHY_PROBE_PENALTY
-        )
-    return 0.0
 
 
 def score_candidate(
@@ -191,17 +120,6 @@ def score_candidate(
     is_streaming: bool = False,
 ) -> float:
     normalized_now = ensure_utc_datetime(now_at) or utc_now()
-    has_fresh_live_observation = _has_fresh_live_observation(
-        policy,
-        score_input,
-        now_at=normalized_now,
-    )
-    has_fresh_probe_observation = _has_fresh_probe_observation(
-        policy,
-        score_input,
-        now_at=normalized_now,
-    )
-    use_probe_fallback = not has_fresh_live_observation and has_fresh_probe_observation
     total_score = 0.0
     total_score += _circuit_penalty(score_input)
     total_score += _saturation_penalty(
@@ -209,21 +127,11 @@ def score_candidate(
         score_input,
         is_streaming=is_streaming,
     )
-    total_score += _latency_penalty(
-        policy,
-        score_input,
-        use_probe_fallback=use_probe_fallback,
-    )
+    total_score += _latency_penalty(policy, score_input)
     total_score += _recent_failure_penalty(
         policy,
         score_input,
         now_at=normalized_now,
-    )
-    total_score += _probe_penalty(
-        policy,
-        score_input,
-        fallback_active=not has_fresh_live_observation,
-        fresh_probe_available=has_fresh_probe_observation,
     )
     return total_score
 
