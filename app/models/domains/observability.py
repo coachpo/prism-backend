@@ -244,9 +244,6 @@ class UserSetting(Base):
         String(5), default="$", nullable=False
     )
     timezone_preference: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    monitoring_probe_interval_seconds: Mapped[int] = mapped_column(
-        Integer, default=300, nullable=False
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now
     )
@@ -388,57 +385,6 @@ class AuditLog(Base):
     profile: Mapped[Any] = relationship("Profile", back_populates="audit_logs")
 
 
-class MonitoringConnectionProbeResult(Base):
-    __tablename__ = "monitoring_connection_probe_results"
-    __table_args__ = (
-        Index(
-            "idx_monitoring_connection_probe_results_profile_checked_at",
-            "profile_id",
-            "checked_at",
-        ),
-        Index(
-            "idx_monitoring_connection_probe_results_connection_checked_at",
-            "connection_id",
-            "checked_at",
-        ),
-        CheckConstraint(
-            "endpoint_ping_status IN ('healthy', 'degraded', 'unhealthy')",
-            name="ck_monitoring_connection_probe_results_endpoint_ping_status",
-        ),
-        CheckConstraint(
-            "conversation_status IN ('healthy', 'degraded', 'unhealthy')",
-            name="ck_monitoring_connection_probe_results_conversation_status",
-        ),
-    )
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    profile_id: Mapped[int] = mapped_column(
-        ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    vendor_id: Mapped[int] = mapped_column(
-        ForeignKey("vendors.id"), nullable=False, index=True
-    )
-    model_config_id: Mapped[int] = mapped_column(
-        ForeignKey("model_configs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    connection_id: Mapped[int] = mapped_column(
-        ForeignKey("connections.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    endpoint_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
-    endpoint_ping_status: Mapped[str] = mapped_column(String(20), nullable=False)
-    endpoint_ping_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    conversation_status: Mapped[str] = mapped_column(String(20), nullable=False)
-    conversation_delay_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    failure_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
-    checked_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, nullable=False, index=True
-    )
-
-    profile: Mapped[Any] = relationship("Profile")
-    vendor: Mapped[Any] = relationship("Vendor")
-
-
 class RoutingConnectionRuntimeState(Base):
     __tablename__ = "routing_connection_runtime_state"
     __table_args__ = (
@@ -536,16 +482,6 @@ class RoutingConnectionRuntimeState(Base):
     )
     last_live_success_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
-    )
-    last_probe_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    last_probe_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    endpoint_ping_ewma_ms: Mapped[float | None] = mapped_column(
-        Numeric(10, 2), nullable=True
-    )
-    conversation_delay_ewma_ms: Mapped[float | None] = mapped_column(
-        Numeric(10, 2), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False

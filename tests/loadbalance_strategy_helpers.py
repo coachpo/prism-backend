@@ -65,11 +65,6 @@ def make_routing_policy_adaptive(
     ban_duration_seconds: int = 0,
     respect_qps_limit: bool = True,
     respect_in_flight_limits: bool = True,
-    monitoring_enabled: bool = True,
-    stale_after_seconds: int = 300,
-    endpoint_ping_weight: float = 1.0,
-    conversation_delay_weight: float = 1.0,
-    failure_penalty_weight: float = 2.0,
 ) -> dict[str, object]:
     circuit_breaker: dict[str, object] = {
         "failure_status_codes": sorted(
@@ -98,13 +93,6 @@ def make_routing_policy_adaptive(
         "admission": {
             "respect_qps_limit": respect_qps_limit,
             "respect_in_flight_limits": respect_in_flight_limits,
-        },
-        "monitoring": {
-            "enabled": monitoring_enabled,
-            "stale_after_seconds": stale_after_seconds,
-            "endpoint_ping_weight": endpoint_ping_weight,
-            "conversation_delay_weight": conversation_delay_weight,
-            "failure_penalty_weight": failure_penalty_weight,
         },
     }
 

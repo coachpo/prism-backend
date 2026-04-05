@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 import httpx
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.models.models import Connection, Endpoint
 from app.services.proxy_service import (
@@ -71,22 +72,22 @@ def _expected_openai_chat_completions_reasoning_none_probe_body(
 class TestDEF059_HealthCheckRequestBuilder:
     """DEF-059 (P0): health checks must use api-family-native paths and payloads."""
 
-    def test_router_builder_delegates_openai_probe_payload_to_monitoring_semantics(
+    def test_router_builder_delegates_openai_probe_payload_to_connection_health_semantics(
         self,
     ):
         from app.routers.connections_domains import health_check_builders
 
         expected_request = (
-            "/monitoring/probe",
+            "/connection-health/check",
             {"probe": "request", "variant": "chat_completions_reasoning_none"},
         )
 
         with patch.object(
             health_check_builders,
-            "_build_monitoring_conversation_request",
+            "_build_connection_health_conversation_request",
             create=True,
             return_value=expected_request,
-        ) as monitoring_builder:
+        ) as request_builder:
             request = health_check_builders._build_health_check_request(
                 "openai",
                 "gpt-5.4-mini",
@@ -94,11 +95,45 @@ class TestDEF059_HealthCheckRequestBuilder:
             )
 
         assert request == expected_request
-        monitoring_builder.assert_called_once_with(
+        request_builder.assert_called_once_with(
             "openai",
             "gpt-5.4-mini",
             openai_variant="chat_completions_reasoning_none",
         )
+
+    def test_main_app_does_not_mount_monitoring_router(self):
+        from fastapi.routing import APIRoute
+
+        from app.main import app
+
+        registered_routes = {
+            (route.path, method)
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            for method in route.methods or set()
+        }
+
+        assert ("/api/monitoring/overview", "GET") not in registered_routes
+        assert ("/api/monitoring/vendors/{vendor_id}", "GET") not in registered_routes
+        assert (
+            "/api/monitoring/models/{model_config_id}",
+            "GET",
+        ) not in registered_routes
+
+    def test_settings_router_does_not_mount_monitoring_settings_routes(self):
+        from fastapi.routing import APIRoute
+
+        from app.routers.settings import router
+
+        registered_routes = {
+            (route.path, method)
+            for route in router.routes
+            if isinstance(route, APIRoute)
+            for method in route.methods or set()
+        }
+
+        assert ("/api/settings/monitoring", "GET") not in registered_routes
+        assert ("/api/settings/monitoring", "PUT") not in registered_routes
 
     def test_openai_health_check_uses_responses_minimal_endpoint_by_default(self):
         from app.routers.connections import _build_health_check_request
@@ -197,7 +232,7 @@ class TestDEF059_HealthCheckRequestBuilder:
     async def test_probe_runner_uses_model_api_family_even_when_vendor_metadata_differs(
         self,
     ):
-        from app.services.monitoring_service import run_connection_probe
+        from app.services.connection_health import run_connection_health_check
 
         vendor = MagicMock()
         vendor.id = 19
@@ -218,9 +253,6 @@ class TestDEF059_HealthCheckRequestBuilder:
             api_family="anthropic",
             model_id="claude-sonnet-4-5",
             vendor=vendor,
-            loadbalance_strategy=MagicMock(
-                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
-            ),
         )
 
         execute_probe_request_fn = AsyncMock(
@@ -230,7 +262,7 @@ class TestDEF059_HealthCheckRequestBuilder:
             ]
         )
 
-        result = await run_connection_probe(
+        result = await run_connection_health_check(
             db=AsyncMock(),
             client=AsyncMock(),
             profile_id=1,
@@ -239,7 +271,6 @@ class TestDEF059_HealthCheckRequestBuilder:
             load_blocklist_rules_fn=AsyncMock(return_value=[]),
             build_upstream_headers_fn=MagicMock(return_value={"x-api-key": "sk-test"}),
             execute_probe_request_fn=execute_probe_request_fn,
-            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
         )
 
         assert result.fused_status == "healthy"
@@ -259,7 +290,7 @@ class TestDEF059_HealthCheckRequestBuilder:
     async def test_probe_runner_uses_openai_chat_completions_reasoning_none_variant_for_both_probe_legs(
         self,
     ):
-        from app.services.monitoring_service import run_connection_probe
+        from app.services.connection_health import run_connection_health_check
 
         vendor = MagicMock()
         vendor.id = 23
@@ -280,9 +311,6 @@ class TestDEF059_HealthCheckRequestBuilder:
             api_family="openai",
             model_id="gpt-5.4-mini",
             vendor=vendor,
-            loadbalance_strategy=MagicMock(
-                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
-            ),
         )
 
         execute_probe_request_fn = AsyncMock(
@@ -292,7 +320,7 @@ class TestDEF059_HealthCheckRequestBuilder:
             ]
         )
 
-        result = await run_connection_probe(
+        result = await run_connection_health_check(
             db=AsyncMock(),
             client=AsyncMock(),
             profile_id=1,
@@ -303,7 +331,6 @@ class TestDEF059_HealthCheckRequestBuilder:
                 return_value={"authorization": "Bearer sk-test"}
             ),
             execute_probe_request_fn=execute_probe_request_fn,
-            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
         )
 
         assert result.fused_status == "healthy"
@@ -324,149 +351,6 @@ class TestDEF059_HealthCheckRequestBuilder:
         assert execute_probe_request_fn.await_args_list[1].kwargs["body"] == (
             _expected_openai_chat_completions_reasoning_none_probe_body("gpt-5.4-mini")
         )
-
-    @pytest.mark.asyncio
-    async def test_probe_runner_caps_scheduled_probe_jitter_at_configured_max(
-        self,
-    ):
-        from app.services.monitoring_service import run_connection_probe
-
-        vendor = MagicMock()
-        vendor.id = 31
-        vendor.key = "openai"
-
-        endpoint = MagicMock()
-        endpoint.id = 801
-        endpoint.base_url = "https://api.openai.com"
-
-        connection = MagicMock()
-        connection.id = 3003
-        connection.profile_id = 1
-        connection.endpoint_id = 801
-        connection.openai_probe_endpoint_variant = "responses_minimal"
-        connection.endpoint_rel = endpoint
-        connection.model_config_rel = MagicMock(
-            id=501,
-            api_family="openai",
-            model_id="gpt-5.4-mini",
-            vendor=vendor,
-            loadbalance_strategy=MagicMock(
-                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
-            ),
-        )
-
-        requested_jitter_seconds = 37.0
-        expected_jitter_seconds = 10.0
-        state = {"slept": False}
-        probe_results = iter(
-            [
-                ("healthy", "Connection successful", 9),
-                ("healthy", "Connection successful", 12),
-            ]
-        )
-
-        async def sleep_fn(seconds: float) -> None:
-            assert seconds == expected_jitter_seconds
-            state["slept"] = True
-
-        async def execute_probe_request_fn(*args, **kwargs):
-            _ = args
-            _ = kwargs
-            assert state["slept"] is True
-            return next(probe_results)
-
-        resolve_probe_jitter_seconds_fn = MagicMock(
-            return_value=requested_jitter_seconds
-        )
-        acquire_probe_lease_fn = AsyncMock(
-            return_value=SimpleNamespace(admitted=True, lease_token="lease-1")
-        )
-        release_probe_lease_fn = AsyncMock()
-        runtime_state_result = MagicMock()
-        runtime_state_result.scalar_one_or_none.return_value = None
-        mock_db = AsyncMock()
-        mock_db.execute = AsyncMock(return_value=runtime_state_result)
-
-        result = await run_connection_probe(
-            db=mock_db,
-            client=AsyncMock(),
-            profile_id=1,
-            connection_id=connection.id,
-            acquire_probe_lease=True,
-            load_connection_fn=AsyncMock(return_value=connection),
-            load_blocklist_rules_fn=AsyncMock(return_value=[]),
-            build_upstream_headers_fn=MagicMock(
-                return_value={"authorization": "Bearer sk-test"}
-            ),
-            execute_probe_request_fn=execute_probe_request_fn,
-            acquire_probe_lease_fn=acquire_probe_lease_fn,
-            release_probe_lease_fn=release_probe_lease_fn,
-            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
-            resolve_probe_jitter_seconds_fn=resolve_probe_jitter_seconds_fn,
-            sleep_fn=sleep_fn,
-        )
-
-        assert result.fused_status == "healthy"
-        assert state["slept"] is True
-        resolve_probe_jitter_seconds_fn.assert_called_once_with()
-        acquire_probe_lease_fn.assert_awaited_once()
-        release_probe_lease_fn.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_probe_runner_skips_jitter_for_manual_probe_requests(self):
-        from app.services.monitoring_service import run_connection_probe
-
-        vendor = MagicMock()
-        vendor.id = 32
-        vendor.key = "openai"
-
-        endpoint = MagicMock()
-        endpoint.id = 802
-        endpoint.base_url = "https://api.openai.com"
-
-        connection = MagicMock()
-        connection.id = 3004
-        connection.profile_id = 1
-        connection.endpoint_id = 802
-        connection.openai_probe_endpoint_variant = "responses_minimal"
-        connection.endpoint_rel = endpoint
-        connection.model_config_rel = MagicMock(
-            id=502,
-            api_family="openai",
-            model_id="gpt-5.4-mini",
-            vendor=vendor,
-            loadbalance_strategy=MagicMock(
-                routing_policy={"kind": "adaptive", "monitoring": {"enabled": True}}
-            ),
-        )
-
-        sleep_fn = AsyncMock()
-        resolve_probe_jitter_seconds_fn = MagicMock(return_value=10.0)
-
-        result = await run_connection_probe(
-            db=AsyncMock(),
-            client=AsyncMock(),
-            profile_id=1,
-            connection_id=connection.id,
-            load_connection_fn=AsyncMock(return_value=connection),
-            load_blocklist_rules_fn=AsyncMock(return_value=[]),
-            build_upstream_headers_fn=MagicMock(
-                return_value={"authorization": "Bearer sk-test"}
-            ),
-            execute_probe_request_fn=AsyncMock(
-                side_effect=[
-                    ("healthy", "Connection successful", 9),
-                    ("healthy", "Connection successful", 12),
-                ]
-            ),
-            record_probe_outcome_fn=AsyncMock(return_value="healthy"),
-            resolve_probe_jitter_seconds_fn=resolve_probe_jitter_seconds_fn,
-            sleep_fn=sleep_fn,
-        )
-
-        assert result.fused_status == "healthy"
-        sleep_fn.assert_not_awaited()
-        resolve_probe_jitter_seconds_fn.assert_not_called()
 
 
 class TestMonitoringManualHealthChecksAndPersistence:
@@ -601,7 +485,6 @@ class TestMonitoringManualHealthChecksAndPersistence:
                     api_key="sk-inline-preview",
                 ),
                 custom_headers={"X-Test": "preview"},
-                openai_probe_endpoint_variant="chat_completions_reasoning_none",
             ),
             request=request,
             db=mock_db,
@@ -621,352 +504,42 @@ class TestMonitoringManualHealthChecksAndPersistence:
         assert probe_kwargs["connection"].profile_id == 1
         assert probe_kwargs["api_family"] == "openai"
         assert probe_kwargs["model_id"] == "gpt-5.4-mini"
-        assert probe_kwargs["openai_variant"] == "chat_completions_reasoning_none"
+        assert probe_kwargs["openai_variant"] == "responses_minimal"
         assert probe_kwargs["endpoint"].name == "Preview Endpoint"
         assert probe_kwargs["endpoint"].base_url == "https://api.openai.com"
         assert "headers" not in probe_kwargs
-        assert probe_kwargs["connection"].openai_probe_endpoint_variant == (
-            "chat_completions_reasoning_none"
-        )
         mock_db.add.assert_not_called()
         assert mock_db.flush.await_count == 0
 
-    @pytest.mark.asyncio
-    async def test_create_connection_record_persists_openai_probe_endpoint_variant(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.creation import (
-            create_connection_record,
-        )
+    def test_connection_create_rejects_monitoring_probe_interval_field(self):
         from app.schemas.schemas import ConnectionCreate
 
-        endpoint = SimpleNamespace(id=77)
-        mock_db = AsyncMock()
-        mock_db.add = MagicMock()
-        mock_db.flush = AsyncMock()
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(return_value=[]),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=SimpleNamespace(id=1)),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="openai")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(return_value=None),
-            validate_pricing_template_id_fn=AsyncMock(return_value=None),
-        )
-
-        with patch(
-            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
-            AsyncMock(return_value=endpoint),
-        ):
-            await create_connection_record(
-                model_config_id=9,
-                body=ConnectionCreate(
-                    endpoint_id=endpoint.id,
-                    openai_probe_endpoint_variant="chat_completions_reasoning_none",
-                ),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
+        with pytest.raises(ValidationError):
+            ConnectionCreate(
+                endpoint_id=11,
+                monitoring_probe_interval_seconds=180,
             )
 
-        created_connection = mock_db.add.call_args.args[0]
-        assert (
-            created_connection.openai_probe_endpoint_variant
-            == "chat_completions_reasoning_none"
-        )
-
-    @pytest.mark.asyncio
-    async def test_update_connection_record_persists_openai_probe_endpoint_variant(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.updating import (
-            update_connection_record,
-        )
-        from app.schemas.schemas import ConnectionUpdate
-
-        connection = SimpleNamespace(
-            id=55,
-            profile_id=1,
-            endpoint_id=11,
-            model_config_id=9,
-            is_active=True,
-            auth_type=None,
-            custom_headers=None,
-            updated_at=None,
-        )
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=connection),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="openai")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(),
-            validate_pricing_template_id_fn=AsyncMock(),
-        )
-        mock_db = AsyncMock()
-        mock_db.flush = AsyncMock()
-
-        with patch(
-            "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
-            AsyncMock(
-                return_value={
-                    "openai_probe_endpoint_variant": "chat_completions_reasoning_none"
-                }
-            ),
-        ):
-            await update_connection_record(
-                connection_id=connection.id,
-                body=ConnectionUpdate(
-                    openai_probe_endpoint_variant="chat_completions_reasoning_none"
-                ),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
-            )
-
-        assert (
-            connection.openai_probe_endpoint_variant
-            == "chat_completions_reasoning_none"
-        )
-
-    @pytest.mark.asyncio
-    async def test_create_connection_record_normalizes_non_openai_probe_endpoint_variant(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.creation import (
-            create_connection_record,
-        )
+    def test_connection_create_rejects_openai_probe_variant_field(self):
         from app.schemas.schemas import ConnectionCreate
 
-        endpoint = SimpleNamespace(id=88)
-        mock_db = AsyncMock()
-        mock_db.add = MagicMock()
-        mock_db.flush = AsyncMock()
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(return_value=[]),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=SimpleNamespace(id=3)),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="anthropic")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(return_value=None),
-            validate_pricing_template_id_fn=AsyncMock(return_value=None),
-        )
-
-        with patch(
-            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
-            AsyncMock(return_value=endpoint),
-        ):
-            await create_connection_record(
-                model_config_id=10,
-                body=ConnectionCreate(
-                    endpoint_id=endpoint.id,
-                    openai_probe_endpoint_variant="chat_completions_reasoning_none",
-                ),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
+        with pytest.raises(ValidationError):
+            ConnectionCreate(
+                endpoint_id=11,
+                openai_probe_endpoint_variant="chat_completions_reasoning_none",
             )
 
-        created_connection = mock_db.add.call_args.args[0]
-        assert created_connection.openai_probe_endpoint_variant == "responses_minimal"
-
-    @pytest.mark.asyncio
-    async def test_update_connection_record_normalizes_non_openai_probe_endpoint_variant(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.updating import (
-            update_connection_record,
-        )
+    def test_connection_update_rejects_monitoring_probe_interval_field(self):
         from app.schemas.schemas import ConnectionUpdate
 
-        connection = SimpleNamespace(
-            id=57,
-            profile_id=1,
-            endpoint_id=11,
-            model_config_id=10,
-            is_active=True,
-            auth_type=None,
-            custom_headers=None,
-            updated_at=None,
-            openai_probe_endpoint_variant="chat_completions_reasoning_none",
-        )
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=connection),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="anthropic")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(),
-            validate_pricing_template_id_fn=AsyncMock(),
-        )
-        mock_db = AsyncMock()
-        mock_db.flush = AsyncMock()
+        with pytest.raises(ValidationError):
+            ConnectionUpdate(monitoring_probe_interval_seconds=240)
 
-        with patch(
-            "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
-            AsyncMock(
-                return_value={
-                    "openai_probe_endpoint_variant": "chat_completions_reasoning_none"
-                }
-            ),
-        ):
-            await update_connection_record(
-                connection_id=connection.id,
-                body=ConnectionUpdate(
-                    openai_probe_endpoint_variant="chat_completions_reasoning_none"
-                ),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
-            )
-
-        assert connection.openai_probe_endpoint_variant == "responses_minimal"
-
-    @pytest.mark.asyncio
-    async def test_create_connection_record_persists_monitoring_probe_interval_seconds(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.creation import (
-            create_connection_record,
-        )
-        from app.schemas.schemas import ConnectionCreate
-
-        endpoint = SimpleNamespace(id=78)
-        mock_db = AsyncMock()
-        mock_db.add = MagicMock()
-        mock_db.flush = AsyncMock()
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(return_value=[]),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=SimpleNamespace(id=2)),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="anthropic")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(return_value=None),
-            validate_pricing_template_id_fn=AsyncMock(return_value=None),
-        )
-
-        with patch(
-            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
-            AsyncMock(return_value=endpoint),
-        ):
-            await create_connection_record(
-                model_config_id=10,
-                body=ConnectionCreate(
-                    endpoint_id=endpoint.id,
-                    monitoring_probe_interval_seconds=180,
-                ),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
-            )
-
-        created_connection = mock_db.add.call_args.args[0]
-        assert created_connection.monitoring_probe_interval_seconds == 180
-
-    @pytest.mark.asyncio
-    async def test_update_connection_record_persists_monitoring_probe_interval_seconds(
-        self,
-    ):
-        from app.routers.connections_domains.crud_dependencies import (
-            ConnectionCrudDependencies,
-        )
-        from app.routers.connections_domains.crud_handlers.updating import (
-            update_connection_record,
-        )
+    def test_connection_update_rejects_openai_probe_variant_field(self):
         from app.schemas.schemas import ConnectionUpdate
 
-        connection = SimpleNamespace(
-            id=56,
-            profile_id=1,
-            endpoint_id=11,
-            model_config_id=9,
-            is_active=True,
-            auth_type=None,
-            custom_headers=None,
-            updated_at=None,
-        )
-        deps = ConnectionCrudDependencies(
-            clear_connection_state_fn=AsyncMock(),
-            clear_round_robin_state_for_model_fn=AsyncMock(),
-            create_endpoint_from_inline_fn=AsyncMock(),
-            ensure_model_config_ids_exist_fn=AsyncMock(),
-            list_ordered_connections_fn=AsyncMock(),
-            list_ordered_connections_for_models_fn=AsyncMock(),
-            load_connection_or_404_fn=AsyncMock(return_value=connection),
-            load_model_or_404_fn=AsyncMock(
-                return_value=SimpleNamespace(api_family="anthropic")
-            ),
-            lock_profile_row_fn=AsyncMock(),
-            normalize_connection_priorities_fn=MagicMock(),
-            serialize_custom_headers_fn=MagicMock(),
-            validate_pricing_template_id_fn=AsyncMock(),
-        )
-        mock_db = AsyncMock()
-        mock_db.flush = AsyncMock()
-
-        with patch(
-            "app.routers.connections_domains.crud_handlers.updating.build_connection_update_data",
-            AsyncMock(return_value={"monitoring_probe_interval_seconds": 240}),
-        ):
-            await update_connection_record(
-                connection_id=connection.id,
-                body=ConnectionUpdate(monitoring_probe_interval_seconds=240),
-                db=mock_db,
-                profile_id=1,
-                deps=deps,
-            )
-
-        assert connection.monitoring_probe_interval_seconds == 240
+        with pytest.raises(ValidationError):
+            ConnectionUpdate(openai_probe_endpoint_variant="responses_reasoning_none")
 
 
 class TestDEF066_OpenAIHealthCheckUsesMonitoringProbeSemantics:

@@ -59,10 +59,6 @@ class AttemptCandidateScoreInput:
     last_live_failure_kind: str | None
     last_live_failure_at: datetime | None
     last_live_success_at: datetime | None
-    last_probe_status: str | None
-    last_probe_at: datetime | None
-    endpoint_ping_ewma_ms: float | None
-    conversation_delay_ewma_ms: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,10 +106,6 @@ class AttemptPlan:
                         last_live_failure_kind=None,
                         last_live_failure_at=None,
                         last_live_success_at=None,
-                        last_probe_status=None,
-                        last_probe_at=None,
-                        endpoint_ping_ewma_ms=None,
-                        conversation_delay_ewma_ms=None,
                     ),
                     score=0.0,
                     sort_key=(0.0, getattr(connection, "priority", 0), connection.id),

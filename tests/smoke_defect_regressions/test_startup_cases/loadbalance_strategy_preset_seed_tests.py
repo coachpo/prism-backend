@@ -97,6 +97,7 @@ class TestDEF085_LoadbalanceStrategyPresetSeed:
         assert (
             adaptive_strategy.routing_policy == build_default_routing_policy_document()
         )
+        assert "monitoring" not in adaptive_strategy.routing_policy
 
     @pytest.mark.asyncio
     async def test_seed_loadbalance_strategy_presets_keeps_existing_adaptive_default_and_adds_missing_legacy(

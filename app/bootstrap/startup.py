@@ -22,9 +22,6 @@ from app.services.loadbalancer.policy import (
     build_default_auto_recovery_document,
     build_default_routing_policy_document,
 )
-from app.services.monitoring.scheduler import (
-    DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
-)
 from app.services.profile_invariants import ensure_profile_invariants
 
 logger = logging.getLogger(__name__)
@@ -299,21 +296,6 @@ async def seed_user_settings() -> None:
             for profile_id in profile_ids
             if profile_id not in existing_profile_ids
         ]
-        repaired_monitoring_defaults = 0
-
-        for settings_row in existing_settings:
-            if not hasattr(settings_row, "monitoring_probe_interval_seconds"):
-                continue
-            interval_seconds = getattr(
-                settings_row, "monitoring_probe_interval_seconds", None
-            )
-            if interval_seconds is not None:
-                continue
-            settings_row.monitoring_probe_interval_seconds = (
-                DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
-            )
-            repaired_monitoring_defaults += 1
-
         for profile_id in missing_profile_ids:
             session.add(
                 UserSetting(
@@ -321,18 +303,14 @@ async def seed_user_settings() -> None:
                     report_currency_code="USD",
                     report_currency_symbol="$",
                     timezone_preference=None,
-                    monitoring_probe_interval_seconds=(
-                        DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS
-                    ),
                 )
             )
 
-        if missing_profile_ids or repaired_monitoring_defaults:
+        if missing_profile_ids:
             await session.commit()
             logger.info(
-                "Seeded default user settings for %d profile(s) and repaired monitoring cadence for %d profile(s)",
+                "Seeded default user settings for %d profile(s)",
                 len(missing_profile_ids),
-                repaired_monitoring_defaults,
             )
 
 

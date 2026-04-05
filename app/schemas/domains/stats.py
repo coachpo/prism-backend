@@ -421,15 +421,6 @@ class TimezonePreferenceUpdate(BaseModel):
         return timezone
 
 
-class MonitoringSettingsResponse(BaseModel):
-    profile_id: int | None = None
-    monitoring_probe_interval_seconds: int
-
-
-class MonitoringSettingsUpdate(BaseModel):
-    monitoring_probe_interval_seconds: int = Field(ge=1)
-
-
 class SpendingSummaryResponse(BaseModel):
     total_cost_micros: int
     successful_request_count: int
@@ -584,10 +575,6 @@ class LoadbalanceCurrentStateItem(BaseModel):
     live_p95_latency_ms: int | None = None
     last_live_failure_at: datetime | None = None
     last_live_success_at: datetime | None = None
-    last_probe_status: str | None = None
-    last_probe_at: datetime | None = None
-    endpoint_ping_ewma_ms: float | None = None
-    conversation_delay_ewma_ms: float | None = None
     state: LoadbalanceCurrentStateValue
     created_at: datetime
     updated_at: datetime

@@ -575,11 +575,6 @@ async def execute_import_payload(
                 custom_headers=json.dumps(connection_data.custom_headers)
                 if connection_data.custom_headers
                 else None,
-                openai_probe_endpoint_variant=(
-                    connection_data.openai_probe_endpoint_variant
-                    if model.api_family == "openai"
-                    else "responses_minimal"
-                ),
                 qps_limit=connection_data.qps_limit,
                 max_in_flight_non_stream=connection_data.max_in_flight_non_stream,
                 max_in_flight_stream=connection_data.max_in_flight_stream,

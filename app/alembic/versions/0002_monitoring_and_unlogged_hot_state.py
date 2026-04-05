@@ -49,13 +49,6 @@ def upgrade() -> None:
                 'admission', jsonb_build_object(
                     'respect_qps_limit', true,
                     'respect_in_flight_limits', true
-                ),
-                'monitoring', jsonb_build_object(
-                    'enabled', true,
-                    'stale_after_seconds', 300,
-                    'endpoint_ping_weight', 1.0,
-                    'conversation_delay_weight', 1.0,
-                    'failure_penalty_weight', 2.0
                 )
             )
             """
@@ -64,105 +57,6 @@ def upgrade() -> None:
     op.alter_column("loadbalance_strategies", "routing_policy", nullable=False)
     op.drop_column("loadbalance_strategies", "auto_recovery")
     op.drop_column("loadbalance_strategies", "strategy_type")
-
-    op.add_column(
-        "connections",
-        sa.Column(
-            "openai_probe_endpoint_variant",
-            sa.String(length=30),
-            nullable=True,
-            server_default="responses",
-        ),
-    )
-    op.execute(
-        sa.text(
-            """
-            UPDATE connections
-            SET openai_probe_endpoint_variant = 'responses'
-            WHERE openai_probe_endpoint_variant IS NULL
-            """
-        )
-    )
-    op.alter_column(
-        "connections",
-        "openai_probe_endpoint_variant",
-        nullable=False,
-        server_default=None,
-    )
-    op.create_check_constraint(
-        "ck_connections_openai_probe_endpoint_variant",
-        "connections",
-        "openai_probe_endpoint_variant IN ('responses', 'chat_completions')",
-    )
-
-    op.add_column(
-        "user_settings",
-        sa.Column(
-            "monitoring_probe_interval_seconds",
-            sa.Integer(),
-            nullable=True,
-            server_default="300",
-        ),
-    )
-    op.execute(
-        sa.text(
-            """
-            UPDATE user_settings
-            SET monitoring_probe_interval_seconds = 300
-            WHERE monitoring_probe_interval_seconds IS NULL
-            """
-        )
-    )
-    op.alter_column(
-        "user_settings",
-        "monitoring_probe_interval_seconds",
-        nullable=False,
-        server_default=None,
-    )
-
-    op.create_table(
-        "monitoring_connection_probe_results",
-        sa.Column("id", sa.Integer(), nullable=False),
-        sa.Column("profile_id", sa.Integer(), nullable=False),
-        sa.Column("vendor_id", sa.Integer(), nullable=False),
-        sa.Column("model_config_id", sa.Integer(), nullable=False),
-        sa.Column("connection_id", sa.Integer(), nullable=False),
-        sa.Column("endpoint_id", sa.Integer(), nullable=False),
-        sa.Column("endpoint_ping_status", sa.String(length=20), nullable=False),
-        sa.Column("endpoint_ping_ms", sa.Integer(), nullable=True),
-        sa.Column("conversation_status", sa.String(length=20), nullable=False),
-        sa.Column("conversation_delay_ms", sa.Integer(), nullable=True),
-        sa.Column("failure_kind", sa.String(length=50), nullable=True),
-        sa.Column("detail", sa.Text(), nullable=True),
-        sa.Column("checked_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["vendor_id"], ["vendors.id"]),
-        sa.ForeignKeyConstraint(
-            ["model_config_id"], ["model_configs.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["connection_id"], ["connections.id"], ondelete="CASCADE"
-        ),
-        sa.PrimaryKeyConstraint("id"),
-        sa.CheckConstraint(
-            "endpoint_ping_status IN ('healthy', 'degraded', 'unhealthy')",
-            name="ck_monitoring_connection_probe_results_endpoint_ping_status",
-        ),
-        sa.CheckConstraint(
-            "conversation_status IN ('healthy', 'degraded', 'unhealthy')",
-            name="ck_monitoring_connection_probe_results_conversation_status",
-        ),
-    )
-    op.create_index(
-        "idx_monitoring_connection_probe_results_profile_checked_at",
-        "monitoring_connection_probe_results",
-        ["profile_id", "checked_at"],
-    )
-    op.create_index(
-        "idx_monitoring_connection_probe_results_connection_checked_at",
-        "monitoring_connection_probe_results",
-        ["connection_id", "checked_at"],
-    )
 
     op.create_table(
         "routing_connection_runtime_state",
@@ -187,10 +81,6 @@ def upgrade() -> None:
         sa.Column("last_live_failure_kind", sa.String(length=50), nullable=True),
         sa.Column("last_live_failure_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_live_success_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_probe_status", sa.String(length=20), nullable=True),
-        sa.Column("last_probe_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("endpoint_ping_ewma_ms", sa.Numeric(10, 2), nullable=True),
-        sa.Column("conversation_delay_ewma_ms", sa.Numeric(10, 2), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["profile_id"], ["profiles.id"], ondelete="CASCADE"),

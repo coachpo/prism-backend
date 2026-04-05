@@ -95,18 +95,6 @@ async def list_model_current_state(
                 live_p95_latency_ms=row.live_p95_latency_ms,
                 last_live_failure_at=row.last_live_failure_at,
                 last_live_success_at=row.last_live_success_at,
-                last_probe_status=row.last_probe_status,
-                last_probe_at=row.last_probe_at,
-                endpoint_ping_ewma_ms=(
-                    float(row.endpoint_ping_ewma_ms)
-                    if row.endpoint_ping_ewma_ms is not None
-                    else None
-                ),
-                conversation_delay_ewma_ms=(
-                    float(row.conversation_delay_ewma_ms)
-                    if row.conversation_delay_ewma_ms is not None
-                    else None
-                ),
                 state=_derive_current_state_value(
                     ban_mode=row.ban_mode,
                     banned_until_at=row.banned_until_at,

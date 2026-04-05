@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.dependencies import (
     get_db,
     get_effective_profile_id,
-    register_after_commit_action,
 )
 from app.schemas.schemas import (
     ConnectionCreate,
@@ -26,9 +25,8 @@ from app.services.loadbalancer.state import (
     clear_connection_state,
     clear_round_robin_state_for_model,
 )
-from app.services.monitoring_service import (
-    enqueue_connection_probe,
-    run_connection_probe,
+from app.services.connection_health import (
+    run_connection_health_check,
 )
 from app.routers.connections_domains.connection_crud_helpers import (
     _create_endpoint_from_inline,
@@ -66,13 +64,6 @@ from app.routers.connections_domains.route_handlers import (
 )
 
 router = APIRouter(tags=["connections"])
-
-
-def _enqueue_created_connection_probe(*, profile_id: int, connection_id: int) -> None:
-    _ = enqueue_connection_probe(
-        profile_id=profile_id,
-        connection_id=connection_id,
-    )
 
 
 def _crud_deps() -> ConnectionCrudDependencies:
@@ -160,14 +151,6 @@ async def create_connection(
         db=db,
         profile_id=profile_id,
         deps=_crud_deps(),
-    )
-    register_after_commit_action(
-        db,
-        lambda profile_id=profile_id,
-        connection_id=connection.id: _enqueue_created_connection_probe(
-            profile_id=profile_id,
-            connection_id=connection_id,
-        ),
     )
     return connection
 
@@ -277,7 +260,7 @@ async def health_check_connection(
         request=request,
         db=db,
         profile_id=profile_id,
-        run_connection_probe_fn=run_connection_probe,
+        run_connection_probe_fn=run_connection_health_check,
     )
 
 

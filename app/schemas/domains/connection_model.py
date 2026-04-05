@@ -28,18 +28,6 @@ from .endpoint_pricing import (
 )
 from .profile_vendor import VendorResponse
 
-OpenAiProbeEndpointVariant = Literal[
-    "responses_minimal",
-    "responses_reasoning_none",
-    "chat_completions_minimal",
-    "chat_completions_reasoning_none",
-]
-
-
-DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS = 300
-MIN_MONITORING_PROBE_INTERVAL_SECONDS = 30
-MAX_MONITORING_PROBE_INTERVAL_SECONDS = 3_600
-
 
 class ConnectionBase(BaseModel):
     is_active: bool = True
@@ -50,14 +38,6 @@ class ConnectionBase(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
-    monitoring_probe_interval_seconds: int = Field(
-        default=DEFAULT_MONITORING_PROBE_INTERVAL_SECONDS,
-        ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
-        le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
-    )
-    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant = (
-        "responses_minimal"
-    )
 
 
 class ConnectionCreate(ConnectionBase):
@@ -90,12 +70,6 @@ class ConnectionUpdate(BaseModel):
     qps_limit: int | None = Field(default=None, ge=1)
     max_in_flight_non_stream: int | None = Field(default=None, ge=1)
     max_in_flight_stream: int | None = Field(default=None, ge=1)
-    monitoring_probe_interval_seconds: int | None = Field(
-        default=None,
-        ge=MIN_MONITORING_PROBE_INTERVAL_SECONDS,
-        le=MAX_MONITORING_PROBE_INTERVAL_SECONDS,
-    )
-    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant | None = None
 
     @model_validator(mode="after")
     def validate_update(self):
@@ -123,10 +97,6 @@ class ConnectionResponse(BaseModel):
     qps_limit: int | None = None
     max_in_flight_non_stream: int | None = None
     max_in_flight_stream: int | None = None
-    monitoring_probe_interval_seconds: int
-    openai_probe_endpoint_variant: OpenAiProbeEndpointVariant = (
-        "responses_minimal"
-    )
     pricing_template: ConnectionPricingTemplateSummary | None = Field(
         default=None,
         validation_alias=AliasChoices("pricing_template", "pricing_template_rel"),
@@ -147,19 +117,6 @@ class ConnectionResponse(BaseModel):
         if isinstance(v, dict):
             return v
         return json.loads(v)
-
-    @field_validator("openai_probe_endpoint_variant", mode="before")
-    @classmethod
-    def normalize_openai_probe_endpoint_variant(
-        cls, value: str | None
-    ) -> OpenAiProbeEndpointVariant:
-        if value == "responses_reasoning_none":
-            return "responses_reasoning_none"
-        if value == "chat_completions_minimal":
-            return "chat_completions_minimal"
-        if value == "chat_completions_reasoning_none":
-            return "chat_completions_reasoning_none"
-        return "responses_minimal"
 
 
 class HealthCheckResponse(BaseModel):
@@ -340,16 +297,6 @@ class RoutingPolicyAdmission(BaseModel):
     respect_in_flight_limits: bool = True
 
 
-class RoutingPolicyMonitoring(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    enabled: bool = True
-    stale_after_seconds: int = Field(default=300, ge=1, le=86_400)
-    endpoint_ping_weight: float = Field(default=1.0, ge=0.0, le=10.0)
-    conversation_delay_weight: float = Field(default=1.0, ge=0.0, le=10.0)
-    failure_penalty_weight: float = Field(default=2.0, ge=0.0, le=10.0)
-
-
 class RoutingPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -363,7 +310,6 @@ class RoutingPolicy(BaseModel):
         default_factory=RoutingPolicyCircuitBreaker
     )
     admission: RoutingPolicyAdmission = Field(default_factory=RoutingPolicyAdmission)
-    monitoring: RoutingPolicyMonitoring = Field(default_factory=RoutingPolicyMonitoring)
 
 
 class LoadbalanceStrategyBase(BaseModel):

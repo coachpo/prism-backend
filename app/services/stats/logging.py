@@ -9,7 +9,7 @@ from app.core.time import utc_now
 from app.models.domains.routing import Connection, Endpoint, ModelConfig
 from app.models.models import RequestLog
 from app.services.background_tasks import background_task_manager
-from app.services.monitoring_service import record_passive_request_outcome
+from app.services.loadbalancer.live_feedback import record_passive_request_outcome
 from app.schemas.domains.stats import (
     DashboardRealtimeUpdateResponse,
     DashboardRouteSnapshotResponse,
@@ -535,7 +535,7 @@ async def log_request(
                     )
             except Exception:
                 logger.exception(
-                    "Failed to apply monitoring routing feedback for request_log_id=%s",
+                    "Failed to apply live loadbalance feedback for request_log_id=%s",
                     entry.id,
                 )
 
