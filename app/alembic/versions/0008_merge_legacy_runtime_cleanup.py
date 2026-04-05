@@ -182,22 +182,6 @@ def upgrade() -> None:
                 "last_live_success_at", sa.DateTime(timezone=True), nullable=True
             ),
         )
-        op.add_column(
-            "routing_connection_runtime_state",
-            sa.Column("last_probe_status", sa.String(length=20), nullable=True),
-        )
-        op.add_column(
-            "routing_connection_runtime_state",
-            sa.Column("last_probe_at", sa.DateTime(timezone=True), nullable=True),
-        )
-        op.add_column(
-            "routing_connection_runtime_state",
-            sa.Column("endpoint_ping_ewma_ms", sa.Numeric(10, 2), nullable=True),
-        )
-        op.add_column(
-            "routing_connection_runtime_state",
-            sa.Column("conversation_delay_ewma_ms", sa.Numeric(10, 2), nullable=True),
-        )
         inspector = sa.inspect(bind)
         if not _has_check_constraint(
             inspector,
