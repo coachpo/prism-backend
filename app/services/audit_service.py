@@ -4,13 +4,9 @@ import logging
 import re
 from datetime import datetime
 
-from app.services.background_tasks import background_task_manager
 from app.models.models import AuditLog, LoadbalanceEvent
 
 logger = logging.getLogger(__name__)
-
-AUDIT_LOG_MAX_RETRIES = 2
-AUDIT_LOG_RETRY_DELAY_SECONDS = 0.25
 
 _SENSITIVE_HEADER_PATTERN = re.compile(r"(key|secret|token|auth)", re.IGNORECASE)
 
@@ -130,7 +126,7 @@ async def record_audit_log(
         bytes(response_body) if capture_bodies and response_body is not None else None
     )
 
-    async def run_audit_write() -> None:
+    try:
         await _persist_audit_log(
             request_log_id=request_log_id,
             profile_id=profile_id,
@@ -151,17 +147,11 @@ async def record_audit_log(
             endpoint_base_url=endpoint_base_url,
             endpoint_description=endpoint_description,
         )
-
-    try:
-        background_task_manager.enqueue(
-            name=f"audit-log:{profile_id}:{request_log_id or 'none'}",
-            run=run_audit_write,
-            max_retries=AUDIT_LOG_MAX_RETRIES,
-            retry_delay_seconds=AUDIT_LOG_RETRY_DELAY_SECONDS,
-        )
+    except asyncio.CancelledError:
+        logger.debug("Audit log persistence cancelled")
     except Exception:
         logger.exception(
-            "Failed to enqueue audit log for request_log_id=%s",
+            "Failed to persist audit log for request_log_id=%s",
             request_log_id,
         )
 

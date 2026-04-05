@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from app.services.background_tasks import background_task_manager
@@ -226,8 +226,6 @@ async def record_attempt_audit(
     elapsed_ms: int,
 ) -> None:
     if not state.setup.audit_enabled:
-        return
-    if request_log_id is None:
         return
 
     endpoint = target.connection.endpoint_rel
@@ -458,12 +456,12 @@ async def _persist_stream_usage_request_event(
     )
 
 
-async def _queue_stream_audit_follow_up(
+async def _persist_stream_audit_log(
     snapshot: StreamFinalizationSnapshot,
     *,
     request_log_id: int | None,
 ) -> None:
-    if not snapshot.audit_enabled or request_log_id is None:
+    if not snapshot.audit_enabled:
         return
 
     await snapshot.record_audit_log_fn(
@@ -488,105 +486,71 @@ async def _queue_stream_audit_follow_up(
     )
 
 
-def enqueue_stream_finalize(
-    snapshot: StreamFinalizationSnapshot,
-) -> asyncio.Future[int | None]:
-    loop = asyncio.get_running_loop()
-    request_log_ready: asyncio.Future[int | None] = loop.create_future()
-
-    async def run_stream_finalize() -> None:
-        request_log_id: int | None = None
-        try:
-            request_log_id = await _persist_stream_request_log(snapshot)
-        except asyncio.CancelledError:
-            logger.debug("Streaming request logging cancelled before completion")
-            raise
-        except Exception:
-            logger.exception("Failed to log streaming request")
-        finally:
-            if not request_log_ready.done():
-                request_log_ready.set_result(request_log_id)
-
-        try:
-            await _queue_stream_audit_follow_up(
-                snapshot,
-                request_log_id=request_log_id,
-            )
-        except asyncio.CancelledError:
-            logger.debug("Streaming audit follow-up cancelled before completion")
-            raise
-        except Exception:
-            logger.exception("Failed to queue streaming audit follow-up")
-
-        try:
-            await _persist_stream_usage_request_event(snapshot)
-        except asyncio.CancelledError:
-            logger.debug(
-                "Streaming usage-event finalization cancelled before completion"
-            )
-            raise
-        except Exception:
-            logger.exception("Failed to log final usage request event")
-
-    background_task_manager.enqueue(
-        name=(
-            "stream-finalize:"
-            f"{snapshot.profile_id}:"
-            f"{snapshot.connection_id}:"
-            f"{snapshot.status_code}"
-        ),
-        run=run_stream_finalize,
-    )
-    return request_log_ready
-
-
-async def persist_stream_request_log_inline_fallback(
+async def _finalize_stream_observability(
     snapshot: StreamFinalizationSnapshot,
 ) -> int | None:
-    async def _run_inline(
-        awaitable: Coroutine[object, object, int | None],
-        *,
-        task_name: str,
-    ) -> int | None:
-        try:
-            task = asyncio.create_task(awaitable, name=task_name)
-        except RuntimeError:
-            logger.debug(
-                "Event loop closed before inline %s fallback could be scheduled",
-                task_name,
-            )
-            return None
-
-        try:
-            return await asyncio.shield(task)
-        except asyncio.CancelledError:
-            return await task
-
-    request_log_id = await _run_inline(
-        _persist_stream_request_log(snapshot),
-        task_name="proxy-stream-request-log-fallback",
-    )
+    request_log_id: int | None = None
 
     try:
-        _ = await _run_inline(
-            _persist_stream_usage_request_event(snapshot),
-            task_name="proxy-stream-usage-event-fallback",
+        request_log_id = await _persist_stream_request_log(snapshot)
+    except asyncio.CancelledError:
+        logger.debug("Streaming request logging cancelled before completion")
+        raise
+    except Exception:
+        logger.exception("Failed to log streaming request")
+
+    try:
+        await _persist_stream_audit_log(
+            snapshot,
+            request_log_id=request_log_id,
         )
     except asyncio.CancelledError:
+        logger.debug("Streaming audit logging cancelled before completion")
+        raise
+    except Exception:
+        logger.exception("Failed to log streaming audit")
+
+    try:
+        await _persist_stream_usage_request_event(snapshot)
+    except asyncio.CancelledError:
         logger.debug(
-            "Streaming usage-event inline fallback cancelled before completion"
+            "Streaming usage-event finalization cancelled before completion"
         )
         raise
+    except Exception:
+        logger.exception("Failed to log final usage request event")
 
     return request_log_id
 
 
+async def await_stream_finalization(
+    snapshot: StreamFinalizationSnapshot,
+) -> int | None:
+    try:
+        task = asyncio.create_task(
+            _finalize_stream_observability(snapshot),
+            name=(
+                "proxy-stream-finalization:"
+                f"{snapshot.profile_id}:"
+                f"{snapshot.connection_id}:"
+                f"{snapshot.status_code}"
+            ),
+        )
+    except RuntimeError:
+        logger.debug("Event loop closed before stream finalization could be scheduled")
+        return None
+
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        return await task
+
+
 __all__ = [
+    "await_stream_finalization",
     "build_stream_finalization_snapshot",
-    "enqueue_stream_finalize",
     "extract_provider_correlation_id",
     "log_and_audit_attempt",
-    "persist_stream_request_log_inline_fallback",
     "record_final_usage_event",
     "record_attempt_audit",
     "response_error_detail",

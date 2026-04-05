@@ -10,9 +10,8 @@ from fastapi.responses import StreamingResponse
 from app.services.stats_service import extract_token_usage
 
 from .attempt_outcome_reporting import (
+    await_stream_finalization,
     build_stream_finalization_snapshot,
-    enqueue_stream_finalize,
-    persist_stream_request_log_inline_fallback,
 )
 from .attempt_types import (
     PreparedExecutionResponse,
@@ -380,9 +379,7 @@ class _StreamingFinalizationBuffer:
             self._consume_line(bytes(self._partial_line))
             self._partial_line.clear()
 
-        payload = None
-        if self.keep_payload and not self._payload_overflowed:
-            payload = bytes(self._payload)
+        payload = bytes(self._payload) if self.keep_payload and self._payload else None
 
         if self._tokens is None:
             return payload, None, self._provider_correlation_id
@@ -408,15 +405,38 @@ class _StreamingFinalizationBuffer:
         return payload, finalized_tokens, self._provider_correlation_id
 
     def _append_payload(self, chunk: bytes) -> None:
-        if self._payload_overflowed:
+        if not chunk:
             return
 
-        if len(self._payload) + len(chunk) > self.max_bytes:
-            self._payload.clear()
+        prefix_size = min(TRUNCATED_SSE_PREFIX_BYTES, self.max_bytes)
+        tail_budget = self.max_bytes - prefix_size - len(TRUNCATED_SSE_SENTINEL)
+
+        if not self._payload_overflowed:
+            if len(self._payload) + len(chunk) <= self.max_bytes:
+                self._payload.extend(chunk)
+                return
+
             self._payload_overflowed = True
+            combined = bytes(self._payload) + chunk
+            if tail_budget <= 0:
+                self._payload = bytearray(combined[-self.max_bytes :])
+                return
+
+            prefix = combined[:prefix_size]
+            tail = combined[-tail_budget:]
+            self._payload = bytearray(prefix + TRUNCATED_SSE_SENTINEL + tail)
             return
 
-        self._payload.extend(chunk)
+        if tail_budget <= 0:
+            self._payload = bytearray((bytes(self._payload) + chunk)[-self.max_bytes :])
+            return
+
+        prefix = bytes(self._payload[:prefix_size])
+        current_tail = bytes(
+            self._payload[prefix_size + len(TRUNCATED_SSE_SENTINEL) :]
+        )
+        updated_tail = (current_tail + chunk)[-tail_budget:]
+        self._payload = bytearray(prefix + TRUNCATED_SSE_SENTINEL + updated_tail)
 
     def _append_sse_chunk(self, chunk: bytes) -> None:
         if not chunk:
@@ -568,7 +588,6 @@ def build_streaming_response(
 
                 heartbeat_task = asyncio.create_task(_heartbeat_stream_lease())
 
-            stream_cancelled = False
             stream_error: Exception | None = None
             stream_error_detail: str | None = None
             try:
@@ -577,10 +596,8 @@ def build_streaming_response(
                         finalization_buffer.append(chunk)
                         yield chunk
             except GeneratorExit:
-                stream_cancelled = True
                 return
             except asyncio.CancelledError:
-                stream_cancelled = True
                 logger.debug("Streaming response cancelled by client")
                 raise
             except Exception as exc:
@@ -618,29 +635,7 @@ def build_streaming_response(
                     token_usage=token_usage,
                 )
 
-                request_log_ready: asyncio.Future[int | None] | None = None
-                try:
-                    request_log_ready = enqueue_stream_finalize(snapshot)
-                except asyncio.CancelledError:
-                    raise
-                except Exception:
-                    logger.exception(
-                        "Failed to enqueue stream finalization: profile_id=%d connection_id=%d status_code=%d",
-                        snapshot.profile_id,
-                        snapshot.connection_id,
-                        snapshot.status_code,
-                    )
-                    try:
-                        _ = await persist_stream_request_log_inline_fallback(snapshot)
-                    except asyncio.CancelledError:
-                        logger.debug(
-                            "Streaming request logging cancelled before completion"
-                        )
-                    except Exception:
-                        logger.exception("Failed to log streaming request")
-
-                if request_log_ready is not None and not stream_cancelled:
-                    _ = await asyncio.shield(request_log_ready)
+                _ = await await_stream_finalization(snapshot)
 
                 try:
                     if stream_error is not None:
