@@ -2503,8 +2503,6 @@ class TestDEF021_StreamingCancellationResilience:
         model_config.vendor.audit_capture_bodies = True
         log_started = asyncio.Event()
         release_log = asyncio.Event()
-        manager = BackgroundTaskManager()
-        await manager.start()
 
         async def delayed_log_request(*args, **kwargs):
             log_started.set()
@@ -2548,10 +2546,6 @@ class TestDEF021_StreamingCancellationResilience:
                     AsyncMock(side_effect=delayed_log_request),
                 ) as log_mock,
                 patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
-                patch(
-                    "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager",
-                    manager,
-                ),
             ):
                 response = await _handle_proxy(
                     request=request,
@@ -2588,9 +2582,9 @@ class TestDEF021_StreamingCancellationResilience:
                 assert audit_call.kwargs["response_body"] == first
                 assert audit_call.kwargs["capture_bodies"] is True
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
-            await manager.shutdown()
+            pass
 
 
 class TestDEF080_OpenAIChatStreamingUsageOptIn:
@@ -2941,7 +2935,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3085,7 +3079,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3219,7 +3213,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                     "content-type": "text/event-stream"
                 }
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3360,7 +3354,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3510,7 +3504,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is True
                 assert audit_call.kwargs["response_body"] == expected_payload
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3675,7 +3669,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3832,7 +3826,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call.kwargs["capture_bodies"] is False
                 assert audit_call.kwargs["response_body"] is None
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
@@ -3968,14 +3962,12 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
 
                 audit_mock.assert_awaited_once()
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 
     @pytest.mark.asyncio
-    async def test_stream_success_falls_back_to_inline_request_log_when_enqueue_fails(
-        self, caplog
-    ):
+    async def test_stream_success_finalizes_request_log_and_audit_inline(self, caplog):
         import httpx
         from fastapi import FastAPI
         from fastapi.responses import StreamingResponse
@@ -4057,10 +4049,6 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 "app.routers.proxy.log_request", AsyncMock(return_value=889)
             ) as log_mock,
             patch("app.routers.proxy.record_audit_log", AsyncMock()) as audit_mock,
-            patch(
-                "app.routers.proxy_domains.attempt_outcome_reporting.background_task_manager.enqueue",
-                MagicMock(side_effect=RuntimeError("queue unavailable")),
-            ),
         ):
             response = await _handle_proxy(
                 request=request,
@@ -4078,9 +4066,9 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             assert b"".join(received) == expected_payload
             assert upstream_resp.closed is True
             log_mock.assert_awaited_once()
-            audit_mock.assert_not_awaited()
-            assert "Failed to enqueue stream finalization" in caplog.text
+            audit_mock.assert_awaited_once()
             assert "Failed to log streaming request" not in caplog.text
+            assert "Failed to log streaming audit" not in caplog.text
 
     @pytest.mark.asyncio
     async def test_non_stream_response_and_audit_use_sanitized_headers(self):
@@ -4414,7 +4402,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
                 assert audit_call is not None
                 assert audit_call.kwargs["request_log_id"] == 777
                 assert "Failed to log streaming request" not in caplog.text
-                assert "Failed to queue streaming audit follow-up" not in caplog.text
+                assert "Failed to log streaming audit" not in caplog.text
         finally:
             await manager.shutdown()
 

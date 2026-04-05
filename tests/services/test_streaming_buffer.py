@@ -1,4 +1,7 @@
-from app.routers.proxy_domains.attempt_streaming import _StreamingFinalizationBuffer
+from app.routers.proxy_domains.attempt_streaming import (
+    TRUNCATED_SSE_SENTINEL,
+    _StreamingFinalizationBuffer,
+)
 
 
 STREAMING_BUFFER_MAX_BYTES = 64 * 1024
@@ -14,7 +17,7 @@ def test_streaming_finalization_buffer_caps_partial_line_growth_for_non_audit_ss
     assert len(buffer._partial_line) <= STREAMING_BUFFER_MAX_BYTES
 
 
-def test_streaming_finalization_buffer_drops_over_budget_audit_payload_and_keeps_tokens() -> (
+def test_streaming_finalization_buffer_truncates_over_budget_audit_payload_and_keeps_tokens() -> (
     None
 ):
     buffer = _StreamingFinalizationBuffer(keep_payload=True)
@@ -26,7 +29,9 @@ def test_streaming_finalization_buffer_drops_over_budget_audit_payload_and_keeps
 
     payload, token_usage, provider_correlation_id = buffer.finalize()
 
-    assert payload is None
+    assert payload is not None
+    assert len(payload) <= STREAMING_BUFFER_MAX_BYTES
+    assert TRUNCATED_SSE_SENTINEL in payload
     assert provider_correlation_id is None
     assert token_usage == {
         "input_tokens": 2,

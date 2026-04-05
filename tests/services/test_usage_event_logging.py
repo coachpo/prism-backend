@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from app.core.database import AsyncSessionLocal
 from app.models.models import (
+    AuditLog,
     Connection,
     Endpoint,
     ModelConfig,
@@ -24,6 +25,7 @@ from app.models.models import (
     Vendor,
 )
 from app.routers.proxy import _handle_proxy
+from app.routers.proxy_domains.attempt_streaming import TRUNCATED_SSE_SENTINEL
 from tests.loadbalance_strategy_helpers import make_loadbalance_strategy
 
 
@@ -169,6 +171,40 @@ async def _load_usage_events(profile_id: int) -> list[UsageRequestEvent]:
             .scalars()
             .all()
         )
+
+
+async def _load_audit_logs(profile_id: int) -> list[AuditLog]:
+    async with AsyncSessionLocal() as db:
+        return list(
+            (
+                await db.execute(
+                    select(AuditLog)
+                    .where(AuditLog.profile_id == profile_id)
+                    .order_by(AuditLog.id.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+
+async def _set_vendor_audit_flags(
+    *,
+    model_id: str,
+    audit_enabled: bool,
+    audit_capture_bodies: bool,
+) -> None:
+    async with AsyncSessionLocal() as db:
+        model = (
+            await db.execute(
+                select(ModelConfig).where(ModelConfig.model_id == model_id)
+            )
+        ).scalar_one()
+        vendor = await db.get(Vendor, model.vendor_id)
+        assert vendor is not None
+        vendor.audit_enabled = audit_enabled
+        vendor.audit_capture_bodies = audit_capture_bodies
+        await db.commit()
 
 
 async def _seed_runtime_route(*, connection_count: int) -> RuntimeRouteSeed:
@@ -440,10 +476,64 @@ async def test_streaming_success_finalization_writes_one_final_usage_event() -> 
 
 
 @pytest.mark.asyncio
+async def test_streaming_success_finalization_writes_audit_log_when_enabled() -> None:
+    seed = await _seed_runtime_route(connection_count=1)
+    await _set_vendor_audit_flags(
+        model_id=seed.model_id,
+        audit_enabled=True,
+        audit_capture_bodies=True,
+    )
+
+    raw_body = json.dumps(
+        {
+            "model": seed.model_id,
+            "stream": True,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+    ).encode("utf-8")
+    stream_chunk = b'data: {"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}\n\n'
+    upstream_response = CompletedStreamResponse([stream_chunk])
+    app = FastAPI()
+    app.state.http_client = StreamingHttpClient(upstream_response)
+    request = _build_request(
+        app=app,
+        path="/v1/responses",
+        proxy_api_key_id=seed.proxy_api_key_id,
+        proxy_api_key_name=seed.proxy_api_key_name,
+    )
+
+    async with AsyncSessionLocal() as db:
+        response = await _handle_proxy(
+            request=request,
+            db=db,
+            raw_body=raw_body,
+            request_path="/v1/responses",
+            profile_id=seed.profile_id,
+        )
+
+    assert isinstance(response, StreamingResponse)
+    streamed_body = await _consume_streaming_response(response)
+    request_logs = await _load_request_logs(seed.profile_id)
+    audit_logs = await _load_audit_logs(seed.profile_id)
+
+    assert streamed_body == stream_chunk
+    assert len(request_logs) == 1
+    assert len(audit_logs) == 1
+    assert audit_logs[0].request_log_id == request_logs[0].id
+    assert audit_logs[0].response_status == 200
+    assert audit_logs[0].response_body == stream_chunk.decode("utf-8")
+
+
+@pytest.mark.asyncio
 async def test_streaming_success_finalization_persists_oversized_response_completed_usage() -> (
     None
 ):
     seed = await _seed_runtime_route(connection_count=1)
+    await _set_vendor_audit_flags(
+        model_id=seed.model_id,
+        audit_enabled=True,
+        audit_capture_bodies=True,
+    )
     raw_body = json.dumps(
         {
             "model": seed.model_id,
@@ -488,6 +578,7 @@ async def test_streaming_success_finalization_persists_oversized_response_comple
     streamed_body = await _consume_streaming_response(response)
     request_logs = await _load_request_logs(seed.profile_id)
     usage_events = await _load_usage_events(seed.profile_id)
+    audit_logs = await _load_audit_logs(seed.profile_id)
 
     assert streamed_body == completed_event
     assert upstream_response.closed is True
@@ -507,6 +598,10 @@ async def test_streaming_success_finalization_persists_oversized_response_comple
     assert usage_events[0].total_tokens == 200
     assert usage_events[0].proxy_api_key_id == seed.proxy_api_key_id
     assert usage_events[0].proxy_api_key_name_snapshot == seed.proxy_api_key_name
+    assert len(audit_logs) == 1
+    assert audit_logs[0].request_log_id == request_logs[0].id
+    assert audit_logs[0].response_body is not None
+    assert TRUNCATED_SSE_SENTINEL.decode("utf-8") in audit_logs[0].response_body
 
 
 @pytest.mark.asyncio
