@@ -310,10 +310,6 @@ class Connection(Base):
         Index("idx_connections_priority", "priority"),
         Index("idx_connections_profile_id", "profile_id"),
         Index("idx_connections_pricing_template_id", "pricing_template_id"),
-        CheckConstraint(
-            "openai_probe_endpoint_variant IN ('responses_minimal', 'responses_reasoning_none', 'chat_completions_minimal', 'chat_completions_reasoning_none')",
-            name="ck_connections_openai_probe_endpoint_variant",
-        ),
         Index(
             "idx_connections_profile_model_active_priority",
             "profile_id",
@@ -339,9 +335,6 @@ class Connection(Base):
     qps_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_in_flight_non_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_in_flight_stream: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    monitoring_probe_interval_seconds: Mapped[int] = mapped_column(
-        Integer, default=300, nullable=False
-    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     priority: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     name: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -349,11 +342,6 @@ class Connection(Base):
     custom_headers: Mapped[str | None] = mapped_column(
         Text, nullable=True
     )  # JSON object of custom HTTP headers
-    openai_probe_endpoint_variant: Mapped[str] = mapped_column(
-        String(40),
-        default="responses_minimal",
-        nullable=False,
-    )
     health_status: Mapped[str] = mapped_column(
         String(20), default="unknown", nullable=False
     )  # unknown, healthy, unhealthy

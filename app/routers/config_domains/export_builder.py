@@ -25,7 +25,6 @@ from app.models.models import (
     UserSetting,
     Vendor,
 )
-from app.schemas.domains.connection_model import OpenAiProbeEndpointVariant
 from app.schemas.schemas import (
     ConfigConnectionExport,
     ConfigEndpointExport,
@@ -264,14 +263,6 @@ async def build_export_payload(
                     ),
                     custom_headers=_normalize_custom_headers_for_export(
                         connection.custom_headers
-                    ),
-                    openai_probe_endpoint_variant=cast(
-                        OpenAiProbeEndpointVariant,
-                        getattr(
-                            connection,
-                            "openai_probe_endpoint_variant",
-                            "responses_minimal",
-                        ),
                     ),
                     qps_limit=connection.qps_limit,
                     max_in_flight_non_stream=connection.max_in_flight_non_stream,

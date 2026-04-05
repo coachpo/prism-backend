@@ -50,12 +50,6 @@ async def create_connection_record(
         name=body.name,
         auth_type=body.auth_type,
         custom_headers=deps.serialize_custom_headers_fn(body.custom_headers),
-        monitoring_probe_interval_seconds=body.monitoring_probe_interval_seconds,
-        openai_probe_endpoint_variant=(
-            body.openai_probe_endpoint_variant
-            if getattr(model_config, "api_family", None) == "openai"
-            else "responses_minimal"
-        ),
         pricing_template_id=pricing_template_id,
         **build_connection_limiter_data(body=body, exclude_unset=False),
     )

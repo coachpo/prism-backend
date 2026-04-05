@@ -10,7 +10,6 @@ from app.core.time import utc_now
 from app.dependencies import (
     get_db,
     get_effective_profile_id,
-    register_after_commit_action,
 )
 from app.models.models import Vendor
 from app.schemas.schemas import (
@@ -23,7 +22,6 @@ from app.schemas.schemas import (
     ConfigVendorCatalogImportResponse,
     ConfigVendorExport,
 )
-from app.services.monitoring_service import enqueue_connection_probe
 
 from .export_builder import build_export_payload
 from .import_executor import build_import_preview, execute_import_payload
@@ -33,16 +31,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 _validate_import = validate_import_payload
-
-
-def _enqueue_import_connection_probes(
-    *, profile_id: int, connection_ids: tuple[int, ...]
-) -> None:
-    for connection_id in connection_ids:
-        enqueue_connection_probe(
-            profile_id=profile_id,
-            connection_id=connection_id,
-        )
 
 
 def _build_preview_error_response(
@@ -100,15 +88,6 @@ async def import_profile_config(
 ):
     validate_import_payload(data)
     result = await execute_import_payload(db, profile_id=profile_id, data=data)
-    if result.imported_connection_ids:
-        register_after_commit_action(
-            db,
-            lambda profile_id=profile_id,
-            connection_ids=result.imported_connection_ids: _enqueue_import_connection_probes(
-                profile_id=profile_id,
-                connection_ids=connection_ids,
-            ),
-        )
     return result.response
 
 
