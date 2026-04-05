@@ -18,12 +18,7 @@ from app.services.loadbalancer.recovery import (
     record_connection_failure,
     record_connection_recovery,
 )
-from app.services.audit_service import (
-    AUDIT_LOG_MAX_RETRIES,
-    AUDIT_LOG_RETRY_DELAY_SECONDS,
-    record_audit_log,
-    record_loadbalance_event,
-)
+from app.services.audit_service import record_audit_log, record_loadbalance_event
 from app.services.background_tasks import BackgroundTaskManager
 from app.services.realtime.connection_manager import ConnectionManager
 from app.services.stats.logging import (
@@ -981,29 +976,14 @@ async def test_shutdown_dashboard_update_lifecycle_cancels_and_clears_pending_de
 
 
 @pytest.mark.asyncio
-async def test_record_audit_log_enqueues_persistence_with_request_log_linkage() -> None:
+async def test_record_audit_log_persists_inline_with_request_log_linkage() -> None:
     persist_session = AsyncMock()
     persist_session.add = MagicMock()
     persist_session.commit = AsyncMock()
-    enqueued_job = {}
 
-    def capture_enqueue(*, name, run, max_retries=0, retry_delay_seconds=0.0):
-        enqueued_job.update(
-            name=name,
-            run=run,
-            max_retries=max_retries,
-            retry_delay_seconds=retry_delay_seconds,
-        )
-
-    with (
-        patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=make_session_context(persist_session),
-        ),
-        patch(
-            "app.services.audit_service.background_task_manager.enqueue",
-            MagicMock(side_effect=capture_enqueue),
-        ) as enqueue,
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        return_value=make_session_context(persist_session),
     ):
         await record_audit_log(
             request_log_id=55,
@@ -1021,14 +1001,6 @@ async def test_record_audit_log_enqueues_persistence_with_request_log_linkage() 
             duration_ms=120,
             capture_bodies=True,
         )
-
-        enqueue.assert_called_once()
-        assert enqueued_job["name"] == "audit-log:3:55"
-        assert enqueued_job["max_retries"] == AUDIT_LOG_MAX_RETRIES
-        assert enqueued_job["retry_delay_seconds"] == AUDIT_LOG_RETRY_DELAY_SECONDS
-        assert persist_session.commit.await_count == 0
-
-        await enqueued_job["run"]()
 
     persist_session.commit.assert_awaited_once()
     persist_session.add.assert_called_once()
@@ -1043,51 +1015,14 @@ async def test_record_audit_log_enqueues_persistence_with_request_log_linkage() 
 
 
 @pytest.mark.asyncio
-async def test_record_audit_log_returns_when_enqueue_fails() -> None:
-    session_factory = MagicMock()
+async def test_record_audit_log_returns_when_persistence_fails() -> None:
+    failing_session = AsyncMock()
+    failing_session.add = MagicMock()
+    failing_session.commit = AsyncMock(side_effect=RuntimeError("db write failed"))
 
-    with (
-        patch("app.core.database.AsyncSessionLocal", session_factory),
-        patch(
-            "app.services.audit_service.background_task_manager.enqueue",
-            MagicMock(side_effect=RuntimeError("queue unavailable")),
-        ),
-    ):
-        await record_audit_log(
-            request_log_id=55,
-            profile_id=3,
-            vendor_id=1,
-            model_id="gpt-4o-mini",
-            request_method="POST",
-            request_url="https://api.openai.com/v1/chat/completions",
-            request_headers={"authorization": "Bearer sk-test"},
-            request_body=b'{"model":"gpt-4o-mini"}',
-            response_status=200,
-            response_headers={"content-type": "application/json"},
-            response_body=b'{"id":"resp_123"}',
-            is_stream=False,
-            duration_ms=120,
-            capture_bodies=True,
-        )
-
-    session_factory.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_record_audit_log_background_failure_stays_off_path() -> None:
-    manager = BackgroundTaskManager()
-    await manager.start()
-
-    persist_session = AsyncMock()
-    persist_session.add = MagicMock()
-    persist_session.commit = AsyncMock(side_effect=RuntimeError("db write failed"))
-
-    with (
-        patch(
-            "app.core.database.AsyncSessionLocal",
-            return_value=make_session_context(persist_session),
-        ),
-        patch("app.services.audit_service.background_task_manager", manager),
+    with patch(
+        "app.core.database.AsyncSessionLocal",
+        return_value=make_session_context(failing_session),
     ):
         await record_audit_log(
             request_log_id=77,
@@ -1106,97 +1041,12 @@ async def test_record_audit_log_background_failure_stays_off_path() -> None:
             capture_bodies=True,
         )
 
-        await manager.wait_for_idle()
-
-    await manager.shutdown()
-
-    assert persist_session.add.call_count == AUDIT_LOG_MAX_RETRIES + 1
-    assert persist_session.commit.await_count == AUDIT_LOG_MAX_RETRIES + 1
-    first_audit_entry = persist_session.add.call_args_list[0].args[0]
-    assert first_audit_entry.request_log_id == 77
+    failing_session.add.assert_called_once()
+    failing_session.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio
-async def test_record_audit_log_continues_after_terminal_failure() -> None:
-    manager = BackgroundTaskManager()
-    await manager.start()
-
-    failing_sessions = []
-    for _ in range(AUDIT_LOG_MAX_RETRIES + 1):
-        session = AsyncMock()
-        session.add = MagicMock()
-        session.commit = AsyncMock(side_effect=RuntimeError("db write failed"))
-        failing_sessions.append(session)
-
-    success_session = AsyncMock()
-    success_session.add = MagicMock()
-    success_session.commit = AsyncMock()
-
-    session_contexts = [
-        make_session_context(session)
-        for session in [*failing_sessions, success_session]
-    ]
-
-    with (
-        patch(
-            "app.core.database.AsyncSessionLocal",
-            side_effect=session_contexts,
-        ),
-        patch("app.services.audit_service.background_task_manager", manager),
-    ):
-        await record_audit_log(
-            request_log_id=77,
-            profile_id=4,
-            vendor_id=1,
-            model_id="gpt-4o-mini",
-            request_method="POST",
-            request_url="https://api.openai.com/v1/chat/completions",
-            request_headers={"authorization": "Bearer sk-test"},
-            request_body=b'{"model":"gpt-4o-mini"}',
-            response_status=500,
-            response_headers={"content-type": "application/json"},
-            response_body=b'{"error":"boom"}',
-            is_stream=False,
-            duration_ms=120,
-            capture_bodies=True,
-        )
-        await record_audit_log(
-            request_log_id=78,
-            profile_id=4,
-            vendor_id=1,
-            model_id="gpt-4o-mini",
-            request_method="POST",
-            request_url="https://api.openai.com/v1/chat/completions",
-            request_headers={"authorization": "Bearer sk-test"},
-            request_body=b'{"model":"gpt-4o-mini"}',
-            response_status=200,
-            response_headers={"content-type": "application/json"},
-            response_body=b'{"id":"resp_123"}',
-            is_stream=False,
-            duration_ms=120,
-            capture_bodies=True,
-        )
-
-        await manager.wait_for_idle()
-        metrics = manager.metrics
-
-    await manager.shutdown()
-
-    assert metrics.total_enqueued == 2
-    assert metrics.total_completed == 1
-    assert metrics.retry_attempts_total == AUDIT_LOG_MAX_RETRIES
-    assert metrics.terminal_failures_total == 1
-    assert metrics.last_failure is not None
-    assert metrics.last_failure.job_kind == "audit-log"
-    assert metrics.last_failure.phase == "run"
-    assert metrics.last_failure.failure_kind == "job_exception"
-    assert success_session.commit.await_count == 1
-    success_entry = success_session.add.call_args[0][0]
-    assert success_entry.request_log_id == 78
-
-
-@pytest.mark.asyncio
-async def test_record_attempt_audit_skips_when_request_log_id_missing() -> None:
+async def test_record_attempt_audit_persists_without_request_log_id() -> None:
     deps = MagicMock()
     deps.record_audit_log_fn = AsyncMock()
 
@@ -1229,7 +1079,11 @@ async def test_record_attempt_audit_skips_when_request_log_id_missing() -> None:
         elapsed_ms=120,
     )
 
-    deps.record_audit_log_fn.assert_not_awaited()
+    deps.record_audit_log_fn.assert_awaited_once()
+    audit_call = deps.record_audit_log_fn.await_args
+    assert audit_call is not None
+    assert audit_call.kwargs["request_log_id"] is None
+    assert audit_call.kwargs["response_body"] == b'{"id":"resp_123"}'
 
 
 @pytest.mark.asyncio

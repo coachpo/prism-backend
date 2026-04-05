@@ -352,26 +352,13 @@ class TestObservabilityAttribution:
         mock_session = AsyncMock()
         mock_session.add = MagicMock()
         mock_session.commit = AsyncMock()
-        enqueued_job = {}
 
         mock_session_ctx = AsyncMock()
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session_ctx.__aexit__ = AsyncMock(return_value=False)
 
-        def capture_enqueue(*, name, run, max_retries=0, retry_delay_seconds=0.0):
-            enqueued_job.update(
-                name=name,
-                run=run,
-                max_retries=max_retries,
-                retry_delay_seconds=retry_delay_seconds,
-            )
-
-        with (
-            patch("app.core.database.AsyncSessionLocal", return_value=mock_session_ctx),
-            patch(
-                "app.services.audit_service.background_task_manager.enqueue",
-                MagicMock(side_effect=capture_enqueue),
-            ),
+        with patch(
+            "app.core.database.AsyncSessionLocal", return_value=mock_session_ctx
         ):
             await record_audit_log(
                 profile_id=1,
@@ -389,8 +376,6 @@ class TestObservabilityAttribution:
                 duration_ms=100,
                 capture_bodies=True,
             )
-
-            await enqueued_job["run"]()
 
         mock_session.add.assert_called_once()
         audit_entry = mock_session.add.call_args[0][0]
