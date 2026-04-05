@@ -3,10 +3,10 @@ import logging
 import httpx
 
 from app.models.models import Connection, Endpoint
-from app.services.monitoring.probe_runner import (
-    _execute_monitoring_probe_checks,
-    _build_monitoring_conversation_request,
-    _build_monitoring_endpoint_ping_request,
+from app.services.connection_health import (
+    _build_connection_health_conversation_request,
+    _build_connection_health_endpoint_ping_request,
+    _execute_connection_health_checks,
 )
 from app.services.proxy_service import build_upstream_url
 
@@ -21,7 +21,7 @@ def _build_health_check_request(
     *,
     openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
-    return _build_monitoring_conversation_request(
+    return _build_connection_health_conversation_request(
         api_family,
         model_id,
         openai_variant=openai_variant,
@@ -31,7 +31,7 @@ def _build_health_check_request(
 def _build_openai_chat_completions_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    return _build_monitoring_conversation_request(
+    return _build_connection_health_conversation_request(
         "openai",
         model_id,
         openai_variant="chat_completions_minimal",
@@ -41,7 +41,7 @@ def _build_openai_chat_completions_health_check_request(
 def _build_openai_responses_basic_health_check_request(
     model_id: str,
 ) -> tuple[str, dict[str, object]]:
-    return _build_monitoring_conversation_request(
+    return _build_connection_health_conversation_request(
         "openai",
         model_id,
         openai_variant="responses_minimal",
@@ -54,7 +54,7 @@ def _build_endpoint_ping_request(
     *,
     openai_variant: str = "responses_minimal",
 ) -> tuple[str, dict[str, object]]:
-    return _build_monitoring_endpoint_ping_request(
+    return _build_connection_health_endpoint_ping_request(
         api_family,
         model_id,
         openai_variant=openai_variant,
@@ -72,7 +72,7 @@ async def _probe_connection_health(
     openai_variant: str = "responses_minimal",
     execute_health_check_request_fn=_execute_health_check_request,
 ) -> tuple[str, str, int, str]:
-    result = await _execute_monitoring_probe_checks(
+    result = await _execute_connection_health_checks(
         client=client,
         connection=connection,
         endpoint=endpoint,

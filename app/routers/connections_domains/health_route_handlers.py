@@ -11,8 +11,8 @@ from app.schemas.schemas import (
     ConnectionHealthCheckPreviewResponse,
     HealthCheckResponse,
 )
-from app.services.monitoring.probe_runner import (
-    ProbeExecutionResult,
+from app.services.connection_health import (
+    ConnectionHealthExecutionResult,
     probe_connection_health,
 )
 
@@ -43,12 +43,6 @@ def _build_preview_connection(
         qps_limit=body.qps_limit,
         max_in_flight_non_stream=body.max_in_flight_non_stream,
         max_in_flight_stream=body.max_in_flight_stream,
-        monitoring_probe_interval_seconds=body.monitoring_probe_interval_seconds,
-        openai_probe_endpoint_variant=(
-            body.openai_probe_endpoint_variant
-            if api_family == "openai"
-            else "responses_minimal"
-        ),
     )
 
 
@@ -58,7 +52,7 @@ async def perform_connection_health_check(
     request: Request,
     db: AsyncSession,
     profile_id: int,
-    run_connection_probe_fn: Callable[..., Awaitable[ProbeExecutionResult]],
+    run_connection_probe_fn: Callable[..., Awaitable[ConnectionHealthExecutionResult]],
 ) -> HealthCheckResponse:
     client: httpx.AsyncClient = request.app.state.http_client
     result = await run_connection_probe_fn(
@@ -116,7 +110,7 @@ async def perform_connection_health_check_preview(
         endpoint=endpoint,
         api_family=model_config.api_family,
         model_id=model_config.model_id,
-        openai_variant=preview_connection.openai_probe_endpoint_variant,
+        openai_variant="responses_minimal",
     )
     return ConnectionHealthCheckPreviewResponse(
         health_status=health_status,
