@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -319,55 +320,43 @@ class TestDEF009_ConnectionDefaultsPersist:
 
     @pytest.mark.asyncio
     async def test_create_endpoint_persists_pricing_enabled(self):
-        from app.models.models import ModelConfig
-        from app.routers.connections import create_connection
+        from app.routers.connections_domains.crud_dependencies import (
+            ConnectionCrudDependencies,
+        )
+        from app.routers.connections_domains.crud_handlers.creation import (
+            create_connection_record,
+        )
         from app.schemas.schemas import ConnectionCreate, EndpointCreate
 
-        model = ModelConfig(
-            id=77,
-            vendor_id=1,
-            model_id="gpt-4o-mini",
-            model_type="native",
-        )
-
+        endpoint = SimpleNamespace(id=201)
         mock_db = AsyncMock()
         mock_db.add = MagicMock()
-        mock_db.get = AsyncMock(return_value=model)
-        model_result = MagicMock()
-        model_result.scalar_one_or_none.return_value = model
-        lock_result = MagicMock()
-        no_conflict_result = MagicMock()
-        no_conflict_result.scalar_one_or_none.return_value = None
-        next_position_result = MagicMock()
-        next_position_result.scalar_one_or_none.return_value = None
-        ordered_connections_result = MagicMock()
-        ordered_connections_result.scalars.return_value.all.return_value = []
-        template = MagicMock()
-        template.id = 11
-        template_result = MagicMock()
-        template_result.scalar_one_or_none.return_value = template
-        clear_round_robin_result = MagicMock()
-        clear_round_robin_result.rowcount = 0
-        mock_db.execute = AsyncMock(
-            side_effect=[
-                model_result,
-                lock_result,
-                no_conflict_result,
-                next_position_result,
-                template_result,
-                lock_result,
-                ordered_connections_result,
-                clear_round_robin_result,
-            ]
-        )
         mock_db.flush = AsyncMock()
-        mock_db.refresh = AsyncMock()
+
+        deps = ConnectionCrudDependencies(
+            clear_connection_state_fn=AsyncMock(),
+            clear_round_robin_state_for_model_fn=AsyncMock(return_value=0),
+            create_endpoint_from_inline_fn=AsyncMock(),
+            ensure_model_config_ids_exist_fn=AsyncMock(),
+            list_ordered_connections_fn=AsyncMock(return_value=[]),
+            list_ordered_connections_for_models_fn=AsyncMock(),
+            load_connection_or_404_fn=AsyncMock(
+                side_effect=lambda *_args, **_kwargs: mock_db.add.call_args.args[0]
+            ),
+            load_model_or_404_fn=AsyncMock(
+                return_value=SimpleNamespace(api_family="openai")
+            ),
+            lock_profile_row_fn=AsyncMock(),
+            normalize_connection_priorities_fn=MagicMock(),
+            serialize_custom_headers_fn=MagicMock(return_value=None),
+            validate_pricing_template_id_fn=AsyncMock(return_value=11),
+        )
 
         with patch(
-            "app.routers.connections._load_connection_or_404",
-            AsyncMock(return_value=MagicMock(pricing_template_id=11)),
+            "app.routers.connections_domains.crud_handlers.creation.resolve_create_endpoint",
+            AsyncMock(return_value=endpoint),
         ):
-            connection = await create_connection(
+            connection = await create_connection_record(
                 model_config_id=77,
                 body=ConnectionCreate(
                     endpoint_create=EndpointCreate(
@@ -379,6 +368,7 @@ class TestDEF009_ConnectionDefaultsPersist:
                 ),
                 db=mock_db,
                 profile_id=1,
+                deps=deps,
             )
 
         assert connection.pricing_template_id == 11

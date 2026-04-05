@@ -19,6 +19,15 @@ from app.services.background_tasks import BackgroundTaskManager
 from tests.loadbalance_strategy_helpers import make_routing_policy_adaptive
 
 
+def _legacy_single_strategy() -> SimpleNamespace:
+    return SimpleNamespace(
+        strategy_type="legacy",
+        legacy_strategy_type="single",
+        auto_recovery={"mode": "disabled"},
+        routing_policy=None,
+    )
+
+
 def _attempt_candidate(connection: object) -> AttemptCandidate:
     connection_id = getattr(connection, "id", getattr(connection, "endpoint_id", 0))
     return AttemptCandidate(
@@ -2424,10 +2433,7 @@ class TestDEF021_StreamingCancellationResilience:
         model_config.vendor = vendor
         model_config.api_family = api_family
         model_config.model_id = model_id
-        model_config.loadbalance_strategy = SimpleNamespace(
-            strategy_type="single",
-            failover_recovery_enabled=False,
-        )
+        model_config.loadbalance_strategy = _legacy_single_strategy()
 
         return model_config, connection
 
@@ -2658,10 +2664,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             audit_enabled=False,
             audit_capture_bodies=False,
         )
-        strategy = SimpleNamespace(
-            strategy_type="single",
-            failover_recovery_enabled=False,
-        )
+        strategy = _legacy_single_strategy()
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             vendor=vendor,
@@ -2740,10 +2743,7 @@ class TestDEF080_OpenAIChatStreamingUsageOptIn:
             audit_enabled=False,
             audit_capture_bodies=False,
         )
-        strategy = SimpleNamespace(
-            strategy_type="single",
-            failover_recovery_enabled=False,
-        )
+        strategy = _legacy_single_strategy()
         connection = SimpleNamespace(endpoint_id=501)
         model_config = SimpleNamespace(
             vendor=vendor,
